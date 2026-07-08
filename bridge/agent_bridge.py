@@ -566,13 +566,14 @@ class AgentBridge:
             # Persist new messages generated during this run
             if session_id:
                 channel_type = (context.get("channel_type") or "") if context else ""
+                user_id = int(context.get("user_id", 0)) if context else 0
                 new_messages = list(getattr(agent, '_last_run_new_messages', []))
                 # The leading user turn was already persisted eagerly above;
                 # drop it here so it isn't stored twice.
                 if pre_persisted and new_messages and new_messages[0].get("role") == "user":
                     new_messages = new_messages[1:]
                 if new_messages:
-                    self._persist_messages(session_id, list(new_messages), channel_type)
+                    self._persist_messages(session_id, list(new_messages), channel_type, user_id)
                 else:
                     with agent.messages_lock:
                         msg_count = len(agent.messages)
@@ -826,11 +827,12 @@ class AgentBridge:
             if clear_history:
                 store.clear_session(session_id)
             channel_type = (context.get("channel_type") or "") if context else ""
+            user_id = int(context.get("user_id", 0)) if context else 0
             user_msg = {
                 "role": "user",
                 "content": [{"type": "text", "text": query}],
             }
-            store.append_messages(session_id, [user_msg], channel_type=channel_type)
+            store.append_messages(session_id, [user_msg], channel_type=channel_type, user_id=user_id)
             return True
         except Exception as e:
             logger.warning(
@@ -839,7 +841,8 @@ class AgentBridge:
             return False
 
     def _persist_messages(
-        self, session_id: str, new_messages: list, channel_type: str = ""
+        self, session_id: str, new_messages: list, channel_type: str = "",
+        user_id: int = 0,
     ) -> None:
         """
         Persist new messages to the conversation store after each agent run.
@@ -867,7 +870,8 @@ class AgentBridge:
         try:
             from agent.memory import get_conversation_store
             get_conversation_store().append_messages(
-                session_id, messages_to_store, channel_type=channel_type
+                session_id, messages_to_store, channel_type=channel_type,
+                user_id=user_id,
             )
         except Exception as e:
             logger.warning(

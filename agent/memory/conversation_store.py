@@ -440,6 +440,7 @@ class ConversationStore:
         session_id: str,
         messages: List[Dict[str, Any]],
         channel_type: str = "",
+        user_id: int = 0,
     ) -> None:
         """
         Append new messages to a session's history.
@@ -452,6 +453,7 @@ class ConversationStore:
             messages: List of message dicts to append.
             channel_type: Source channel (e.g. "feishu", "web", "wechat").
                           Only written on session creation; ignored on update.
+            user_id: Owner user ID (0 = unowned / legacy mode).
         """
         if not messages:
             return
@@ -476,6 +478,13 @@ class ConversationStore:
                         "UPDATE sessions SET last_active = ? WHERE session_id = ?",
                         (now, session_id),
                     )
+
+                    # Set user_id on first creation (only when > 0)
+                    if user_id > 0:
+                        conn.execute(
+                            "UPDATE sessions SET user_id = ? WHERE session_id = ? AND user_id = 0",
+                            (user_id, session_id),
+                        )
 
                     # Determine starting seq for the new batch.
                     row = conn.execute(

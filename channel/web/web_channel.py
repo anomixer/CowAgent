@@ -26,6 +26,20 @@ from common.log import logger
 from common.singleton import singleton
 from config import conf, get_data_root, get_weixin_credentials_path
 
+# Multi-user auth (optional; gracefully degrades when no users registered)
+from channel.web.multiuser.auth import (
+    get_current_user,
+    require_login,
+    require_admin,
+    login_user as mu_login_user,
+    logout_current_user as mu_logout,
+    is_multiuser_enabled,
+    ensure_first_user_is_admin,
+    set_session_cookie as mu_set_session_cookie,
+    clear_session_cookie as mu_clear_session_cookie,
+)
+from channel.web.multiuser.db import get_multiuser_db
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
 
@@ -961,6 +975,12 @@ class WebChannel(ChatChannel):
             context["session_id"] = session_id
             context["receiver"] = session_id
             context["request_id"] = request_id
+            # Attach the logged-in user_id so the persistence layer can
+            # stamp new conversation sessions with the correct owner.
+            if is_multiuser_enabled():
+                mu_user = get_current_user()
+                if mu_user:
+                    context["user_id"] = mu_user["id"]
             if is_voice_input:
                 # Web channel runs its own TTS post-pipeline via
                 # _maybe_dispatch_auto_tts; don't set desire_rtype here or
@@ -1284,6 +1304,10 @@ class WebChannel(ChatChannel):
             '/auth/login', 'AuthLoginHandler',
             '/auth/check', 'AuthCheckHandler',
             '/auth/logout', 'AuthLogoutHandler',
+            '/api/auth/register', 'RegisterHandler',
+            '/api/auth/me', 'MeHandler',
+            '/api/auth/users/(.*)', 'AdminUserDetailHandler',
+            '/api/auth/users', 'AdminUsersHandler',
             '/message', 'MessageHandler',
             '/upload', 'UploadHandler',
             '/uploads/(.*)', 'UploadsHandler',
@@ -1445,6 +1469,17 @@ class McpOAuthCallbackHandler:
 class AuthCheckHandler:
     def GET(self):
         web.header('Content-Type', 'application/json; charset=utf-8')
+        # Multi-user mode: check user session
+        if is_multiuser_enabled():
+            user = get_current_user()
+            return json.dumps({
+                "status": "success",
+                "auth_required": True,
+                "authenticated": user is not None,
+                "user": user,
+                "multiuser": True,
+            })
+        # Legacy mode: single password
         if not _is_password_enabled():
             return json.dumps({"status": "success", "auth_required": False})
         if _check_auth():
@@ -1455,12 +1490,30 @@ class AuthCheckHandler:
 class AuthLoginHandler:
     def POST(self):
         web.header('Content-Type', 'application/json; charset=utf-8')
-        if not _is_password_enabled():
-            return json.dumps({"status": "success"})
         try:
             data = json.loads(web.data())
         except Exception:
             return json.dumps({"status": "error", "message": "Invalid request"})
+
+        # Multi-user mode: username + password login
+        if is_multiuser_enabled():
+            username = str(data.get("username", "") or "").strip()
+            password = str(data.get("password", "") or "")
+            if not username or not password:
+                return json.dumps({"status": "error", "message": "Username and password required"})
+            result = mu_login_user(username, password)
+            if not result:
+                logger.warning(f"[WebChannel] Failed login attempt for user '{username}'")
+                return json.dumps({"status": "error", "message": "Invalid username or password"})
+            return json.dumps({
+                "status": "success",
+                "user": result["user"],
+                "multiuser": True,
+            })
+
+        # Legacy mode: single password
+        if not _is_password_enabled():
+            return json.dumps({"status": "success"})
         password = str(data.get("password", "") or "")
         expected = _get_web_password()
         if not hmac.compare_digest(password, expected):
@@ -1477,7 +1530,152 @@ class AuthLoginHandler:
 class AuthLogoutHandler:
     def POST(self):
         web.header('Content-Type', 'application/json; charset=utf-8')
+        if is_multiuser_enabled():
+            mu_logout()
+            return json.dumps({"status": "success"})
+        # Legacy mode
         web.setcookie("cow_auth_token", "", expires=-1, path="/")
+        return json.dumps({"status": "success"})
+
+
+# ---------------------------------------------------------------------------
+# Multi‑user auth API  (register / me / admin users)
+# ---------------------------------------------------------------------------
+
+class RegisterHandler:
+    def POST(self):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+
+        username = str(data.get("username", "") or "").strip()
+        password = str(data.get("password", "") or "")
+        if not username or not password:
+            return json.dumps({"status": "error", "message": "Username and password required"})
+        if len(username) < 3 or len(username) > 32:
+            return json.dumps({"status": "error", "message": "Username must be 3-32 characters"})
+        if len(password) < 6:
+            return json.dumps({"status": "error", "message": "Password must be at least 6 characters"})
+
+        # First user becomes admin
+        is_first = ensure_first_user_is_admin()
+        role = "admin" if is_first else "user"
+
+        db = get_multiuser_db()
+        user = db.create_user(username, password, role=role)
+        if not user:
+            return json.dumps({"status": "error", "message": "Username already exists"})
+
+        logger.info(f"[WebChannel] Registered user '{username}' as {role}"
+                    f" ({'first user → admin' if is_first else 'regular user'})")
+
+        # Auto-login after registration
+        result = mu_login_user(username, password)
+        user.pop("password_hash", None)
+        return json.dumps({
+            "status": "success",
+            "user": user,
+            "role": role,
+            "message": "Registration successful",
+        })
+
+
+class MeHandler:
+    def GET(self):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        if not is_multiuser_enabled():
+            return json.dumps({"status": "error", "message": "Multi-user mode not enabled"})
+        user = get_current_user()
+        if not user:
+            return json.dumps({"status": "error", "message": "Not logged in"})
+        return json.dumps({"status": "success", "user": user})
+
+
+class AdminUsersHandler:
+    def GET(self):
+        require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        db = get_multiuser_db()
+        users = db.list_users()
+        return json.dumps({"status": "success", "users": users})
+
+    def POST(self):
+        """Admin: create a new user."""
+        admin = require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+
+        username = str(data.get("username", "") or "").strip()
+        password = str(data.get("password", "") or "")
+        role = str(data.get("role", "user")).strip()
+        if role not in ("admin", "user"):
+            role = "user"
+        if not username or not password:
+            return json.dumps({"status": "error", "message": "Username and password required"})
+
+        db = get_multiuser_db()
+        user = db.create_user(username, password, role=role)
+        if not user:
+            return json.dumps({"status": "error", "message": "Username already exists"})
+        logger.info(f"[WebChannel] Admin '{admin['username']}' created user '{username}' as {role}")
+        return json.dumps({"status": "success", "user": user})
+
+
+class AdminUserDetailHandler:
+    def DELETE(self, user_id: str):
+        """Admin: delete a user."""
+        admin = require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            uid = int(user_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid user ID"})
+        if uid == admin["id"]:
+            return json.dumps({"status": "error", "message": "Cannot delete yourself"})
+        db = get_multiuser_db()
+        if db.delete_user(uid):
+            logger.info(f"[WebChannel] Admin '{admin['username']}' deleted user id={uid}")
+            return json.dumps({"status": "success"})
+        return json.dumps({"status": "error", "message": "User not found"})
+
+    def PUT(self, user_id: str):
+        """Admin: update user role or password."""
+        admin = require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            uid = int(user_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid user ID"})
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+
+        db = get_multiuser_db()
+
+        # Role update
+        if "role" in data:
+            new_role = str(data["role"]).strip()
+            if new_role not in ("admin", "user"):
+                return json.dumps({"status": "error", "message": "Role must be 'admin' or 'user'"})
+            # Prevent demoting the last admin
+            if uid == admin["id"] and new_role != "admin":
+                return json.dumps({"status": "error", "message": "Cannot demote yourself"})
+            db.update_user_role(uid, new_role)
+            logger.info(f"[WebChannel] Admin '{admin['username']}' changed user id={uid} to role={new_role}")
+
+        # Password update
+        if "password" in data:
+            new_pw = str(data["password"]).strip()
+            if len(new_pw) < 6:
+                return json.dumps({"status": "error", "message": "Password must be at least 6 characters"})
+            db.update_user_password(uid, new_pw)
+
         return json.dumps({"status": "success"})
 
 
@@ -4702,6 +4900,22 @@ class SessionsHandler:
             params = web.input(page='1', page_size='50')
             from agent.memory import get_conversation_store
             store = get_conversation_store()
+
+            # Multi-user mode: filter sessions by current user
+            if is_multiuser_enabled():
+                user = get_current_user()
+                if user:
+                    db = get_multiuser_db()
+                    result = db.get_user_conversation_sessions(
+                        user_id=user["id"],
+                        channel_type="web",
+                        page=int(params.page),
+                        page_size=int(params.page_size),
+                    )
+                    return json.dumps({"status": "success", **result}, ensure_ascii=False)
+                # User not authenticated despite _require_auth passing?
+                # Fall through to legacy (shouldn't happen, but be safe)
+
             result = store.list_sessions(
                 channel_type="web",
                 page=int(params.page),
