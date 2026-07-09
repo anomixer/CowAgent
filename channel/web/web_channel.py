@@ -1309,6 +1309,10 @@ class WebChannel(ChatChannel):
             '/api/auth/users/(.*)', 'AdminUserDetailHandler',
             '/api/auth/users', 'AdminUsersHandler',
             '/api/auth/change-password', 'ChangePasswordHandler',
+            '/api/teams/(.*)/members/(.*)', 'TeamMemberDetailHandler',
+            '/api/teams/(.*)/members', 'TeamMembersHandler',
+            '/api/teams/(.*)', 'TeamDetailHandler',
+            '/api/teams', 'TeamsHandler',
             '/message', 'MessageHandler',
             '/upload', 'UploadHandler',
             '/uploads/(.*)', 'UploadsHandler',
@@ -1726,6 +1730,224 @@ class ChangePasswordHandler:
             save_config(cfg)
             logger.info("[WebChannel] Web password changed")
             return json.dumps({"status": "success", "message": "Password updated"})
+
+
+# ---------------------------------------------------------------------------
+# Team API (Phase 3)
+# ---------------------------------------------------------------------------
+
+class TeamsHandler:
+    """GET → list teams (admin: all, user: own); POST → create team (admin only)."""
+
+    def GET(self):
+        require_login()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        user = get_current_user()
+        db = get_multiuser_db()
+        if user["role"] == "admin":
+            teams = db.list_teams()
+        else:
+            teams = db.list_user_teams(user["id"])
+        return json.dumps({"status": "success", "teams": teams})
+
+    def POST(self):
+        """Create a new team. Admin only."""
+        admin = require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+
+        name = str(data.get("name", "") or "").strip()
+        description = str(data.get("description", "") or "").strip()
+        if not name:
+            return json.dumps({"status": "error", "message": "Team name required"})
+
+        db = get_multiuser_db()
+        team = db.create_team(name, description, created_by=admin["id"])
+        if not team:
+            return json.dumps({"status": "error", "message": "Team name already exists"})
+
+        # Auto-add creator as admin member
+        db.add_team_member(team["id"], admin["id"], role="admin")
+        logger.info(f"[WebChannel] Admin '{admin['username']}' created team '{name}' (id={team['id']})")
+        return json.dumps({"status": "success", "team": team})
+
+
+class TeamDetailHandler:
+    """GET → detail; PUT → update; DELETE → remove team."""
+
+    def GET(self, team_id: str):
+        require_login()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        user = get_current_user()
+        db = get_multiuser_db()
+        try:
+            tid = int(team_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid team ID"})
+
+        team = db.get_team(tid)
+        if not team:
+            return json.dumps({"status": "error", "message": "Team not found"})
+
+        # Admin can see any team; user must be a member
+        if user["role"] != "admin":
+            user_team_ids = db.get_user_team_ids(user["id"])
+            if tid not in user_team_ids:
+                return json.dumps({"status": "error", "message": "Access denied"})
+
+        return json.dumps({"status": "success", "team": team})
+
+    def PUT(self, team_id: str):
+        """Update team name/description. Admin only for now (Phase 4 adds team admin)."""
+        admin = require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            tid = int(team_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid team ID"})
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+
+        db = get_multiuser_db()
+        team = db.get_team(tid)
+        if not team:
+            return json.dumps({"status": "error", "message": "Team not found"})
+
+        name = str(data.get("name", "") or "").strip() or None
+        description = str(data.get("description", "") or "").strip() or None
+        if db.update_team(tid, name=name, description=description):
+            logger.info(f"[WebChannel] Admin '{admin['username']}' updated team id={tid}")
+            return json.dumps({"status": "success"})
+        return json.dumps({"status": "error", "message": "Team name conflict or update failed"})
+
+    def DELETE(self, team_id: str):
+        """Delete a team. Admin only."""
+        admin = require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            tid = int(team_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid team ID"})
+
+        db = get_multiuser_db()
+        team = db.get_team(tid)
+        if not team:
+            return json.dumps({"status": "error", "message": "Team not found"})
+
+        db.delete_team(tid)
+        logger.info(f"[WebChannel] Admin '{admin['username']}' deleted team id={tid} ('{team['name']}')")
+        return json.dumps({"status": "success"})
+
+
+class TeamMembersHandler:
+    """GET → list members; POST → add a member."""
+
+    def GET(self, team_id: str):
+        require_login()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        user = get_current_user()
+        db = get_multiuser_db()
+        try:
+            tid = int(team_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid team ID"})
+
+        team = db.get_team(tid)
+        if not team:
+            return json.dumps({"status": "error", "message": "Team not found"})
+
+        if user["role"] != "admin":
+            user_team_ids = db.get_user_team_ids(user["id"])
+            if tid not in user_team_ids:
+                return json.dumps({"status": "error", "message": "Access denied"})
+
+        members = db.list_team_members(tid)
+        return json.dumps({"status": "success", "members": members})
+
+    def POST(self, team_id: str):
+        """Add a member to the team. Admin only for now (Phase 4 adds team admin)."""
+        admin = require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            tid = int(team_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid team ID"})
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+
+        db = get_multiuser_db()
+        team = db.get_team(tid)
+        if not team:
+            return json.dumps({"status": "error", "message": "Team not found"})
+
+        target_user_id = data.get("user_id")
+        role = str(data.get("role", "member")).strip()
+        if role not in ("admin", "member"):
+            role = "member"
+
+        if not target_user_id:
+            return json.dumps({"status": "error", "message": "user_id required"})
+
+        try:
+            target_uid = int(target_user_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid user_id"})
+
+        if db.add_team_member(tid, target_uid, role=role):
+            logger.info(f"[WebChannel] Admin '{admin['username']}' added user id={target_uid} to team id={tid} as {role}")
+            return json.dumps({"status": "success"})
+        return json.dumps({"status": "error", "message": "User already in team or not found"})
+
+
+class TeamMemberDetailHandler:
+    """DELETE → remove member; PUT → update member role."""
+
+    def DELETE(self, team_id: str, user_id: str):
+        """Remove a member from the team."""
+        admin = require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            tid = int(team_id)
+            uid = int(user_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid ID"})
+
+        db = get_multiuser_db()
+        if db.remove_team_member(tid, uid):
+            logger.info(f"[WebChannel] Admin '{admin['username']}' removed user id={uid} from team id={tid}")
+            return json.dumps({"status": "success"})
+        return json.dumps({"status": "error", "message": "Member not found or last admin in team"})
+
+    def PUT(self, team_id: str, user_id: str):
+        """Update member role."""
+        admin = require_admin()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            tid = int(team_id)
+            uid = int(user_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid ID"})
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+
+        new_role = str(data.get("role", "")).strip()
+        if new_role not in ("admin", "member"):
+            return json.dumps({"status": "error", "message": "Role must be 'admin' or 'member'"})
+
+        db = get_multiuser_db()
+        if db.update_team_member_role(tid, uid, new_role):
+            logger.info(f"[WebChannel] Admin '{admin['username']}' changed user id={uid} to role={new_role} in team id={tid}")
+            return json.dumps({"status": "success"})
+        return json.dumps({"status": "error", "message": "Member not found or role unchanged"})
 
 
 class MessageHandler:

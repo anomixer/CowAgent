@@ -257,6 +257,32 @@ const I18N = {
         edit_cancel: '取消',
         logout: '退出',
         menu_users: '用户管理',
+        menu_teams: '团队',
+        teams_title: '团队管理',
+        teams_desc: '创建和管理团队，分配成员与提示词',
+        team_create: '创建团队',
+        team_delete: '删除团队',
+        team_edit: '编辑团队',
+        team_name: '团队名称',
+        team_members: '成员管理',
+        team_prompt: '团队提示词',
+        team_prompt_label: '提示词模板',
+        team_prompt_hint: '团队成员共享此提示词模板',
+        team_created: '团队已创建',
+        team_updated: '团队已更新',
+        team_deleted: '团队已删除',
+        team_add_member: '添加成员',
+        team_remove_member: '移除成员',
+        team_member_role: '角色',
+        team_role_owner: '拥有者',
+        team_role_admin: '管理员',
+        team_role_member: '成员',
+        team_no_teams: '暂无团队',
+        team_no_teams_desc: '创建一个团队来协作管理知识库与提示词',
+        team_owner: '创建者',
+        member_added: '成员已添加',
+        member_removed: '成员已移除',
+        team_leave: '退出团队',
         menu_profile: '个人设置',
         no_account: '还没有账户？',
         register_now: '立即注册',
@@ -534,6 +560,32 @@ const I18N = {
         edit_cancel: '取消',
         logout: '登出',
         menu_users: '用戶管理',
+        menu_teams: '團隊',
+        teams_title: '團隊管理',
+        teams_desc: '建立和管理團隊，分配成員與提示詞',
+        team_create: '建立團隊',
+        team_delete: '刪除團隊',
+        team_edit: '編輯團隊',
+        team_name: '團隊名稱',
+        team_members: '成員管理',
+        team_prompt: '團隊提示詞',
+        team_prompt_label: '提示詞模板',
+        team_prompt_hint: '團隊成員共享此提示詞模板',
+        team_created: '團隊已建立',
+        team_updated: '團隊已更新',
+        team_deleted: '團隊已刪除',
+        team_add_member: '添加成員',
+        team_remove_member: '移除成員',
+        team_member_role: '角色',
+        team_role_owner: '擁有者',
+        team_role_admin: '管理員',
+        team_role_member: '成員',
+        team_no_teams: '暫無團隊',
+        team_no_teams_desc: '建立一個團隊來協作管理知識庫與提示詞',
+        team_owner: '建立者',
+        member_added: '成員已添加',
+        member_removed: '成員已移除',
+        team_leave: '退出團隊',
         menu_profile: '個人設定',
         no_account: '還沒有帳戶？',
         register_now: '立即註冊',
@@ -810,6 +862,32 @@ const I18N = {
         edit_cancel: 'Cancel',
         logout: 'Logout',
         menu_users: 'User Management',
+        menu_teams: 'Teams',
+        teams_title: 'Team Management',
+        teams_desc: 'Create and manage teams, assign members and prompts',
+        team_create: 'Create Team',
+        team_delete: 'Delete Team',
+        team_edit: 'Edit Team',
+        team_name: 'Team Name',
+        team_members: 'Members',
+        team_prompt: 'Team Prompt',
+        team_prompt_label: 'Prompt Template',
+        team_prompt_hint: 'Shared prompt template for team members',
+        team_created: 'Team created',
+        team_updated: 'Team updated',
+        team_deleted: 'Team deleted',
+        team_add_member: 'Add Member',
+        team_remove_member: 'Remove Member',
+        team_member_role: 'Role',
+        team_role_owner: 'Owner',
+        team_role_admin: 'Admin',
+        team_role_member: 'Member',
+        team_no_teams: 'No teams yet',
+        team_no_teams_desc: 'Create a team to collaborate on knowledge and prompts',
+        team_owner: 'Creator',
+        member_added: 'Member added',
+        member_removed: 'Member removed',
+        team_leave: 'Leave Team',
         menu_profile: 'Profile',
         no_account: 'No account yet?',
         register_now: 'Register now',
@@ -1042,6 +1120,10 @@ function rerenderDynamicViews() {
     if (currentView === 'config') {
         loadConfigView();
     }
+    // Reload teams after language switch
+    if (currentView === 'teams' && currentUser) {
+        renderTeamsView();
+    }
 }
 
 // Floating tooltip portal for [data-tip-key] elements. Tooltip nodes are
@@ -1131,6 +1213,7 @@ const VIEW_META = {
     channels: { group: 'nav_manage',  page: 'menu_channels' },
     tasks:    { group: 'nav_manage',  page: 'menu_tasks' },
     users:    { group: 'nav_manage',  page: 'menu_users' },
+    teams:    { group: 'nav_manage',  page: 'menu_teams' },
     profile:  { group: 'nav_manage',  page: 'menu_profile' },
     logs:     { group: 'nav_monitor', page: 'menu_logs' },
 };
@@ -9505,6 +9588,10 @@ navigateTo = function(viewId) {
     if (viewId === 'users' && isAdmin) {
         renderUsersView();
     }
+    // Render teams view on demand (available to all authenticated users)
+    if (viewId === 'teams' && currentUser) {
+        renderTeamsView();
+    }
     // Render profile view on demand
     if (viewId === 'profile' && currentUser) {
         renderProfileView();
@@ -9839,6 +9926,531 @@ function doDeleteUser(userId) {
         }
     }).catch(() => {});
 }
+
+// =====================================================================
+// Team Management Views
+// =====================================================================
+
+let _teamListView = null;   // HTML backup for back navigation
+
+function renderTeamsView() {
+    const container = document.getElementById('view-teams');
+    if (!container) return;
+    _teamListView = null;
+
+    container.innerHTML = `
+        <div class="flex-1 overflow-y-auto p-6">
+            <div class="max-w-4xl mx-auto">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">${t('teams_title')}</h2>
+                        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">${t('teams_desc')}</p>
+                    </div>
+                    <button onclick="showCreateTeamForm()"
+                            class="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600
+                                   text-white text-sm font-medium cursor-pointer transition-colors duration-150">
+                        <i class="fas fa-plus text-xs"></i>
+                        <span>${t('team_create')}</span>
+                    </button>
+                </div>
+
+                <div id="teams-list" class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
+                    <div class="flex items-center justify-center py-20 text-slate-400">
+                        <i class="fas fa-spinner fa-spin text-lg mr-2"></i> Loading...
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    fetchTeams();
+}
+
+function fetchTeams() {
+    const listEl = document.getElementById('teams-list');
+    if (!listEl) return;
+
+    fetch('/api/teams')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status !== 'success') {
+                listEl.innerHTML = '<div class="flex items-center justify-center py-20 text-slate-400">' + t('error_send') + '</div>';
+                return;
+            }
+            renderTeamList(data.teams || []);
+        })
+        .catch(() => {
+            listEl.innerHTML = '<div class="flex items-center justify-center py-20 text-slate-400">' + t('error_send') + '</div>';
+        });
+}
+
+function renderTeamList(teams) {
+    const listEl = document.getElementById('teams-list');
+    if (!listEl) return;
+
+    if (!teams.length) {
+        listEl.innerHTML = `
+            <div class="flex flex-col items-center justify-center py-20 text-slate-400">
+                <div class="w-16 h-16 rounded-2xl bg-slate-50 dark:bg-white/5 flex items-center justify-center mb-4">
+                    <i class="fas fa-users-gear text-slate-300 dark:text-slate-600 text-xl"></i>
+                </div>
+                <p class="font-medium text-slate-500 dark:text-slate-400">${t('team_no_teams')}</p>
+                <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">${t('team_no_teams_desc')}</p>
+            </div>
+        `;
+        return;
+    }
+
+    listEl.innerHTML = `
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-slate-100 dark:border-white/10 text-left">
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">ID</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">${t('team_name')}</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">${t('team_members')}</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">${t('team_owner')}</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider"></th>
+                </tr>
+            </thead>
+            <tbody>
+                ${teams.map(tm => {
+                    const memberCount = tm.member_count !== undefined ? tm.member_count : (tm.members ? tm.members.length : 0);
+                    const ownerName = tm.owner_name || tm.owner_username || '-';
+                    return `
+                        <tr class="border-b border-slate-50 dark:border-white/5 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
+                            <td class="px-5 py-3 text-slate-500 dark:text-slate-400">${escapeHtml(String(tm.id))}</td>
+                            <td class="px-5 py-3 font-medium text-slate-700 dark:text-slate-200">
+                                <span class="cursor-pointer hover:text-primary-500 transition-colors"
+                                      onclick="showTeamMembersView(${tm.id}, '${escapeHtml(tm.name)}')">${escapeHtml(tm.name)}</span>
+                            </td>
+                            <td class="px-5 py-3 text-slate-500 dark:text-slate-400 text-xs">
+                                <span class="cursor-pointer hover:text-primary-500 transition-colors"
+                                      onclick="showTeamMembersView(${tm.id}, '${escapeHtml(tm.name)}')">
+                                    <i class="fas fa-users text-xs mr-1"></i> ${memberCount}
+                                </span>
+                            </td>
+                            <td class="px-5 py-3 text-slate-500 dark:text-slate-400 text-xs">${escapeHtml(ownerName)}</td>
+                            <td class="px-5 py-3 text-right">
+                                <button onclick="showTeamMembersView(${tm.id}, '${escapeHtml(tm.name)}')"
+                                        class="text-xs text-primary-400 hover:text-primary-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-primary-50 dark:hover:bg-primary-500/10" title="${t('team_members')}">
+                                    <i class="fas fa-users-cog"></i>
+                                </button>
+                                ${tm.is_owner || isAdmin ? `
+                                    <button onclick="deleteTeam(${tm.id}, '${escapeHtml(tm.name)}')"
+                                            class="text-xs text-red-400 hover:text-red-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-500/10" title="${t('team_delete')}">
+                                        <i class="fas fa-trash-alt"></i>
+                                    </button>
+                                ` : ''}
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+// --- Create Team ---
+function showCreateTeamForm() {
+    const container = document.getElementById('view-teams');
+    if (!container) return;
+
+    // Save current list view HTML
+    _teamListView = container.innerHTML;
+
+    container.innerHTML = `
+        <div class="flex-1 overflow-y-auto p-6">
+            <div class="max-w-2xl mx-auto">
+                <div class="flex items-center gap-3 mb-6">
+                    <button onclick="backToTeamList()"
+                            class="p-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer transition-colors">
+                        <i class="fas fa-arrow-left text-xs"></i>
+                    </button>
+                    <div>
+                        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">${t('team_create')}</h2>
+                    </div>
+                </div>
+
+                <div class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-6 space-y-5">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">${t('team_name')}</label>
+                        <input id="create-team-name" type="text"
+                               class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                      text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50"
+                               placeholder="${t('team_name')}">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">${t('team_prompt_label')}</label>
+                        <textarea id="create-team-prompt" rows="4"
+                                  class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                         text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50 font-mono resize-y"
+                                  placeholder="${t('team_prompt_hint')}"></textarea>
+                    </div>
+                    <p id="create-team-status" class="text-sm text-red-500 hidden"></p>
+                    <div class="flex justify-end gap-3 pt-2">
+                        <button onclick="backToTeamList()"
+                                class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer">
+                            ${t('confirm_cancel')}
+                        </button>
+                        <button id="create-team-submit-btn" onclick="submitCreateTeam()"
+                                class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer disabled:opacity-50">
+                            ${t('team_create')}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('create-team-name').focus();
+}
+
+function backToTeamList() {
+    if (_teamListView) {
+        document.getElementById('view-teams').innerHTML = _teamListView;
+        _teamListView = null;
+        // Re-fetch teams since list was stored before changes
+        fetchTeams();
+    } else {
+        renderTeamsView();
+    }
+}
+window.backToTeamList = backToTeamList;
+
+function submitCreateTeam() {
+    const name = document.getElementById('create-team-name').value.trim();
+    const prompt = document.getElementById('create-team-prompt').value.trim();
+    const statusEl = document.getElementById('create-team-status');
+    const btn = document.getElementById('create-team-submit-btn');
+
+    if (!name || name.length < 2) {
+        statusEl.textContent = currentLang === 'en' ? 'Team name must be at least 2 characters' : '团队名称至少2个字符';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    btn.disabled = true;
+    statusEl.classList.add('hidden');
+
+    const body = {name: name};
+    if (prompt) body.prompt = prompt;
+
+    fetch('/api/teams', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            backToTeamList();
+            showStatus('teams-list', 'team_created', false);
+        } else {
+            statusEl.textContent = data.message || (currentLang === 'en' ? 'Failed to create team' : '创建团队失败');
+            statusEl.classList.remove('hidden');
+        }
+        btn.disabled = false;
+    }).catch(() => {
+        statusEl.textContent = currentLang === 'en' ? 'Network error' : '网络错误';
+        statusEl.classList.remove('hidden');
+        btn.disabled = false;
+    });
+}
+window.submitCreateTeam = submitCreateTeam;
+
+// --- Delete Team ---
+function deleteTeam(teamId, teamName) {
+    const msg = (currentLang === 'en' ? 'Are you sure you want to delete team "' : currentLang === 'zh-Hant' ? '確定要刪除團隊「' : '确定要删除团队「') + teamName + '」吗？' + (currentLang === 'en' ? ' This action cannot be undone.' : currentLang === 'zh-Hant' ? '此操作無法撤銷。' : '此操作无法撤销。');
+    showConfirmModal(t('team_delete'), msg, function() {
+        doDeleteTeam(teamId);
+    });
+}
+window.deleteTeam = deleteTeam;
+
+function doDeleteTeam(teamId) {
+    fetch('/api/teams/' + teamId, {
+        method: 'DELETE'
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            fetchTeams();
+            showStatus('teams-list', 'team_deleted', false);
+        }
+    }).catch(() => {});
+}
+
+// --- Team Members View ---
+let _currentTeamId = null;
+
+function showTeamMembersView(teamId, teamName) {
+    _currentTeamId = teamId;
+    const container = document.getElementById('view-teams');
+    if (!container) return;
+
+    // Save list view for back navigation
+    if (!_teamListView) {
+        _teamListView = container.innerHTML;
+    }
+
+    container.innerHTML = `
+        <div class="flex-1 overflow-y-auto p-6">
+            <div class="max-w-4xl mx-auto">
+                <div class="flex items-center justify-between mb-6">
+                    <div class="flex items-center gap-3">
+                        <button onclick="backToTeamList()"
+                                class="p-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer transition-colors">
+                            <i class="fas fa-arrow-left text-xs"></i>
+                        </button>
+                        <div>
+                            <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">${escapeHtml(teamName)}</h2>
+                            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">${t('team_members')}</p>
+                        </div>
+                    </div>
+                    <button onclick="showAddMemberForm(${teamId})"
+                            class="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600
+                                   text-white text-sm font-medium cursor-pointer transition-colors duration-150">
+                        <i class="fas fa-user-plus text-xs"></i>
+                        <span>${t('team_add_member')}</span>
+                    </button>
+                </div>
+
+                <div id="team-members-list" class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
+                    <div class="flex items-center justify-center py-20 text-slate-400">
+                        <i class="fas fa-spinner fa-spin text-lg mr-2"></i> Loading...
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    fetchTeamMembers(teamId);
+}
+window.showTeamMembersView = showTeamMembersView;
+
+function fetchTeamMembers(teamId) {
+    const listEl = document.getElementById('team-members-list');
+    if (!listEl) return;
+
+    fetch('/api/teams/' + teamId + '/members')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status !== 'success') {
+                listEl.innerHTML = '<div class="flex items-center justify-center py-20 text-slate-400">' + t('error_send') + '</div>';
+                return;
+            }
+            renderTeamMemberList(teamId, data.members || []);
+        })
+        .catch(() => {
+            listEl.innerHTML = '<div class="flex items-center justify-center py-20 text-slate-400">' + t('error_send') + '</div>';
+        });
+}
+
+function renderTeamMemberList(teamId, members) {
+    const listEl = document.getElementById('team-members-list');
+    if (!listEl) return;
+
+    const currentUserId = currentUser ? currentUser.id : null;
+
+    if (!members.length) {
+        listEl.innerHTML = `
+            <div class="flex flex-col items-center justify-center py-20 text-slate-400">
+                <div class="w-16 h-16 rounded-2xl bg-slate-50 dark:bg-white/5 flex items-center justify-center mb-4">
+                    <i class="fas fa-users-slash text-slate-300 dark:text-slate-600 text-xl"></i>
+                </div>
+                <p class="font-medium text-slate-500 dark:text-slate-400">${t('team_no_teams')}</p>
+            </div>
+        `;
+        return;
+    }
+
+    listEl.innerHTML = `
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-slate-100 dark:border-white/10 text-left">
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">ID</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">${t('username')}</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">${t('team_member_role')}</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider"></th>
+                </tr>
+            </thead>
+            <tbody>
+                ${members.map(m => {
+                    const isSelf = m.user_id === currentUserId;
+                    const isOwner = m.role === 'owner';
+                    return `
+                        <tr class="border-b border-slate-50 dark:border-white/5 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
+                            <td class="px-5 py-3 text-slate-500 dark:text-slate-400">${m.user_id}</td>
+                            <td class="px-5 py-3 font-medium text-slate-700 dark:text-slate-200">
+                                ${escapeHtml(m.username || m.user_id)}
+                                ${isSelf ? '<span class="text-xs text-primary-500 ml-1">(you)</span>' : ''}
+                            </td>
+                            <td class="px-5 py-3">
+                                ${isOwner ? `
+                                    <span class="text-xs px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 font-medium">${t('team_role_owner')}</span>
+                                ` : `
+                                    <select class="team-member-role-select text-xs rounded-lg border border-slate-200 dark:border-white/10 bg-transparent px-2 py-1
+                                                  text-slate-600 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-primary-400/50"
+                                            data-team-id="${teamId}" data-user-id="${m.user_id}"
+                                            ${isSelf ? 'disabled' : ''}
+                                            onchange="updateTeamMemberRole(${teamId}, ${m.user_id}, this.value)">
+                                        <option value="admin" ${m.role === 'admin' ? 'selected' : ''}>${t('team_role_admin')}</option>
+                                        <option value="member" ${m.role === 'member' ? 'selected' : ''}>${t('team_role_member')}</option>
+                                    </select>
+                                    ${isSelf ? '<span class="text-xs text-slate-400 ml-1">(you)</span>' : ''}
+                                `}
+                            </td>
+                            <td class="px-5 py-3 text-right">
+                                ${(!isOwner && !isSelf) ? `
+                                    <button onclick="removeTeamMember(${teamId}, ${m.user_id}, '${escapeHtml(m.username || '')}')"
+                                            class="text-xs text-red-400 hover:text-red-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-500/10" title="${t('team_remove_member')}">
+                                        <i class="fas fa-user-minus"></i>
+                                    </button>
+                                ` : ''}
+                                ${isSelf && !isOwner ? `
+                                    <button onclick="leaveTeam(${teamId})"
+                                            class="text-xs text-amber-400 hover:text-amber-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-amber-50 dark:hover:bg-amber-500/10" title="${t('team_leave')}">
+                                        <i class="fas fa-sign-out-alt"></i>
+                                    </button>
+                                ` : ''}
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+// --- Add Member ---
+function showAddMemberForm(teamId) {
+    const overlay = document.createElement('div');
+    overlay.id = 'add-member-modal';
+    overlay.className = 'fixed inset-0 bg-black/50 z-[200] flex items-center justify-center';
+    overlay.onclick = function(e) { if (e.target === overlay) closeAddMemberForm(); };
+
+    overlay.innerHTML = `
+        <div class="bg-white dark:bg-[#1A1A1A] rounded-2xl border border-slate-200 dark:border-white/10 shadow-xl w-full max-w-sm mx-4">
+            <div class="p-6">
+                <h3 class="font-semibold text-slate-800 dark:text-slate-100 mb-4">${t('team_add_member')}</h3>
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">${t('username')}</label>
+                        <input id="add-member-username" type="text" placeholder="${t('username')}" autocomplete="off"
+                               class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                      text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">${t('team_member_role')}</label>
+                        <select id="add-member-role"
+                                class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                       text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                            <option value="member">${t('team_role_member')}</option>
+                            <option value="admin">${t('team_role_admin')}</option>
+                        </select>
+                    </div>
+                    <p id="add-member-status" class="text-sm text-red-500 hidden"></p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-100 dark:border-white/5">
+                <button onclick="closeAddMemberForm()"
+                        class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer">
+                    ${t('confirm_cancel')}
+                </button>
+                <button onclick="submitAddMember(${teamId})"
+                        class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer disabled:opacity-50">
+                    ${t('team_add_member')}
+                </button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+    setTimeout(function() { document.getElementById('add-member-username').focus(); }, 100);
+}
+
+function closeAddMemberForm() {
+    const el = document.getElementById('add-member-modal');
+    if (el) el.remove();
+}
+window.closeAddMemberForm = closeAddMemberForm;
+
+function submitAddMember(teamId) {
+    const username = document.getElementById('add-member-username').value.trim();
+    const role = document.getElementById('add-member-role').value;
+    const statusEl = document.getElementById('add-member-status');
+    const btn = document.querySelector('#add-member-modal .bg-primary-500');
+
+    if (!username) {
+        statusEl.textContent = currentLang === 'en' ? 'Please enter a username' : '请输入用户名';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    btn.disabled = true;
+    statusEl.classList.add('hidden');
+
+    fetch('/api/teams/' + teamId + '/members', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username: username, role: role})
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            closeAddMemberForm();
+            fetchTeamMembers(teamId);
+            showStatus('team-members-list', 'member_added', false);
+        } else {
+            statusEl.textContent = data.message || (currentLang === 'en' ? 'Failed to add member' : '添加成员失败');
+            statusEl.classList.remove('hidden');
+        }
+        btn.disabled = false;
+    }).catch(() => {
+        statusEl.textContent = currentLang === 'en' ? 'Network error' : '网络错误';
+        statusEl.classList.remove('hidden');
+        btn.disabled = false;
+    });
+}
+window.submitAddMember = submitAddMember;
+
+// --- Update / Remove Member ---
+function updateTeamMemberRole(teamId, userId, newRole) {
+    fetch('/api/teams/' + teamId + '/members/' + userId, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({role: newRole})
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            fetchTeamMembers(teamId);
+        }
+    }).catch(function() {});
+}
+window.updateTeamMemberRole = updateTeamMemberRole;
+
+function removeTeamMember(teamId, userId, username) {
+    const msg = (currentLang === 'en' ? 'Remove "' + username + '" from this team?' : currentLang === 'zh-Hant' ? '從團隊移除「' + username + '」？' : '从团队移除「' + username + '」？');
+    showConfirmModal(t('team_remove_member'), msg, function() {
+        fetch('/api/teams/' + teamId + '/members/' + userId, {
+            method: 'DELETE'
+        }).then(r => r.json()).then(data => {
+            if (data.status === 'success') {
+                fetchTeamMembers(teamId);
+                showStatus('team-members-list', 'member_removed', false);
+            }
+        }).catch(function() {});
+    });
+}
+window.removeTeamMember = removeTeamMember;
+
+function leaveTeam(teamId) {
+    const msg = currentLang === 'en' ? 'Are you sure you want to leave this team?' : currentLang === 'zh-Hant' ? '確定要退出此團隊？' : '确定要退出此团队？';
+    showConfirmModal(t('team_leave'), msg, function() {
+        fetch('/api/teams/' + teamId + '/members/leave', {
+            method: 'POST'
+        }).then(r => r.json()).then(data => {
+            if (data.status === 'success') {
+                backToTeamList();
+                showStatus('teams-list', 'member_removed', false);
+            }
+        }).catch(function() {});
+    });
+}
+window.leaveTeam = leaveTeam;
 
 // =====================================================================
 // Initialization

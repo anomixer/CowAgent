@@ -1,6 +1,9 @@
 # feat-multiuser — 多使用者認證、對話隔離與知識庫分享系統
 
-> **Phase 1** — 後端核心 (Backend Core) & **Phase 2** — 知識庫隔離與前端 UI  
+> **Phase 1-2** — 後端核心 & 知識庫隔離 (已完成)  \
+> **Phase 3** — Team Scope (開發中)  \
+> **Phase 4-5** — Prompt 繼承 & Pro 企業功能 (規劃中)  \
+> **戰略基礎** — [三層 Scope (global/team/user) + Prompt 繼承 + RBAC 擴充](#0-戰略願景-strategic-vision)  
 > Branch: `feat-multiuser`  
 > Base: `main` (upstream `anomixer/CowAgent`)
 
@@ -8,6 +11,7 @@
 
 ## 目錄
 
+0. [戰略願景](#0-戰略願景-strategic-vision)
 1. [動機與目標](#1-動機與目標)
 2. [系統架構](#2-系統架構)
 3. [資料庫層 — `multiuser/db.py`](#3-資料庫層--multiuserdbpy)
@@ -20,6 +24,69 @@
 10. [前端 UI 變更](#10-前端-ui-變更)
 11. [已修改檔案索引](#11-已修改檔案索引)
 12. [Phase 2 完成項目與展望](#12-phase-2-完成項目與展望)
+
+---
+
+## 0. 戰略願景 (Strategic Vision)
+
+> 本分支的發展方向，奠基於 playerr (anomixer) 在 2026-07-09 寫給原作者 zhayujie 的信中提出的架構。
+> 完整內容請參閱 [知識庫](../sources/letter-to-zhayujie-2026-07-09.md)。
+
+### 核心架構：三層 Scope
+
+```
+┌─────────────────────────────────────────┐
+│  🌐 global                               │
+│  全域共享知識庫 / 系統設定 / 公共技能     │
+│  由 Admin 管理                            │
+│  ┌───────────────────────────────────┐   │
+│  │  👥 team                           │   │
+│  │  部門或群組共享空間                 │   │
+│  │  由 Manager 管理                   │   │
+│  │  ┌─────────────────────────────┐   │   │
+│  │  │  👤 user                     │   │   │
+│  │  │  個人私有對話/記憶/知識庫    │   │   │
+│  │  │  完全隔離，預設私有          │   │   │
+│  │  └─────────────────────────────┘   │   │
+│  └───────────────────────────────────┘   │
+└─────────────────────────────────────────┘
+```
+
+**原則**：
+- 記憶與知識庫**預設收在 user scope**，再視需要 promote 到 team / global
+- 避免記憶串味，也不至於把所有東西切得太死
+
+### Prompt / Persona 繼承架構
+
+```
+Admin 基礎 system prompt  /  品牌規範  /  安全邊界
+        │
+        ▼
+Team  部門層級覆蓋  /  共用 context
+        │
+        ▼
+User  個人化微調  /  私有 context
+```
+
+### RBAC 角色模型（三層）
+
+| 角色 | 權限範圍 |
+|------|----------|
+| **admin** | 全域設定、模型、知識庫、成員管理、審計 |
+| **manager** | team scope 內的共享資源管理 |
+| **user** | 自己的內容 + 被授權的 team/global 資源 |
+
+### 商業化願景：CowAgent Pro
+
+| 版本 | 功能 |
+|------|------|
+| **基礎企業版** | 多用戶登入 + 基礎知識庫隔離 |
+| **專業企業版** | + team scope、prompt override、audit log |
+| **企業定制版** | + SSO、私有化部署、客製整合、SLA 支援 |
+
+### Channel 綁定（未來方向）
+
+不同 team 可綁定不同 Slack / 企微 / 飛書機器人；同一組織下不同 user 綁自己的 channel 身份，使 CowAgent 從個人助理進化為組織級 Agent Infrastructure。
 
 ---
 
@@ -629,18 +696,48 @@ let isAdmin = false;          // 是否有管理權限
 | **前端** | i18n 翻譯（zh / zh-Hant / en）30+ 字串 | ✅ |
 | **文件** | AGENTS.md Phase 2 完整記錄 | ✅ |
 
-### 待加強／未來展望
+### 路線圖：對齊三層 Scope 戰略
 
+#### ✅ Phase 1 — 後端核心（已完成）
+多使用者認證、Session 管理、RBAC（admin/user）、對話隔離、向後相容
+
+#### ✅ Phase 2 — 知識庫隔離與分享（已完成）
+知識庫目錄隔離、搜尋管線 `shared_user_ids` 傳遞、知識庫分享 CRUD、前端 UI（登入/註冊/管理/個人設定）、i18n 三語系
+
+#### 🟡 Phase 3 — Team Scope（開發中）
 | 類別 | 項目 | 優先級 |
 |------|------|:------:|
-| **測試** | 完整測試多使用者登入/註冊/管理/分享流程 | 🔴 高 |
+| **DB** | `mu_teams` / `mu_team_members` / `mu_user_configs` 三表 DDL + CRUD | 🟢 完成 |
+| **Storage** | `MemoryChunk` scope 擴充 team、`team_id` 欄位 + migration + 4 種 search method WHERE 子句 | 🟢 完成 |
+| **Manager** | `sync()` 掃描 `knowledge/teams/{id}/`、`search()` 傳遞 `team_ids` | 🟡 進行中 |
+| **API** | Team CRUD API + Prompt API handlers | 🔴 待做 |
+| **Bridge** | Global + User 提示詞合併 | 🔴 待做 |
+| **前端** | Team 管理 UI + Prompt 編輯器 | 🔴 待做 |
+| **文件** | AGENTS.md Phase 3 更新 | 🟡 進行中 |
 | **分享** | 分享 UI 整合到前端（目前僅有後端 API） | 🟡 中 |
-| **知識庫** | 使用者知識庫管理頁面（上傳、刪除、列表） | 🟡 中 |
-| **認證** | OAuth / SSO 整合（LDAP, Google, GitHub） | 🟢 低 |
+
+#### 🔲 Phase 4 — Prompt 繼承與 RBAC 擴充
+| 類別 | 項目 | 優先級 |
+|------|------|:------:|
+| **DB** | `mu_prompts` 表（scope: global/team/user, 繼承鏈） | 🔴 高 |
+| **後端** | Prompt 繼承引擎：Admin 基底 → Team 覆蓋 → User 微調 | 🔴 高 |
+| **後端** | Manager 角色新增（team scope 管理員） | 🔴 高 |
+| **API** | Prompt CRUD API + 繼承狀態查詢 | 🔴 高 |
+| **前端** | Prompt 編輯器（含繼承預覽、版本對比） | 🔴 高 |
+| **前端** | Manager view：管理 team 成員與共享資源 | 🟡 中 |
+| **安全** | Rate Limiting 內建支援 | 🟡 中 |
+| **安全** | Session 黑名單（管理員可強制登出特定使用者） | 🟡 中 |
+| **測試** | 完整測試全角色 + 繼承 + 分享流程 | 🟡 中 |
+
+#### 🔲 Phase 5 — CowAgent Pro 企業功能
+| 類別 | 項目 | 優先級 |
+|------|------|:------:|
+| **認證** | OAuth / SSO 整合（LDAP, Google, GitHub） | 🟡 中 |
 | **認證** | API Token 支援（機器對機器呼叫） | 🟢 低 |
-| **安全** | Rate Limiting 內建支援 | 🟢 低 |
-| **安全** | Session 黑名單（管理員可強制登出特定使用者） | 🟢 低 |
-| **監控** | 操作日誌 Audit Log | 🟢 低 |
+| **監控** | Audit Log 操作日誌（誰做了什麼 + 時間戳 + IP） | 🟡 中 |
+| **Channel** | Channel 與 team/user 綁定（Slack/企微/飛書/Telegram/Discord） | 🟢 低 |
+| **部署** | 私有化部署安裝腳本 + Docker Compose 範本 | 🟢 低 |
+| **商業化** | CowAgent Pro 版本功能標誌（feature flag） | 🟢 低 |
 
 ---
 

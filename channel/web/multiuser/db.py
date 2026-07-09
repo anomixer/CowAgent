@@ -68,6 +68,46 @@ CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_owner
 
 CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_target
     ON mu_kb_shares (shared_with_id);
+
+CREATE TABLE IF NOT EXISTS mu_teams (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL UNIQUE,
+    description     TEXT    NOT NULL DEFAULT '',
+    created_by      INTEGER NOT NULL,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    FOREIGN KEY (created_by) REFERENCES mu_users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS mu_team_members (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id         INTEGER NOT NULL,
+    user_id         INTEGER NOT NULL,
+    role            TEXT    NOT NULL DEFAULT 'member',
+    joined_at       INTEGER NOT NULL,
+    FOREIGN KEY (team_id) REFERENCES mu_teams(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES mu_users(id) ON DELETE CASCADE,
+    UNIQUE(team_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mu_team_members_team
+    ON mu_team_members (team_id);
+
+CREATE INDEX IF NOT EXISTS idx_mu_team_members_user
+    ON mu_team_members (user_id);
+
+CREATE TABLE IF NOT EXISTS mu_user_configs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL,
+    config_key      TEXT    NOT NULL,
+    config_value    TEXT    NOT NULL DEFAULT '',
+    updated_at      INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES mu_users(id) ON DELETE CASCADE,
+    UNIQUE(user_id, config_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mu_user_configs_user
+    ON mu_user_configs (user_id);
 """
 
 _MIGRATION_ADD_USER_ID_TO_SESSIONS = """
@@ -508,6 +548,318 @@ class MultiUserDB:
                     (user_id,),
                 ).fetchall()
                 return [r[0] for r in rows]
+            finally:
+                conn.close()
+
+    # -- team management --------------------------------------------------
+
+    def create_team(self, name: str, description: str, created_by: int) -> Optional[Dict]:
+        """Create a new team. Also adds creator as admin member. Returns team dict or None."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                now = int(time.time())
+                cur = conn.execute(
+                    "INSERT INTO mu_teams (name, description, created_by, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (name, description, created_by, now, now),
+                )
+                team_id = cur.lastrowid
+                # Add creator as team admin
+                conn.execute(
+                    "INSERT INTO mu_team_members (team_id, user_id, role, joined_at) "
+                    "VALUES (?, ?, 'admin', ?)",
+                    (team_id, created_by, now),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT id, name, description, created_by, created_at, updated_at "
+                    "FROM mu_teams WHERE id = ?", (team_id,)
+                ).fetchone()
+                return dict(row) if row else None
+            except sqlite3.IntegrityError:
+                return None
+            finally:
+                conn.close()
+
+    def delete_team(self, team_id: int) -> bool:
+        """Delete a team and all memberships."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("DELETE FROM mu_team_members WHERE team_id = ?", (team_id,))
+                cur = conn.execute("DELETE FROM mu_teams WHERE id = ?", (team_id,))
+                conn.commit()
+                # Remove team knowledge directory
+                self._ensure_team_knowledge_dir_cleanup(team_id)
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def get_team(self, team_id: int) -> Optional[Dict]:
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT id, name, description, created_by, created_at, updated_at "
+                    "FROM mu_teams WHERE id = ?", (team_id,)
+                ).fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+
+    def list_teams(self) -> List[Dict]:
+        """List all teams with member count."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT t.id, t.name, t.description, t.created_by, t.created_at, "
+                    "(SELECT COUNT(*) FROM mu_team_members m WHERE m.team_id = t.id) AS member_count "
+                    "FROM mu_teams t ORDER BY t.name ASC"
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+
+    def list_user_teams(self, user_id: int) -> List[Dict]:
+        """List teams a user belongs to."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT t.id, t.name, t.description, t.created_by, t.created_at, "
+                    "m.role AS my_role "
+                    "FROM mu_teams t "
+                    "JOIN mu_team_members m ON m.team_id = t.id "
+                    "WHERE m.user_id = ? "
+                    "ORDER BY t.name ASC",
+                    (user_id,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+
+    def get_user_team_ids(self, user_id: int) -> List[int]:
+        """Return list of team IDs a user belongs to (for search filtering)."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT team_id FROM mu_team_members WHERE user_id = ?",
+                    (user_id,),
+                ).fetchall()
+                return [r[0] for r in rows]
+            finally:
+                conn.close()
+
+    def update_team(self, team_id: int, name: str = None, description: str = None) -> bool:
+        """Update team name/description. Returns True if found."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                now = int(time.time())
+                fields = []
+                params = []
+                if name is not None:
+                    fields.append("name = ?")
+                    params.append(name)
+                if description is not None:
+                    fields.append("description = ?")
+                    params.append(description)
+                if not fields:
+                    return False
+                fields.append("updated_at = ?")
+                params.append(now)
+                params.append(team_id)
+                cur = conn.execute(
+                    f"UPDATE mu_teams SET {', '.join(fields)} WHERE id = ?",
+                    params,
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            except sqlite3.IntegrityError:
+                return False
+            finally:
+                conn.close()
+
+    # -- team membership --------------------------------------------------
+
+    def add_team_member(self, team_id: int, user_id: int, role: str = "member") -> bool:
+        """Add a user to a team. Returns True if successful."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                now = int(time.time())
+                conn.execute(
+                    "INSERT INTO mu_team_members (team_id, user_id, role, joined_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (team_id, user_id, role, now),
+                )
+                conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False
+            finally:
+                conn.close()
+
+    def remove_team_member(self, team_id: int, user_id: int) -> bool:
+        """Remove a user from a team. Returns True if found."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                # Cannot remove last admin
+                if self._is_last_team_admin(conn, team_id, user_id):
+                    return False
+                cur = conn.execute(
+                    "DELETE FROM mu_team_members WHERE team_id = ? AND user_id = ?",
+                    (team_id, user_id),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def update_team_member_role(self, team_id: int, user_id: int, role: str) -> bool:
+        """Change a member's role. Returns True if found."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                if role != "admin" and self._is_last_team_admin(conn, team_id, user_id):
+                    return False
+                cur = conn.execute(
+                    "UPDATE mu_team_members SET role = ? WHERE team_id = ? AND user_id = ?",
+                    (role, team_id, user_id),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def list_team_members(self, team_id: int) -> List[Dict]:
+        """List all members of a team with their usernames."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT m.id, m.user_id, m.role, m.joined_at, u.username "
+                    "FROM mu_team_members m "
+                    "JOIN mu_users u ON u.id = m.user_id "
+                    "WHERE m.team_id = ? "
+                    "ORDER BY m.joined_at ASC",
+                    (team_id,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+
+    def _is_last_team_admin(self, conn, team_id: int, user_id: int) -> bool:
+        """Check if user is the last admin of a team."""
+        row = conn.execute(
+            "SELECT COUNT(*) FROM mu_team_members "
+            "WHERE team_id = ? AND role = 'admin'",
+            (team_id,),
+        ).fetchone()
+        if row and row[0] <= 1:
+            # Check if this user IS an admin
+            is_admin = conn.execute(
+                "SELECT 1 FROM mu_team_members "
+                "WHERE team_id = ? AND user_id = ? AND role = 'admin'",
+                (team_id, user_id),
+            ).fetchone()
+            return is_admin is not None
+        return False
+
+    # -- knowledge directory helpers for teams ----------------------------
+
+    def _ensure_team_knowledge_dir(self, team_id: int) -> None:
+        """Create ``knowledge/teams/{team_id}/`` directory for a team."""
+        try:
+            from config import conf
+            workspace = conf().get("agent_workspace", "~/cow")
+            workspace = os.path.expanduser(workspace)
+            team_kb_dir = os.path.join(workspace, "knowledge", "teams", str(team_id))
+            os.makedirs(team_kb_dir, exist_ok=True)
+            logger.debug(f"[MultiUserDB] Created knowledge directory for team {team_id}: {team_kb_dir}")
+        except Exception as e:
+            logger.warning(f"[MultiUserDB] Failed to create knowledge dir for team {team_id}: {e}")
+
+    def _ensure_team_knowledge_dir_cleanup(self, team_id: int) -> None:
+        """Remove team knowledge directory on team deletion."""
+        try:
+            from config import conf
+            workspace = conf().get("agent_workspace", "~/cow")
+            workspace = os.path.expanduser(workspace)
+            team_kb_dir = os.path.join(workspace, "knowledge", "teams", str(team_id))
+            import shutil
+            if os.path.isdir(team_kb_dir):
+                shutil.rmtree(team_kb_dir, ignore_errors=True)
+                logger.debug(f"[MultiUserDB] Removed knowledge directory for team {team_id}")
+        except Exception as e:
+            logger.warning(f"[MultiUserDB] Failed to cleanup knowledge dir for team {team_id}: {e}")
+
+    # -- user config (prompt override, etc.) ------------------------------
+
+    def set_user_config(self, user_id: int, config_key: str, config_value: str) -> bool:
+        """Set a user-specific config value (upsert)."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                now = int(time.time())
+                conn.execute(
+                    "INSERT INTO mu_user_configs (user_id, config_key, config_value, updated_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(user_id, config_key) "
+                    "DO UPDATE SET config_value = excluded.config_value, updated_at = ?",
+                    (user_id, config_key, config_value, now, now),
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.warning(f"[MultiUserDB] set_user_config error: {e}")
+                return False
+            finally:
+                conn.close()
+
+    def get_user_config(self, user_id: int, config_key: str) -> Optional[str]:
+        """Get a user-specific config value."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT config_value FROM mu_user_configs "
+                    "WHERE user_id = ? AND config_key = ?",
+                    (user_id, config_key),
+                ).fetchone()
+                return row[0] if row else None
+            finally:
+                conn.close()
+
+    def get_all_user_configs(self, user_id: int) -> Dict[str, str]:
+        """Get all configs for a user as a dict."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT config_key, config_value FROM mu_user_configs "
+                    "WHERE user_id = ?",
+                    (user_id,),
+                ).fetchall()
+                return {r[0]: r[1] for r in rows}
+            finally:
+                conn.close()
+
+    def delete_user_config(self, user_id: int, config_key: str) -> bool:
+        """Delete a user-specific config."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM mu_user_configs WHERE user_id = ? AND config_key = ?",
+                    (user_id, config_key),
+                )
+                conn.commit()
+                return cur.rowcount > 0
             finally:
                 conn.close()
 

@@ -253,6 +253,11 @@
                             <i class="fas fa-users item-icon text-xs w-5 text-center"></i>
                             <span data-i18n="menu_users">用户管理</span>
                         </a>
+                        <a class="sidebar-item flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-all duration-150 hover:bg-white/5 hover:text-neutral-200 text-[14px]"
+                           data-view="teams">
+                            <i class="fas fa-users-gear item-icon text-xs w-5 text-center"></i>
+                            <span data-i18n="menu_teams">团队</span>
+                        </a>
                     </div>
                 </div>
 
@@ -1231,6 +1236,13 @@
                 <!-- ====================================================== -->
                 <div id="view-users" class="view">
                     <!-- Rendered dynamically by renderUsersView() -->
+                </div>
+
+                <!-- ====================================================== -->
+                <!-- VIEW: Teams                                             -->
+                <!-- ====================================================== -->
+                <div id="view-teams" class="view">
+                    <!-- Rendered dynamically by renderTeamsView() -->
                 </div>
 
             </div><!-- /content-area -->

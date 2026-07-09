@@ -48,14 +48,15 @@ class MemoryChunk:
     """Represents a memory chunk with text and embedding"""
     id: str
     user_id: Optional[str]
-    scope: str  # "shared" | "user" | "session"
-    source: str  # "memory" | "session"
-    path: str
-    start_line: int
-    end_line: int
-    text: str
-    embedding: Optional[List[float]]
-    hash: str
+    scope: str  # "shared" | "user" | "session" | "team"
+    team_id: Optional[str] = None
+    source: str = "memory"
+    path: str = ""
+    start_line: int = 0
+    end_line: int = 0
+    text: str = ""
+    embedding: Optional[List[float]] = None
+    hash: str = ""
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -157,6 +158,7 @@ class MemoryStorage:
                 id TEXT PRIMARY KEY,
                 user_id TEXT,
                 scope TEXT NOT NULL DEFAULT 'shared',
+                team_id TEXT DEFAULT NULL,
                 source TEXT NOT NULL DEFAULT 'memory',
                 path TEXT NOT NULL,
                 start_line INTEGER NOT NULL,
@@ -185,6 +187,21 @@ class MemoryStorage:
             CREATE INDEX IF NOT EXISTS idx_chunks_hash 
             ON chunks(path, hash)
         """)
+        
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunks_team 
+            ON chunks(team_id)
+        """)
+        
+        # Migration: add team_id column if missing (Phase 3)
+        try:
+            cols = [row[1] for row in self.conn.execute("PRAGMA table_info(chunks)").fetchall()]
+            if 'team_id' not in cols:
+                self.conn.execute("ALTER TABLE chunks ADD COLUMN team_id TEXT DEFAULT NULL")
+                from common.log import logger
+                logger.info("[MemoryStorage] Added team_id column to chunks table")
+        except Exception:
+            pass
         
         # Create FTS5 virtual table + triggers (only if supported).
         # Self-heal: if the previous process crashed mid-rebuild and left
@@ -424,12 +441,13 @@ class MemoryStorage:
         if _HAS_UPSERT:
             _SQL = """
                 INSERT INTO chunks
-                (id, user_id, scope, source, path, start_line, end_line,
+                (id, user_id, scope, team_id, source, path, start_line, end_line,
                  text, embedding, hash, metadata, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
                 ON CONFLICT(id) DO UPDATE SET
                     user_id     = excluded.user_id,
                     scope       = excluded.scope,
+                    team_id     = excluded.team_id,
                     source      = excluded.source,
                     path        = excluded.path,
                     start_line  = excluded.start_line,
@@ -443,12 +461,13 @@ class MemoryStorage:
         else:
             _SQL = """
                 INSERT OR REPLACE INTO chunks
-                (id, user_id, scope, source, path, start_line, end_line,
+                (id, user_id, scope, team_id, source, path, start_line, end_line,
                  text, embedding, hash, metadata, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
             """
         params = (
-            chunk.id, chunk.user_id, chunk.scope, chunk.source, chunk.path,
+            chunk.id, chunk.user_id, chunk.scope, chunk.team_id,
+            chunk.source, chunk.path,
             chunk.start_line, chunk.end_line, chunk.text,
             self._encode_embedding(chunk.embedding),
             chunk.hash,
@@ -466,12 +485,13 @@ class MemoryStorage:
         if _HAS_UPSERT:
             _SQL = """
                 INSERT INTO chunks
-                (id, user_id, scope, source, path, start_line, end_line,
+                (id, user_id, scope, team_id, source, path, start_line, end_line,
                  text, embedding, hash, metadata, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
                 ON CONFLICT(id) DO UPDATE SET
                     user_id     = excluded.user_id,
                     scope       = excluded.scope,
+                    team_id     = excluded.team_id,
                     source      = excluded.source,
                     path        = excluded.path,
                     start_line  = excluded.start_line,
@@ -485,13 +505,13 @@ class MemoryStorage:
         else:
             _SQL = """
                 INSERT OR REPLACE INTO chunks
-                (id, user_id, scope, source, path, start_line, end_line,
+                (id, user_id, scope, team_id, source, path, start_line, end_line,
                  text, embedding, hash, metadata, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
             """
         params_list = [
             (
-                c.id, c.user_id, c.scope, c.source, c.path,
+                c.id, c.user_id, c.scope, c.team_id, c.source, c.path,
                 c.start_line, c.end_line, c.text,
                 self._encode_embedding(c.embedding),
                 c.hash,
@@ -520,7 +540,8 @@ class MemoryStorage:
         user_id: Optional[str] = None,
         scopes: List[str] = None,
         limit: int = 10,
-        shared_user_ids: Optional[List[int]] = None
+        shared_user_ids: Optional[List[int]] = None,
+        team_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """
         Vector similarity search using numpy-vectorized cosine similarity.
@@ -529,14 +550,27 @@ class MemoryStorage:
 
         When shared_user_ids is provided (knowledge sharing enabled), chunks
         belonging to those users are also included in the search scope.
+
+        When team_ids is provided, chunks belonging to those teams
+        (scope='team', team_id IN team_ids) are also included.
         """
         if scopes is None:
             scopes = ["shared"]
             if user_id:
                 scopes.append("user")
+            if team_ids:
+                if "team" not in scopes:
+                    scopes.append("team")
 
         scope_placeholders = ','.join('?' * len(scopes))
         params = list(scopes)
+
+        # Build team condition
+        team_condition = ""
+        if team_ids:
+            team_placeholders = ','.join('?' * len(team_ids))
+            team_condition = f" OR (scope = 'team' AND team_id IN ({team_placeholders}))"
+            params.extend(str(tid) for tid in team_ids)
 
         if user_id:
             # Build user_id filter: own user OR shared users
@@ -547,7 +581,7 @@ class MemoryStorage:
             query = f"""
                 SELECT * FROM chunks
                 WHERE scope IN ({scope_placeholders})
-                AND (scope = 'shared' OR user_id IN ({user_placeholders}))
+                AND (scope = 'shared' OR user_id IN ({user_placeholders}){team_condition})
                 AND embedding IS NOT NULL
             """
             params.extend(all_user_ids)
@@ -649,7 +683,8 @@ class MemoryStorage:
         user_id: Optional[str] = None,
         scopes: List[str] = None,
         limit: int = 10,
-        shared_user_ids: Optional[List[int]] = None
+        shared_user_ids: Optional[List[int]] = None,
+        team_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """
         Keyword search using FTS5 + LIKE fallback
@@ -662,41 +697,38 @@ class MemoryStorage:
 
         When shared_user_ids is provided, chunks belonging to those shared
         users are also included in the search scope.
+
+        When team_ids is provided, team-scoped chunks are also included.
         """
         if scopes is None:
             scopes = ["shared"]
             if user_id:
                 scopes.append("user")
+            if team_ids:
+                if "team" not in scopes:
+                    scopes.append("team")
 
         # Step 1: Standard FTS5 (unicode61) — pure ASCII queries only.
-        # Skipped when query contains any CJK characters: unicode61 tokenises CJK
-        # as individual characters without forming meaningful tokens, so it would
-        # match only the ASCII portion of a mixed query (e.g. "Python" from
-        # "Python教程") and silently discard the CJK part.  Those queries go
-        # directly to Step 2 (trigram), which handles both ASCII and CJK together.
         fts1_attempted = False
         if (self.fts5_available
                 and not MemoryStorage._contains_cjk(query)
                 and MemoryStorage._build_fts_query(query)):
             fts1_attempted = True
-            fts_results = self._search_fts5(query, user_id, scopes, limit, shared_user_ids)
+            fts_results = self._search_fts5(query, user_id, scopes, limit, shared_user_ids, team_ids)
             if fts_results:
                 return fts_results
 
-        # Step 2: Trigram FTS5 — CJK/mixed queries, plus fallback when unicode61
-        # returned nothing (trigram indexes all scripts with 3-char sliding windows,
-        # so it can catch terms that unicode61 tokenisation misses).
+        # Step 2: Trigram FTS5 — CJK/mixed queries
         if self.trigram_fts5_available and (
             MemoryStorage._contains_cjk(query) or fts1_attempted
         ):
-            trigram_results = self._search_fts5_trigram(query, user_id, scopes, limit, shared_user_ids)
+            trigram_results = self._search_fts5_trigram(query, user_id, scopes, limit, shared_user_ids, team_ids)
             if trigram_results:
                 return trigram_results
 
-        # Step 3: LIKE fallback — last resort (FTS5 unavailable, or CJK tokens
-        # shorter than 3 characters that trigram cannot match, e.g. a single-char query).
+        # Step 3: LIKE fallback
         if not self.fts5_available or MemoryStorage._contains_cjk(query):
-            return self._search_like(query, user_id, scopes, limit, shared_user_ids)
+            return self._search_like(query, user_id, scopes, limit, shared_user_ids, team_ids)
 
         return []
     
@@ -706,7 +738,8 @@ class MemoryStorage:
         user_id: Optional[str],
         scopes: List[str],
         limit: int,
-        shared_user_ids: Optional[List[int]] = None
+        shared_user_ids: Optional[List[int]] = None,
+        team_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """FTS5 full-text search"""
         fts_query = self._build_fts_query(query)
@@ -715,6 +748,13 @@ class MemoryStorage:
         
         scope_placeholders = ','.join('?' * len(scopes))
         params = [fts_query] + scopes
+
+        # Build team condition
+        team_condition = ""
+        if team_ids:
+            team_placeholders = ','.join('?' * len(team_ids))
+            team_condition = f" OR (chunks.scope = 'team' AND chunks.team_id IN ({team_placeholders}))"
+            params.extend(str(tid) for tid in team_ids)
         
         if user_id:
             all_user_ids = [str(user_id)]
@@ -727,7 +767,7 @@ class MemoryStorage:
                 JOIN chunks ON chunks.rowid = chunks_fts.rowid
                 WHERE chunks_fts MATCH ? 
                 AND chunks.scope IN ({scope_placeholders})
-                AND (chunks.scope = 'shared' OR chunks.user_id IN ({user_placeholders}))
+                AND (chunks.scope = 'shared' OR chunks.user_id IN ({user_placeholders}){team_condition})
                 ORDER BY rank
                 LIMIT ?
             """
@@ -770,7 +810,8 @@ class MemoryStorage:
         user_id: Optional[str],
         scopes: List[str],
         limit: int,
-        shared_user_ids: Optional[List[int]] = None
+        shared_user_ids: Optional[List[int]] = None,
+        team_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """LIKE-based search.
 
@@ -779,6 +820,7 @@ class MemoryStorage:
         tokens (3+ chars) so it can serve as a true safety net for any query.
 
         When shared_user_ids is provided, their chunks are also included.
+        When team_ids is provided, team-scoped chunks are also included.
         """
         # CJK runs (1+ chars, wide Unicode range) + ASCII words (3+ chars to avoid noise)
         cjk_words = _RE_CJK_WORDS.findall(query)
@@ -798,7 +840,14 @@ class MemoryStorage:
         
         where_clause = ' OR '.join(like_conditions)
         params.extend(scopes)
-        
+
+        # Build team condition
+        team_condition = ""
+        if team_ids:
+            team_placeholders = ','.join('?' * len(team_ids))
+            team_condition = f" OR (scope = 'team' AND team_id IN ({team_placeholders}))"
+            params.extend(str(tid) for tid in team_ids)
+
         if user_id:
             all_user_ids = [str(user_id)]
             if shared_user_ids:
@@ -808,7 +857,7 @@ class MemoryStorage:
                 SELECT * FROM chunks
                 WHERE ({where_clause})
                 AND scope IN ({scope_placeholders})
-                AND (scope = 'shared' OR user_id IN ({user_placeholders}))
+                AND (scope = 'shared' OR user_id IN ({user_placeholders}){team_condition})
                 LIMIT ?
             """
             params.extend(all_user_ids)
@@ -982,11 +1031,13 @@ class MemoryStorage:
         user_id: Optional[str],
         scopes: List[str],
         limit: int,
-        shared_user_ids: Optional[List[int]] = None
+        shared_user_ids: Optional[List[int]] = None,
+        team_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """Trigram FTS5 search — handles CJK and mixed queries with BM25 ranking.
 
         When shared_user_ids is provided, their chunks are also included.
+        When team_ids is provided, team-scoped chunks are also included.
         """
         trigram_query = self._build_trigram_query(query)
         if not trigram_query:
@@ -994,6 +1045,13 @@ class MemoryStorage:
 
         scope_placeholders = ','.join('?' * len(scopes))
         params = [trigram_query] + list(scopes)
+
+        # Build team condition
+        team_condition = ""
+        if team_ids:
+            team_placeholders = ','.join('?' * len(team_ids))
+            team_condition = f" OR (chunks.scope = 'team' AND chunks.team_id IN ({team_placeholders}))"
+            params.extend(str(tid) for tid in team_ids)
 
         if user_id:
             all_user_ids = [str(user_id)]
@@ -1006,7 +1064,7 @@ class MemoryStorage:
                 JOIN chunks ON chunks.rowid = chunks_fts_trigram.rowid
                 WHERE chunks_fts_trigram MATCH ?
                 AND chunks.scope IN ({scope_placeholders})
-                AND (chunks.scope = 'shared' OR chunks.user_id IN ({user_placeholders}))
+                AND (chunks.scope = 'shared' OR chunks.user_id IN ({user_placeholders}){team_condition})
                 ORDER BY rank
                 LIMIT ?
             """

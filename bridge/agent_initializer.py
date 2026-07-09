@@ -38,13 +38,20 @@ class AgentInitializer:
         self.bridge = bridge
         self.agent_bridge = agent_bridge
     
-    def initialize_agent(self, session_id: Optional[str] = None) -> Agent:
+    def initialize_agent(self, session_id: Optional[str] = None,
+                         user_id: Optional[int] = None) -> Agent:
         """
         Initialize agent for a session
-        
+
+        In multi-user mode, loads the user's identity, team memberships,
+        and custom prompt config, injecting them into the system prompt
+        as the user_identity section and as team-context hints.
+
         Args:
             session_id: Session ID (None for default agent)
-        
+            user_id:    User ID for multi-user persona/team injection.
+                        When None (legacy / default), no user context is added.
+
         Returns:
             Initialized agent instance
         """
@@ -81,17 +88,71 @@ class AgentInitializer:
         # Initialize skill manager
         skill_manager = self._initialize_skill_manager(workspace_root, session_id)
         
+        # ── Multi-user: load identity, teams & prompt config ──────────────
+        user_identity = None          # for PromptBuilder (section 5)
+        team_context = None           # injected as extra prompt content
+        user_prompt_override = None   # custom prompt from mu_user_configs
+        if user_id is not None:
+            try:
+                from channel.web.multiuser.db import get_multiuser_db
+                mu_db = get_multiuser_db()
+
+                # 1. User identity
+                mu_user = mu_db.get_user_by_id(user_id)
+                if mu_user:
+                    user_identity = {
+                        "name": mu_user.get("username", ""),
+                        "nickname": mu_user.get("username", ""),
+                        "timezone": conf().get("timezone", "Asia/Shanghai"),
+                    }
+
+                # 2. Team memberships
+                teams = mu_db.list_user_teams(user_id)
+                if teams:
+                    team_parts = []
+                    for t in teams:
+                        role_label = "(admin)" if t.get("my_role") == "admin" else ""
+                        team_parts.append(
+                            f"  - {t['name']} #{t['id']} {role_label}"
+                            f"{': ' + t['description'] if t.get('description') else ''}"
+                        )
+                    team_context = "You are a member of the following teams:\n" + \
+                                   "\n".join(team_parts)
+
+                # 3. User-level prompt override
+                prompt_val = mu_db.get_user_config(user_id, "prompt_template")
+                if prompt_val:
+                    user_prompt_override = prompt_val.strip()
+
+            except Exception as e:
+                logger.warning(
+                    f"[AgentInitializer] Failed to load multi-user context "
+                    f"for user_id={user_id}: {e}"
+                )
+        # ──────────────────────────────────────────────────────────────────
+        
         # Build system prompt
         prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")
         runtime_info = self._get_runtime_info(workspace_root)
         
+        # Assemble system prompt, injecting identity + team context when present
         system_prompt = prompt_builder.build(
             tools=tools,
             context_files=context_files,
             skill_manager=skill_manager,
             memory_manager=memory_manager,
+            user_identity=user_identity,
             runtime_info=runtime_info,
         )
+        
+        # Append team context section (user_identity above only covers name;
+        # this adds the richer team-membership context)
+        if team_context:
+            system_prompt += f"\n\n## 👥 團隊資訊\n\n{team_context}\n"
+        
+        # Append user-level prompt override (from mu_user_configs)
+        if user_prompt_override:
+            system_prompt += f"\n\n## 📝 使用者提示詞\n\n{user_prompt_override}\n"
         
         # Get cost control parameters
         from config import conf

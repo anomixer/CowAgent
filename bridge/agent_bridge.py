@@ -360,12 +360,14 @@ class AgentBridge:
 
         return agent
     
-    def get_agent(self, session_id: str = None) -> Optional[Agent]:
+    def get_agent(self, session_id: str = None, user_id: Optional[int] = None, team_ids: Optional[List[int]] = None) -> Optional[Agent]:
         """
         Get agent instance for the given session
         
         Args:
             session_id: Session identifier (e.g., user_id). If None, returns default agent.
+            user_id: User ID for prompt customisation and team context
+            team_ids: Team IDs for team-scoped knowledge inclusion
         
         Returns:
             Agent instance for this session
@@ -378,7 +380,7 @@ class AgentBridge:
         
         # Check if agent exists for this session
         if session_id not in self.agents:
-            self._init_agent_for_session(session_id)
+            self._init_agent_for_session(session_id, user_id=user_id, team_ids=team_ids)
         
         return self.agents[session_id]
     
@@ -387,9 +389,9 @@ class AgentBridge:
         agent = self.initializer.initialize_agent(session_id=None)
         self.default_agent = agent
     
-    def _init_agent_for_session(self, session_id: str):
+    def _init_agent_for_session(self, session_id: str, user_id: Optional[int] = None, team_ids: Optional[List[int]] = None):
         """Initialize agent for a specific session"""
-        agent = self.initializer.initialize_agent(session_id=session_id)
+        agent = self.initializer.initialize_agent(session_id=session_id, user_id=user_id)
         self.agents[session_id] = agent
 
     def sync_session_messages_from_store(self, session_id: str) -> int:
@@ -457,6 +459,22 @@ class AgentBridge:
             if context:
                 session_id = context.kwargs.get("session_id") or context.get("session_id")
                 request_id = context.kwargs.get("request_id") or context.get("request_id")
+
+            # Extract user_id for multi-user prompt customisation
+            ctx_user_id = None
+            try:
+                ctx_user_id = int(context.get("user_id", 0)) if context else None
+            except (ValueError, TypeError):
+                pass
+            # Resolve team IDs for the user (if multi-user enabled)
+            ctx_team_ids = None
+            if ctx_user_id:
+                try:
+                    from channel.web.multiuser.db import get_multiuser_db
+                    mu_db = get_multiuser_db()
+                    ctx_team_ids = mu_db.get_user_team_ids(ctx_user_id)
+                except Exception:
+                    pass
 
             # Register a cancel token. Prefer per-turn request_id (web),
             # fall back to session_id (IM channels). The Event is polled by

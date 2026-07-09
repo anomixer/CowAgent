@@ -94,7 +94,8 @@ class MemoryManager:
         max_results: Optional[int] = None,
         min_score: Optional[float] = None,
         include_shared: bool = True,
-        shared_user_ids: Optional[List[int]] = None
+        shared_user_ids: Optional[List[int]] = None,
+        team_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """
         Search memory with hybrid search (vector + keyword)
@@ -106,6 +107,7 @@ class MemoryManager:
             min_score: Minimum score threshold
             include_shared: Include shared memories
             shared_user_ids: Additional user IDs whose knowledge is shared
+            team_ids: Team IDs for team-scoped knowledge inclusion
             
         Returns:
             List of search results sorted by relevance
@@ -119,6 +121,8 @@ class MemoryManager:
             scopes.append("shared")
         if user_id:
             scopes.append("user")
+        if team_ids:
+            scopes.append("team")
         
         if not scopes:
             return []
@@ -147,7 +151,8 @@ class MemoryManager:
                     user_id=user_id,
                     scopes=scopes,
                     limit=max_results * 2,  # Get more candidates for merging
-                    shared_user_ids=shared_user_ids
+                    shared_user_ids=shared_user_ids,
+                    team_ids=team_ids
                 )
                 logger.info(f"[MemoryManager] Vector search found {len(vector_results)} results for query: {query}")
             except Exception as e:
@@ -161,7 +166,8 @@ class MemoryManager:
             user_id=user_id,
             scopes=scopes,
             limit=max_results * 2,
-            shared_user_ids=shared_user_ids
+            shared_user_ids=shared_user_ids,
+            team_ids=team_ids
         )
         logger.info(f"[MemoryManager] Keyword search found {len(keyword_results)} results for query: {query}")
 
@@ -330,6 +336,17 @@ class MemoryManager:
                         else:
                             # Invalid user dir name — skip silently
                             continue
+                    # knowledge/teams/{team_id}/... → scope="team" with team_id
+                    elif len(rel_parts) >= 3 and rel_parts[0] == "knowledge" and rel_parts[1] == "teams":
+                        tid_str = rel_parts[2]
+                        try:
+                            team_id = int(tid_str) if tid_str.isdigit() else None
+                        except (ValueError, TypeError):
+                            team_id = None
+                        if team_id is not None:
+                            files_to_scan.append((file_path, "knowledge", "team", str(team_id)))
+                        else:
+                            continue
                     else:
                         files_to_scan.append((file_path, "knowledge", "shared", None))
 
@@ -356,7 +373,8 @@ class MemoryManager:
                 "rel_path": rel_path,
                 "source": source,
                 "scope": scope,
-                "user_id": user_id,
+                "user_id": user_id if scope != "team" else None,
+                "team_id": user_id if scope == "team" else None,
                 "file_hash": file_hash,
                 "chunks": chunks,
                 "texts": [c.text for c in chunks],
@@ -407,10 +425,13 @@ class MemoryManager:
             for chunk, embedding in zip(entry["chunks"], entry_embeddings):
                 chunk_id = self._generate_chunk_id(rel_path, chunk.start_line, chunk.end_line)
                 chunk_hash = MemoryStorage.compute_hash(chunk.text)
+                scope = entry["scope"]
+                team_id = entry["team_id"] if scope == "team" else None
                 memory_chunks.append(MemoryChunk(
                     id=chunk_id,
-                    user_id=entry["user_id"],
-                    scope=entry["scope"],
+                    team_id=team_id,
+                    user_id=entry["user_id"] if scope != "team" else None,
+                    scope=scope,
                     source=entry["source"],
                     path=rel_path,
                     start_line=chunk.start_line,
