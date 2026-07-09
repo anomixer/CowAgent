@@ -93,7 +93,8 @@ class MemoryManager:
         user_id: Optional[str] = None,
         max_results: Optional[int] = None,
         min_score: Optional[float] = None,
-        include_shared: bool = True
+        include_shared: bool = True,
+        shared_user_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """
         Search memory with hybrid search (vector + keyword)
@@ -104,6 +105,7 @@ class MemoryManager:
             max_results: Maximum results to return
             min_score: Minimum score threshold
             include_shared: Include shared memories
+            shared_user_ids: Additional user IDs whose knowledge is shared
             
         Returns:
             List of search results sorted by relevance
@@ -144,7 +146,8 @@ class MemoryManager:
                     query_embedding=query_embedding,
                     user_id=user_id,
                     scopes=scopes,
-                    limit=max_results * 2  # Get more candidates for merging
+                    limit=max_results * 2,  # Get more candidates for merging
+                    shared_user_ids=shared_user_ids
                 )
                 logger.info(f"[MemoryManager] Vector search found {len(vector_results)} results for query: {query}")
             except Exception as e:
@@ -157,7 +160,8 @@ class MemoryManager:
             query=query,
             user_id=user_id,
             scopes=scopes,
-            limit=max_results * 2
+            limit=max_results * 2,
+            shared_user_ids=shared_user_ids
         )
         logger.info(f"[MemoryManager] Keyword search found {len(keyword_results)} results for query: {query}")
 
@@ -303,10 +307,31 @@ class MemoryManager:
 
         from config import conf
         if conf().get("knowledge", True):
-            knowledge_dir = Path(workspace_dir) / "knowledge"
+            knowledge_dir = Path(workspace_dir).resolve() / "knowledge"
             if knowledge_dir.exists():
                 for file_path in knowledge_dir.rglob("*.md"):
-                    files_to_scan.append((file_path, "knowledge", "shared", None))
+                    rel = file_path.resolve()
+                    try:
+                        rel_str = str(rel.relative_to(Path(workspace_dir).resolve()))
+                    except ValueError:
+                        continue
+                    rel_parts = rel_str.replace("\\", "/").split("/")
+                    if any(part.startswith('.') for part in rel_parts):
+                        continue
+                    # knowledge/users/{user_id}/... → scope="user" with user_id
+                    if len(rel_parts) >= 3 and rel_parts[0] == "knowledge" and rel_parts[1] == "users":
+                        uid_str = rel_parts[2]
+                        try:
+                            user_id = int(uid_str) if uid_str.isdigit() else None
+                        except (ValueError, TypeError):
+                            user_id = None
+                        if user_id is not None:
+                            files_to_scan.append((file_path, "knowledge", "user", user_id))
+                        else:
+                            # Invalid user dir name — skip silently
+                            continue
+                    else:
+                        files_to_scan.append((file_path, "knowledge", "shared", None))
 
         # Pass 1: inline chunking + change detection. Inlined (instead of
         # calling self._prepare_file_for_sync) so this method does not depend

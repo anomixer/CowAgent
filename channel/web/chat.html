@@ -88,6 +88,16 @@
                 <p class="text-sm text-slate-500 dark:text-slate-400 mt-1" id="login-subtitle">请输入密码以访问控制台</p>
             </div>
             <form id="login-form" class="space-y-4" onsubmit="return false;">
+                <!-- Username field (multiuser mode only, hidden by default) -->
+                <div id="login-username-group" class="hidden">
+                    <input id="login-username" type="text" autocomplete="username"
+                           placeholder="Username"
+                           class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10
+                                  bg-white dark:bg-[#1A1A1A] text-slate-800 dark:text-slate-200
+                                  placeholder-slate-400 dark:placeholder-slate-500
+                                  focus:outline-none focus:ring-2 focus:ring-primary-400/50 focus:border-primary-400
+                                  transition-all duration-150 text-sm">
+                </div>
                 <div class="relative">
                     <input id="login-password" type="password" autocomplete="current-password"
                            placeholder="Password"
@@ -109,6 +119,55 @@
                                text-sm cursor-pointer transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed">
                     登录
                 </button>
+                <!-- Register link (multiuser mode only) -->
+                <p id="login-register-link" class="hidden text-center text-sm text-slate-400 dark:text-slate-500">
+                    <span data-i18n="no_account">还没有账户？</span>
+                    <a href="#" onclick="showRegisterForm();return false;"
+                       class="text-primary-400 hover:text-primary-300 cursor-pointer transition-colors">
+                        <span data-i18n="register_now">立即注册</span>
+                    </a>
+                </p>
+            </form>
+            <!-- Register form (hidden by default) -->
+            <form id="register-form" class="space-y-4 hidden" onsubmit="return false;">
+                <div>
+                    <input id="reg-username" type="text" autocomplete="username"
+                           placeholder="Username"
+                           class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10
+                                  bg-white dark:bg-[#1A1A1A] text-slate-800 dark:text-slate-200
+                                  placeholder-slate-400 dark:placeholder-slate-500
+                                  focus:outline-none focus:ring-2 focus:ring-primary-400/50 focus:border-primary-400
+                                  transition-all duration-150 text-sm">
+                </div>
+                <div class="relative">
+                    <input id="reg-password" type="password" autocomplete="new-password"
+                           placeholder="Password (min 6 chars)"
+                           class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10
+                                  bg-white dark:bg-[#1A1A1A] text-slate-800 dark:text-slate-200
+                                  placeholder-slate-400 dark:placeholder-slate-500
+                                  focus:outline-none focus:ring-2 focus:ring-primary-400/50 focus:border-primary-400
+                                  transition-all duration-150 text-sm">
+                    <button type="button" id="reg-toggle-pwd"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600
+                                   dark:hover:text-slate-300 cursor-pointer transition-colors"
+                            onclick="toggleRegPassword()">
+                        <i class="fas fa-eye text-sm"></i>
+                    </button>
+                </div>
+                <p id="reg-error" class="text-sm text-red-500 hidden"></p>
+                <p id="reg-success" class="text-sm text-green-500 hidden"></p>
+                <button id="reg-btn" type="submit"
+                        class="w-full py-3 rounded-xl bg-primary-500 hover:bg-primary-600 text-white font-medium
+                               text-sm cursor-pointer transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed">
+                    注册
+                </button>
+                <p class="text-center text-sm text-slate-400 dark:text-slate-500">
+                    <span data-i18n="has_account">已有账户？</span>
+                    <a href="#" onclick="showLoginForm();return false;"
+                       class="text-primary-400 hover:text-primary-300 cursor-pointer transition-colors">
+                        <span data-i18n="login_now">立即登录</span>
+                    </a>
+                </p>
             </form>
         </div>
     </div>
@@ -188,6 +247,11 @@
                            data-view="tasks">
                             <i class="fas fa-clock item-icon text-xs w-5 text-center"></i>
                             <span data-i18n="menu_tasks">定时</span>
+                        </a>
+                        <a class="sidebar-item flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-all duration-150 hover:bg-white/5 hover:text-neutral-200 text-[14px] hidden"
+                           data-view="users" id="sidebar-users">
+                            <i class="fas fa-users item-icon text-xs w-5 text-center"></i>
+                            <span data-i18n="menu_users">用户管理</span>
                         </a>
                     </div>
                 </div>
@@ -330,6 +394,41 @@
                         onclick="handleLogout()" title="Logout" data-i18n-title="logout">
                     <i class="fas fa-sign-out-alt text-base"></i>
                 </button>
+                <!-- User Menu Dropdown (multiuser mode) -->
+                <div id="user-menu" class="relative hidden">
+                    <button id="user-menu-btn"
+                            class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium
+                                   text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10
+                                   cursor-pointer transition-colors duration-150"
+                            onclick="toggleUserMenu(event)">
+                        <span id="user-menu-avatar" class="w-7 h-7 rounded-full bg-primary-500 text-white flex items-center justify-center text-xs font-bold">U</span>
+                        <span id="user-menu-name" class="max-w-[100px] truncate hidden sm:inline">User</span>
+                        <i class="fas fa-chevron-down text-[10px] opacity-60"></i>
+                    </button>
+                    <div id="user-menu-dropdown" class="hidden absolute right-0 mt-1 min-w-[160px] py-1 rounded-lg z-50
+                                                       bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black/5 dark:ring-white/10">
+                        <div class="px-3 py-2 text-xs text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-white/10" id="user-menu-role"></div>
+                        <button class="w-full text-left px-3 py-1.5 text-sm text-slate-600 dark:text-slate-300
+                                       hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+                                onclick="navigateTo('profile');closeUserMenu()">
+                            <i class="fas fa-user-cog w-5 text-center text-xs"></i>
+                            <span data-i18n="menu_profile">个人设置</span>
+                        </button>
+                        <button class="w-full text-left px-3 py-1.5 text-sm text-slate-600 dark:text-slate-300
+                                       hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+                                onclick="navigateTo('users');closeUserMenu()" id="user-menu-admin-link">
+                            <i class="fas fa-users-cog w-5 text-center text-xs"></i>
+                            <span data-i18n="menu_users">用户管理</span>
+                        </button>
+                        <hr class="border-slate-100 dark:border-white/10">
+                        <button class="w-full text-left px-3 py-1.5 text-sm text-red-500 hover:text-red-600
+                                       hover:bg-red-50 dark:hover:bg-red-500/10 cursor-pointer"
+                                onclick="handleLogout();closeUserMenu()">
+                            <i class="fas fa-sign-out-alt w-5 text-center text-xs"></i>
+                            <span data-i18n="logout">退出登录</span>
+                        </button>
+                    </div>
+                </div>
             </header>
 
             <!-- Content Area -->
@@ -1118,6 +1217,20 @@
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <!-- ====================================================== -->
+                <!-- VIEW: Profile Settings                                  -->
+                <!-- ====================================================== -->
+                <div id="view-profile" class="view">
+                    <!-- Rendered dynamically by renderProfileView() -->
+                </div>
+
+                <!-- ====================================================== -->
+                <!-- VIEW: User Management (Admin only)                      -->
+                <!-- ====================================================== -->
+                <div id="view-users" class="view">
+                    <!-- Rendered dynamically by renderUsersView() -->
                 </div>
 
             </div><!-- /content-area -->

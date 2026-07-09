@@ -256,6 +256,36 @@ const I18N = {
         edit_save: '保存并发送',
         edit_cancel: '取消',
         logout: '退出',
+        menu_users: '用户管理',
+        menu_profile: '个人设置',
+        no_account: '还没有账户？',
+        register_now: '立即注册',
+        has_account: '已有账户？',
+        login_now: '立即登录',
+        profile_title: '个人设置',
+        profile_desc: '管理你的账户信息和安全设置',
+        change_password: '修改密码',
+        current_password: '当前密码',
+        new_password: '新密码',
+        password_min_hint: '至少6个字符',
+        password_changed: '密码已更新',
+        password_change_error: '密码修改失败',
+        user_info: '账户信息',
+        role_admin: '管理员',
+        role_user: '普通用户',
+        users_title: '用户管理',
+        users_desc: '管理系统中的所有用户',
+        add_user: '添加用户',
+        delete_user: '删除用户',
+        edit_user: '编辑用户',
+        username: '用户名',
+        role: '角色',
+        created_at: '创建时间',
+        delete_confirm_title: '确认删除',
+        delete_confirm_msg: '确定要删除用户「{username}」吗？此操作无法撤销。',
+        user_created: '用户已创建',
+        user_deleted: '用户已删除',
+        user_updated: '用户已更新',
     },
     'zh-Hant': {
 
@@ -503,6 +533,36 @@ const I18N = {
         edit_save: '儲存併傳送',
         edit_cancel: '取消',
         logout: '登出',
+        menu_users: '用戶管理',
+        menu_profile: '個人設定',
+        no_account: '還沒有帳戶？',
+        register_now: '立即註冊',
+        has_account: '已有帳戶？',
+        login_now: '立即登入',
+        profile_title: '個人設定',
+        profile_desc: '管理你的帳戶資訊和安全設定',
+        change_password: '修改密碼',
+        current_password: '目前密碼',
+        new_password: '新密碼',
+        password_min_hint: '至少6個字元',
+        password_changed: '密碼已更新',
+        password_change_error: '密碼修改失敗',
+        user_info: '帳戶資訊',
+        role_admin: '管理員',
+        role_user: '一般使用者',
+        users_title: '用戶管理',
+        users_desc: '管理系統中的所有使用者',
+        add_user: '新增使用者',
+        delete_user: '刪除使用者',
+        edit_user: '編輯使用者',
+        username: '使用者名稱',
+        role: '角色',
+        created_at: '建立時間',
+        delete_confirm_title: '確認刪除',
+        delete_confirm_msg: '確定要刪除使用者「{username}」嗎？此操作無法撤銷。',
+        user_created: '使用者已建立',
+        user_deleted: '使用者已刪除',
+        user_updated: '使用者已更新',
         },
     en: {
         console: 'Console',
@@ -749,6 +809,36 @@ const I18N = {
         edit_save: 'Save and send',
         edit_cancel: 'Cancel',
         logout: 'Logout',
+        menu_users: 'User Management',
+        menu_profile: 'Profile',
+        no_account: 'No account yet?',
+        register_now: 'Register now',
+        has_account: 'Already have an account?',
+        login_now: 'Login now',
+        profile_title: 'Profile Settings',
+        profile_desc: 'Manage your account information and security settings',
+        change_password: 'Change Password',
+        current_password: 'Current Password',
+        new_password: 'New Password',
+        password_min_hint: 'At least 6 characters',
+        password_changed: 'Password updated successfully',
+        password_change_error: 'Failed to change password',
+        user_info: 'Account Info',
+        role_admin: 'Admin',
+        role_user: 'User',
+        users_title: 'User Management',
+        users_desc: 'Manage all users in the system',
+        add_user: 'Add User',
+        delete_user: 'Delete User',
+        edit_user: 'Edit User',
+        username: 'Username',
+        role: 'Role',
+        created_at: 'Created At',
+        delete_confirm_title: 'Confirm Delete',
+        delete_confirm_msg: 'Are you sure you want to delete user "{username}"? This action cannot be undone.',
+        user_created: 'User created successfully',
+        user_deleted: 'User deleted',
+        user_updated: 'User updated',
     }
 };
 
@@ -1040,8 +1130,15 @@ const VIEW_META = {
     knowledge:{ group: 'nav_manage',  page: 'menu_knowledge' },
     channels: { group: 'nav_manage',  page: 'menu_channels' },
     tasks:    { group: 'nav_manage',  page: 'menu_tasks' },
+    users:    { group: 'nav_manage',  page: 'menu_users' },
+    profile:  { group: 'nav_manage',  page: 'menu_profile' },
     logs:     { group: 'nav_monitor', page: 'menu_logs' },
 };
+
+// Global auth state
+let currentUser = null;       // {id, username, role, ...}
+let isMultiuserMode = false;
+let isAdmin = false;
 
 let currentView = 'chat';
 
@@ -9087,6 +9184,8 @@ function renderKnowledgeGraph(container, nodes, links) {
 // =====================================================================
 // Authentication
 // =====================================================================
+
+// --- Password eye toggles ---
 function toggleLoginPassword() {
     const input = document.getElementById('login-password');
     const icon = document.querySelector('#login-toggle-pwd i');
@@ -9100,70 +9199,248 @@ function toggleLoginPassword() {
 }
 window.toggleLoginPassword = toggleLoginPassword;
 
+function toggleRegPassword() {
+    const input = document.getElementById('reg-password');
+    const icon = document.querySelector('#reg-toggle-pwd i');
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.replace('fa-eye', 'fa-eye-slash');
+    } else {
+        input.type = 'password';
+        icon.classList.replace('fa-eye-slash', 'fa-eye');
+    }
+}
+window.toggleRegPassword = toggleRegPassword;
+
+// --- Login / Register form switching ---
+function showLoginForm() {
+    document.getElementById('login-form').classList.remove('hidden');
+    document.getElementById('register-form').classList.add('hidden');
+    document.getElementById('reg-error').classList.add('hidden');
+    document.getElementById('reg-success').classList.add('hidden');
+}
+window.showLoginForm = showLoginForm;
+
+function showRegisterForm() {
+    document.getElementById('login-form').classList.add('hidden');
+    document.getElementById('register-form').classList.remove('hidden');
+    document.getElementById('login-error').classList.add('hidden');
+    document.getElementById('reg-error').classList.add('hidden');
+    document.getElementById('reg-success').classList.add('hidden');
+    document.getElementById('reg-username').focus();
+}
+window.showRegisterForm = showRegisterForm;
+
+// --- User menu dropdown ---
+function toggleUserMenu(event) {
+    event.stopPropagation();
+    const menu = document.getElementById('user-menu-dropdown');
+    menu.classList.toggle('hidden');
+}
+function closeUserMenu() {
+    document.getElementById('user-menu-dropdown').classList.add('hidden');
+}
+window.toggleUserMenu = toggleUserMenu;
+window.closeUserMenu = closeUserMenu;
+
+// Click outside to close user menu
+document.addEventListener('click', function(e) {
+    const menu = document.getElementById('user-menu-dropdown');
+    const btn = document.getElementById('user-menu-btn');
+    if (menu && !menu.classList.contains('hidden') && !btn.contains(e.target) && !menu.contains(e.target)) {
+        menu.classList.add('hidden');
+    }
+});
+
+// --- Set up user menu for multiuser mode ---
+function setupUserMenu(user) {
+    const avatar = document.getElementById('user-menu-avatar');
+    const nameEl = document.getElementById('user-menu-name');
+    const roleEl = document.getElementById('user-menu-role');
+    const adminLink = document.getElementById('user-menu-admin-link');
+    const sidebarUsers = document.getElementById('sidebar-users');
+
+    avatar.textContent = (user.username.charAt(0) || 'U').toUpperCase();
+    nameEl.textContent = user.username;
+    roleEl.textContent = user.role === 'admin' ? t('role_admin') : t('role_user');
+
+    // Show/hide admin-only items
+    const isAdm = user.role === 'admin';
+    if (adminLink) adminLink.classList.toggle('hidden', !isAdm);
+    if (sidebarUsers) sidebarUsers.classList.toggle('hidden', !isAdm);
+
+    // Show user menu, hide legacy logout button
+    document.getElementById('user-menu').classList.remove('hidden');
+    document.getElementById('logout-btn-header').classList.add('hidden');
+}
+
+// --- Login screen ---
 function showLoginScreen() {
     const overlay = document.getElementById('login-overlay');
     if (!overlay) return;
     overlay.classList.remove('hidden');
     document.getElementById('app').classList.add('hidden');
+    // Reset to login form
+    showLoginForm();
 
     const subtitle = document.getElementById('login-subtitle');
     const loginBtn = document.getElementById('login-btn');
-    if (currentLang === 'en') {
-        subtitle.textContent = 'Enter password to access the console';
-        loginBtn.textContent = 'Login';
-    } else if (currentLang === 'zh-Hant') {
-        subtitle.textContent = '請輸入密碼以存取控制台';
-        loginBtn.textContent = '登入';
+    const usernameGroup = document.getElementById('login-username-group');
+    const registerLink = document.getElementById('login-register-link');
+    const pwdInput = document.getElementById('login-password');
+
+    if (isMultiuserMode) {
+        usernameGroup.classList.remove('hidden');
+        registerLink.classList.remove('hidden');
+        pwdInput.placeholder = 'Password';
+        if (currentLang === 'en') {
+            subtitle.textContent = 'Sign in to your account';
+            loginBtn.textContent = 'Sign In';
+            document.getElementById('login-username').placeholder = 'Username';
+        } else if (currentLang === 'zh-Hant') {
+            subtitle.textContent = '登入你的帳戶';
+            loginBtn.textContent = '登入';
+            document.getElementById('login-username').placeholder = '使用者名稱';
+        } else {
+            subtitle.textContent = '登录你的账户';
+            loginBtn.textContent = '登录';
+            document.getElementById('login-username').placeholder = '用户名';
+        }
     } else {
-        subtitle.textContent = '请输入密码以访问控制台';
-        loginBtn.textContent = '登录';
+        usernameGroup.classList.add('hidden');
+        registerLink.classList.add('hidden');
+        if (currentLang === 'en') {
+            subtitle.textContent = 'Enter password to access the console';
+            loginBtn.textContent = 'Login';
+        } else if (currentLang === 'zh-Hant') {
+            subtitle.textContent = '請輸入密碼以存取控制台';
+            loginBtn.textContent = '登入';
+        } else {
+            subtitle.textContent = '请输入密码以访问控制台';
+            loginBtn.textContent = '登录';
+        }
     }
 
-    const form = document.getElementById('login-form');
-    const pwdInput = document.getElementById('login-password');
     pwdInput.focus();
 
+    // --- Login form submit ---
+    const form = document.getElementById('login-form');
     form.onsubmit = function(e) {
         e.preventDefault();
-        const pwd = pwdInput.value;
-        if (!pwd) return;
         const btn = document.getElementById('login-btn');
         const errEl = document.getElementById('login-error');
+        const pwd = pwdInput.value;
+        if (!pwd) return;
+
         btn.disabled = true;
         errEl.classList.add('hidden');
+
+        let body;
+        if (isMultiuserMode) {
+            const username = document.getElementById('login-username').value.trim();
+            if (!username) {
+                if (currentLang === 'en') errEl.textContent = 'Username is required';
+                else if (currentLang === 'zh-Hant') errEl.textContent = '請輸入使用者名稱';
+                else errEl.textContent = '请输入用户名';
+                errEl.classList.remove('hidden');
+                btn.disabled = false;
+                return;
+            }
+            body = JSON.stringify({username: username, password: pwd});
+        } else {
+            body = JSON.stringify({password: pwd});
+        }
 
         fetch('/auth/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({password: pwd})
+            body: body
         }).then(r => r.json()).then(data => {
             if (data.status === 'success') {
                 overlay.classList.add('hidden');
                 document.getElementById('app').classList.remove('hidden');
-                const logoutBtn = document.getElementById('logout-btn-header');
-                if (logoutBtn) logoutBtn.classList.remove('hidden');
+                if (data.multiuser && data.user) {
+                    currentUser = data.user;
+                    isMultiuserMode = true;
+                    isAdmin = data.user.role === 'admin';
+                    setupUserMenu(data.user);
+                } else {
+                    const logoutBtn = document.getElementById('logout-btn-header');
+                    if (logoutBtn) logoutBtn.classList.remove('hidden');
+                }
                 initApp();
             } else {
-                if (currentLang === 'zh-Hant') {
-                    errEl.textContent = '密碼錯誤';
-                } else if (currentLang === 'zh') {
-                    errEl.textContent = '密码错误';
-                } else {
-                    errEl.textContent = 'Wrong password';
-                }
+                const msg = data.message || (currentLang === 'en' ? 'Login failed' : currentLang === 'zh-Hant' ? '登入失敗' : '登录失败');
+                errEl.textContent = msg;
                 errEl.classList.remove('hidden');
                 pwdInput.value = '';
                 pwdInput.focus();
             }
             btn.disabled = false;
         }).catch(() => {
-            if (currentLang === 'zh-Hant') {
-                errEl.textContent = '網路錯誤，請重試';
-            } else if (currentLang === 'zh') {
-                errEl.textContent = '网络错误，请重试';
+            if (currentLang === 'zh-Hant') errEl.textContent = '網路錯誤，請重試';
+            else if (currentLang === 'zh') errEl.textContent = '网络错误，请重试';
+            else errEl.textContent = 'Network error, please retry';
+            errEl.classList.remove('hidden');
+            btn.disabled = false;
+        });
+        return false;
+    };
+
+    // --- Register form submit ---
+    const regForm = document.getElementById('register-form');
+    regForm.onsubmit = function(e) {
+        e.preventDefault();
+        const btn = document.getElementById('reg-btn');
+        const errEl = document.getElementById('reg-error');
+        const successEl = document.getElementById('reg-success');
+        const username = document.getElementById('reg-username').value.trim();
+        const password = document.getElementById('reg-password').value;
+
+        btn.disabled = true;
+        errEl.classList.add('hidden');
+        successEl.classList.add('hidden');
+
+        if (!username || username.length < 3) {
+            errEl.textContent = currentLang === 'en' ? 'Username must be at least 3 characters' : currentLang === 'zh-Hant' ? '使用者名稱至少3個字元' : '用户名至少3个字符';
+            errEl.classList.remove('hidden');
+            btn.disabled = false;
+            return;
+        }
+        if (!password || password.length < 6) {
+            errEl.textContent = currentLang === 'en' ? 'Password must be at least 6 characters' : currentLang === 'zh-Hant' ? '密碼至少6個字元' : '密码至少6个字符';
+            errEl.classList.remove('hidden');
+            btn.disabled = false;
+            return;
+        }
+
+        fetch('/api/auth/register', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username: username, password: password})
+        }).then(r => r.json()).then(data => {
+            if (data.status === 'success') {
+                successEl.textContent = currentLang === 'en' ? 'Registration successful! Redirecting...' : currentLang === 'zh-Hant' ? '註冊成功！正在跳轉...' : '注册成功！正在跳转...';
+                successEl.classList.remove('hidden');
+                // Auto-login: close overlay and init
+                setTimeout(() => {
+                    overlay.classList.add('hidden');
+                    document.getElementById('app').classList.remove('hidden');
+                    if (data.user) {
+                        currentUser = data.user;
+                        isMultiuserMode = true;
+                        isAdmin = data.user.role === 'admin';
+                        setupUserMenu(data.user);
+                    }
+                    initApp();
+                }, 800);
             } else {
-                errEl.textContent = 'Network error, please retry';
+                errEl.textContent = data.message || (currentLang === 'en' ? 'Registration failed' : currentLang === 'zh-Hant' ? '註冊失敗' : '注册失败');
+                errEl.classList.remove('hidden');
             }
+            btn.disabled = false;
+        }).catch(() => {
+            errEl.textContent = currentLang === 'en' ? 'Network error' : currentLang === 'zh-Hant' ? '網路錯誤' : '网络错误';
             errEl.classList.remove('hidden');
             btn.disabled = false;
         });
@@ -9171,6 +9448,7 @@ function showLoginScreen() {
     };
 }
 
+// --- Logout ---
 function handleLogout() {
     fetch('/auth/logout', {
         method: 'POST'
@@ -9198,6 +9476,7 @@ window.fetch = function(...args) {
     });
 };
 
+// --- initApp (extended for multiuser) ---
 function initApp() {
     applyI18n();
     _applyInputTooltips();
@@ -9219,6 +9498,348 @@ function initApp() {
     chatInput.focus();
 }
 
+// --- Navigation: handle profile view (lazy-render) ---
+const _navigateToOriginal = navigateTo;
+navigateTo = function(viewId) {
+    // Render user management view on demand
+    if (viewId === 'users' && isAdmin) {
+        renderUsersView();
+    }
+    // Render profile view on demand
+    if (viewId === 'profile' && currentUser) {
+        renderProfileView();
+    }
+    _navigateToOriginal(viewId);
+};
+
+// =====================================================================
+// Profile View
+// =====================================================================
+function renderProfileView() {
+    const container = document.getElementById('view-profile');
+    if (!container) return;
+    if (container.dataset.rendered) return;
+    container.dataset.rendered = '1';
+
+    const user = currentUser || {};
+    container.innerHTML = `
+        <div class="flex-1 overflow-y-auto p-6">
+            <div class="max-w-2xl mx-auto space-y-6">
+                <div>
+                    <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">${t('profile_title')}</h2>
+                    <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">${t('profile_desc')}</p>
+                </div>
+
+                <div class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-6">
+                    <h3 class="font-semibold text-slate-700 dark:text-slate-200 mb-4">${t('user_info')}</h3>
+                    <div class="space-y-3 text-sm">
+                        <div class="flex items-center gap-3">
+                            <span class="text-slate-400 w-20">${t('username')}</span>
+                            <span class="font-medium text-slate-700 dark:text-slate-200">${escapeHtml(user.username || '')}</span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <span class="text-slate-400 w-20">${t('role')}</span>
+                            <span class="px-2 py-0.5 rounded-full text-xs font-medium ${user.role === 'admin' ? 'bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400' : 'bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400'}">
+                                ${user.role === 'admin' ? t('role_admin') : t('role_user')}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-6">
+                    <h3 class="font-semibold text-slate-700 dark:text-slate-200 mb-4">${t('change_password')}</h3>
+                    <div class="space-y-3">
+                        <div>
+                            <input id="profile-current-pwd" type="password" placeholder="${t('current_password')}" autocomplete="current-password"
+                                   class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                          text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                        </div>
+                        <div>
+                            <input id="profile-new-pwd" type="password" placeholder="${t('new_password')} (${t('password_min_hint')})" autocomplete="new-password"
+                                   class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                          text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                        </div>
+                        <p id="profile-pwd-status" class="text-sm opacity-0 transition-opacity duration-300"></p>
+                        <button onclick="submitPasswordChange()"
+                                class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium
+                                       cursor-pointer transition-colors duration-150 disabled:opacity-50">
+                            ${t('change_password')}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function submitPasswordChange() {
+    const currentPwd = document.getElementById('profile-current-pwd').value;
+    const newPwd = document.getElementById('profile-new-pwd').value;
+    const statusEl = document.getElementById('profile-pwd-status');
+
+    if (!currentPwd || !newPwd) {
+        statusEl.textContent = currentLang === 'en' ? 'Please fill in both fields' : currentLang === 'zh-Hant' ? '請填寫兩個欄位' : '请填写两个字段';
+        statusEl.className = 'text-sm text-red-500';
+        return;
+    }
+    if (newPwd.length < 6) {
+        statusEl.textContent = t('password_min_hint');
+        statusEl.className = 'text-sm text-red-500';
+        return;
+    }
+
+    fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({current_password: currentPwd, new_password: newPwd})
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            statusEl.textContent = t('password_changed');
+            statusEl.className = 'text-sm text-green-500';
+            document.getElementById('profile-current-pwd').value = '';
+            document.getElementById('profile-new-pwd').value = '';
+        } else {
+            statusEl.textContent = data.message || t('password_change_error');
+            statusEl.className = 'text-sm text-red-500';
+        }
+    }).catch(() => {
+        statusEl.textContent = t('password_change_error');
+        statusEl.className = 'text-sm text-red-500';
+    });
+}
+window.submitPasswordChange = submitPasswordChange;
+
+// =====================================================================
+// User Management View (Admin only)
+// =====================================================================
+function renderUsersView() {
+    const container = document.getElementById('view-users');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="flex-1 overflow-y-auto p-6">
+            <div class="max-w-4xl mx-auto">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">${t('users_title')}</h2>
+                        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">${t('users_desc')}</p>
+                    </div>
+                    <button onclick="showAddUserForm()" id="add-user-btn"
+                            class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium
+                                   cursor-pointer transition-colors duration-150">
+                        <i class="fas fa-plus text-xs mr-1"></i> ${t('add_user')}
+                    </button>
+                </div>
+
+                <div id="users-list" class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
+                    <div class="flex items-center justify-center py-20 text-slate-400">
+                        <i class="fas fa-spinner fa-spin text-lg mr-2"></i> Loading...
+                    </div>
+                </div>
+
+                <!-- Add User Modal -->
+                <div id="add-user-modal" class="fixed inset-0 bg-black/50 z-[200] hidden flex items-center justify-center">
+                    <div class="bg-white dark:bg-[#1A1A1A] rounded-2xl border border-slate-200 dark:border-white/10 shadow-xl w-full max-w-sm mx-4">
+                        <div class="p-6">
+                            <h3 class="font-semibold text-slate-800 dark:text-slate-100 mb-4">${t('add_user')}</h3>
+                            <div class="space-y-3">
+                                <input id="add-user-username" type="text" placeholder="${t('username')}" autocomplete="off"
+                                       class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                              text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                                <input id="add-user-password" type="password" placeholder="Password" autocomplete="new-password"
+                                       class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                              text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                                <select id="add-user-role"
+                                        class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                               text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                                    <option value="user">${t('role_user')}</option>
+                                    <option value="admin">${t('role_admin')}</option>
+                                </select>
+                                <p id="add-user-status" class="text-sm text-red-500 hidden"></p>
+                            </div>
+                        </div>
+                        <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-100 dark:border-white/5">
+                            <button onclick="closeAddUserForm()"
+                                    class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer">
+                                ${t('confirm_cancel')}
+                            </button>
+                            <button onclick="submitAddUser()"
+                                    class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer disabled:opacity-50">
+                                ${t('confirm_yes')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Fetch and render users
+    fetchUsers();
+}
+
+function fetchUsers() {
+    const listEl = document.getElementById('users-list');
+    if (!listEl) return;
+
+    fetch('/api/auth/users')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status !== 'success' || !data.users) {
+                listEl.innerHTML = '<div class="flex items-center justify-center py-20 text-slate-400">' + t('error_send') + '</div>';
+                return;
+            }
+            renderUserList(data.users);
+        })
+        .catch(() => {
+            listEl.innerHTML = '<div class="flex items-center justify-center py-20 text-slate-400">' + t('error_send') + '</div>';
+        });
+}
+
+function renderUserList(users) {
+    const listEl = document.getElementById('users-list');
+    if (!listEl) return;
+
+    const currentUserId = currentUser ? currentUser.id : null;
+
+    listEl.innerHTML = `
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-slate-100 dark:border-white/10 text-left">
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">ID</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">${t('username')}</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">${t('role')}</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">${t('created_at')}</th>
+                    <th class="px-5 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider"></th>
+                </tr>
+            </thead>
+            <tbody>
+                ${users.map(u => {
+                    const isSelf = u.id === currentUserId;
+                    const createdDate = u.created_at ? new Date(u.created_at).toLocaleDateString() : '-';
+                    return `
+                        <tr class="border-b border-slate-50 dark:border-white/5 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
+                            <td class="px-5 py-3 text-slate-500 dark:text-slate-400">${u.id}</td>
+                            <td class="px-5 py-3 font-medium text-slate-700 dark:text-slate-200">${escapeHtml(u.username)} ${isSelf ? '<span class="text-xs text-primary-500 ml-1">(you)</span>' : ''}</td>
+                            <td class="px-5 py-3">
+                                <select class="user-role-select text-xs rounded-lg border border-slate-200 dark:border-white/10 bg-transparent px-2 py-1
+                                              text-slate-600 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-primary-400/50"
+                                        data-user-id="${u.id}" ${isSelf ? 'disabled' : ''}
+                                        onchange="updateUserRole(${u.id}, this.value)">
+                                    <option value="user" ${u.role === 'user' ? 'selected' : ''}>${t('role_user')}</option>
+                                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>${t('role_admin')}</option>
+                                </select>
+                                ${isSelf ? '<span class="text-xs text-slate-400 ml-1">(cannot change own role)</span>' : ''}
+                            </td>
+                            <td class="px-5 py-3 text-slate-500 dark:text-slate-400 text-xs">${createdDate}</td>
+                            <td class="px-5 py-3 text-right">
+                                ${!isSelf ? `
+                                    <button onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')"
+                                            class="text-xs text-red-400 hover:text-red-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-500/10">
+                                        <i class="fas fa-trash-alt"></i>
+                                    </button>
+                                ` : ''}
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+function showAddUserForm() {
+    document.getElementById('add-user-modal').classList.remove('hidden');
+    document.getElementById('add-user-username').value = '';
+    document.getElementById('add-user-password').value = '';
+    document.getElementById('add-user-role').value = 'user';
+    document.getElementById('add-user-status').classList.add('hidden');
+    document.getElementById('add-user-username').focus();
+}
+window.showAddUserForm = showAddUserForm;
+
+function closeAddUserForm() {
+    document.getElementById('add-user-modal').classList.add('hidden');
+}
+window.closeAddUserForm = closeAddUserForm;
+
+function submitAddUser() {
+    const username = document.getElementById('add-user-username').value.trim();
+    const password = document.getElementById('add-user-password').value;
+    const role = document.getElementById('add-user-role').value;
+    const statusEl = document.getElementById('add-user-status');
+    const btn = document.querySelector('#add-user-modal .bg-primary-500');
+
+    if (!username || username.length < 3) {
+        statusEl.textContent = currentLang === 'en' ? 'Username must be at least 3 characters' : currentLang === 'zh-Hant' ? '使用者名稱至少3個字元' : '用户名至少3个字符';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+    if (!password || password.length < 6) {
+        statusEl.textContent = currentLang === 'en' ? 'Password must be at least 6 characters' : currentLang === 'zh-Hant' ? '密碼至少6個字元' : '密码至少6个字符';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    btn.disabled = true;
+    statusEl.classList.add('hidden');
+
+    fetch('/api/auth/users', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username: username, password: password, role: role})
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            closeAddUserForm();
+            fetchUsers();
+            showStatus('add-user-btn', 'user_created', false);
+        } else {
+            statusEl.textContent = data.message || (currentLang === 'en' ? 'Failed to create user' : currentLang === 'zh-Hant' ? '建立使用者失敗' : '创建用户失败');
+            statusEl.classList.remove('hidden');
+        }
+        btn.disabled = false;
+    }).catch(() => {
+        statusEl.textContent = currentLang === 'en' ? 'Network error' : '网络错误';
+        statusEl.classList.remove('hidden');
+        btn.disabled = false;
+    });
+}
+window.submitAddUser = submitAddUser;
+
+function updateUserRole(userId, newRole) {
+    fetch('/api/auth/users/' + userId, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({role: newRole})
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            // Refresh to show updated state
+            fetchUsers();
+        }
+    }).catch(() => {});
+}
+window.updateUserRole = updateUserRole;
+
+function deleteUser(userId, username) {
+    const title = t('delete_confirm_title');
+    const msg = t('delete_confirm_msg').replace('{username}', username);
+
+    showConfirmModal(title, msg, function() {
+        doDeleteUser(userId);
+    });
+}
+window.deleteUser = deleteUser;
+
+function doDeleteUser(userId) {
+    fetch('/api/auth/users/' + userId, {
+        method: 'DELETE'
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            fetchUsers();
+        }
+    }).catch(() => {});
+}
+
 // =====================================================================
 // Initialization
 // =====================================================================
@@ -9227,11 +9848,22 @@ applyI18n();
 
 fetch('/auth/check').then(r => r.json()).then(data => {
     if (data.auth_required && !data.authenticated) {
+        // Check if multiuser mode
+        if (data.multiuser) {
+            isMultiuserMode = true;
+        }
         showLoginScreen();
     } else {
         if (data.auth_required) {
-            const logoutBtn = document.getElementById('logout-btn-header');
-            if (logoutBtn) logoutBtn.classList.remove('hidden');
+            if (data.multiuser && data.user) {
+                currentUser = data.user;
+                isMultiuserMode = true;
+                isAdmin = data.user.role === 'admin';
+                setupUserMenu(data.user);
+            } else {
+                const logoutBtn = document.getElementById('logout-btn-header');
+                if (logoutBtn) logoutBtn.classList.remove('hidden');
+            }
         }
         initApp();
     }

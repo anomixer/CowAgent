@@ -1,6 +1,6 @@
-# feat-multiuser — 多使用者認證與對話隔離系統
+# feat-multiuser — 多使用者認證、對話隔離與知識庫分享系統
 
-> **Phase 1** — 後端核心 (Backend Core)  
+> **Phase 1** — 後端核心 (Backend Core) & **Phase 2** — 知識庫隔離與前端 UI  
 > Branch: `feat-multiuser`  
 > Base: `main` (upstream `anomixer/CowAgent`)
 
@@ -16,8 +16,10 @@
 6. [對話隔離管線](#6-對話隔離管線)
 7. [向後相容設計](#7-向後相容設計)
 8. [安全考量](#8-安全考量)
-9. [已修改檔案索引](#9-已修改檔案索引)
-10. [Phase 2 展望](#10-phase-2-展望)
+9. [知識庫隔離與分享機制](#9-知識庫隔離與分享機制)
+10. [前端 UI 變更](#10-前端-ui-變更)
+11. [已修改檔案索引](#11-已修改檔案索引)
+12. [Phase 2 完成項目與展望](#12-phase-2-完成項目與展望)
 
 ---
 
@@ -97,10 +99,35 @@ AuthCheckHandler.GET()
                                │
                                ▼
                            auth/login ← 收 username + password
-                           auth/register ← 註冊
+                           auth/register ← 註冊（第一人自動 admin）
                            auth/me ← 查目前使用者
                            auth/users ← Admin CRUD
+                           auth/change-password ← 修改密碼
                            auth/check ← 回傳 user + multiuser: true
+```
+
+### 知識庫隔離與分享流程
+
+```
+使用者上傳知識庫檔案
+    │
+    ▼
+MemoryManager.sync()
+    │
+    ├── knowledge/users/{user_id}/*.md  ──► scope="user", user_id=該使用者
+    └── knowledge/*.md (其他路徑)        ──► scope="shared", user_id=null
+            │
+            ▼
+記憶查詢 (search)
+    │
+    ├── 只搜自己的知識庫 (user_id=自己)
+    └── 若有分享 (shared_user_ids): 也併入分享者的知識庫
+            │
+            ▼
+KnowledgeShareHandler
+    ├── POST /api/knowledge/shares      ──► 建立知識庫分享
+    ├── GET  /api/knowledge/shares      ──► 列出（我分享的 + 別人分享給我的）
+    └── DELETE /api/knowledge/shares/:id ──► 移除分享
 ```
 
 ---
@@ -131,6 +158,17 @@ AuthCheckHandler.GET()
 | `user_id` | INTEGER NOT NULL | 對應 `mu_users.id` |
 | `created_at` | INTEGER | Unix timestamp |
 | `expires_at` | INTEGER | 過期時間戳 (預設 7 天) |
+
+#### `mu_kb_shares` (Phase 2)
+
+| 欄位 | 型態 | 說明 |
+|------|------|------|
+| `id` | INTEGER PK AUTOINCREMENT | 分享記錄 ID |
+| `owner_id` | INTEGER NOT NULL | 知識庫擁有者（FK → mu_users.id） |
+| `shared_with_id` | INTEGER NOT NULL | 被分享者（FK → mu_users.id） |
+| `permission` | TEXT NOT NULL DEFAULT 'read' | 權限：`read`（目前僅支援唯讀） |
+| `created_at` | INTEGER | Unix timestamp |
+| UNIQUE(owner_id, shared_with_id) | 防止重複分享 |
 
 ### 密碼雜湊機制
 
@@ -243,18 +281,27 @@ web.setcookie(
 ## 5. Route Handler — `web_channel.py`
 
 **路徑**: `channel/web/web_channel.py`  
-**改動量**: +218 行
+**改動量**: +347 行（Phase 1: +218, Phase 2: +129）
 
-### 新增 Route
+### 新增 Route（Phase 1 — 認證 & 使用者管理）
 
 | Method | Route | Handler | 權限 | 說明 |
 |--------|-------|---------|------|------|
 | POST | `/api/auth/register` | `RegisterHandler` | 公開 | 註冊（第一人 = admin） |
 | GET | `/api/auth/me` | `MeHandler` | 登入 | 查詢目前使用者 |
+| POST | `/api/auth/change-password` | `ChangePasswordHandler` | 登入 | 修改密碼（支援 multiuser & legacy） |
 | GET | `/api/auth/users` | `AdminUsersHandler` | Admin | 使用者列表 |
 | POST | `/api/auth/users` | `AdminUsersHandler` | Admin | 新增使用者 |
 | PUT | `/api/auth/users/:id` | `AdminUserDetailHandler` | Admin | 修改角色/密碼 |
 | DELETE | `/api/auth/users/:id` | `AdminUserDetailHandler` | Admin | 刪除使用者 |
+
+### 新增 Route（Phase 2 — 知識庫分享）
+
+| Method | Route | Handler | 權限 | 說明 |
+|--------|-------|---------|------|------|
+| GET | `/api/knowledge/shares` | `KnowledgeShareHandler` | 登入 | 列出我分享的 + 別人分享給我的 |
+| POST | `/api/knowledge/shares` | `KnowledgeShareHandler` | 登入 | 建立知識庫分享（指定 shared_with_id + permission） |
+| DELETE | `/api/knowledge/shares/:id` | `KnowledgeShareDetailHandler` | 登入+擁有者 | 移除知識庫分享 |
 
 ### 修改的 Handler
 
@@ -402,54 +449,198 @@ web_password 有設定？ ─YES─► Legacy 單密碼模式
 
 ---
 
-## 9. 已修改檔案索引
+## 9. 知識庫隔離與分享機制
 
-### 新增檔案
+### 知識庫目錄隔離
+
+每個使用者的知識庫檔案存放在 `knowledge/users/{user_id}/` 目錄下，由 `MemoryManager.sync()` 在掃描時自動辨識：
+
+```python
+# agent/memory/manager.py — sync() 掃描邏輯
+knowledge_dir = Path(workspace_dir).resolve() / "knowledge"
+if knowledge_dir.exists():
+    for file_path in knowledge_dir.rglob("*.md"):
+        rel_str = str(rel.relative_to(workspace))
+        rel_parts = rel_str.replace("\\\\", "/").split("/")
+
+        # knowledge/users/{user_id}/... → scope="user", user_id=整数
+        if rel_parts[:2] == ["knowledge", "users"] and rel_parts[2].isdigit():
+            user_id = int(rel_parts[2])
+            files_to_scan.append((file_path, "knowledge", "user", user_id))
+        else:
+            # 其他 → scope="shared"（共用知識庫）
+            files_to_scan.append((file_path, "knowledge", "shared", None))
+```
+
+**註冊時自動建立目錄**: `MultiUserDB.create_user()` 在成功建立使用者後，會呼叫 `_ensure_user_knowledge_dir(user_id)` 建立該使用者的知識庫目錄，確保開箱即用。
+
+### 搜尋管線 — shared_user_ids 傳遞鏈
+
+```
+MemoryManager.search(user_id="1")
+    │
+    ├── get_shared_user_ids(user_id=1) → [2, 3]  # 從 mu_kb_shares 查
+    │
+    ├── storage.search_vector(..., shared_user_ids=[2, 3])
+    │       └── SQL: WHERE scope IN (...) AND (scope='shared' OR user_id IN ('1','2','3'))
+    │
+    └── storage.search_keyword(..., shared_user_ids=[2, 3])
+            └── _search_fts5/_search_like/_search_fts5_trigram
+                    └── SQL: 同樣的 user_id IN (...) 條件
+```
+
+所有的搜尋方法（`search_vector`, `search_keyword`, `_search_fts5`, `_search_like`, `_search_fts5_trigram`）都新增了 `shared_user_ids: Optional[List[int]] = None` 參數，在 SQL 層將分享者的知識庫一併納入搜尋範圍。
+
+### 知識庫分享 CRUD
+
+| API | 說明 |
+|-----|------|
+| `POST /api/knowledge/shares` | 建立分享（body: `{"shared_with_id": 2, "permission": "read"}`） |
+| `GET /api/knowledge/shares` | 列出自己的分享（回傳 `owned` + `received` 兩組列表） |
+| `DELETE /api/knowledge/shares/:id` | 移除分享（僅擁有者可操作） |
+
+### mu_kb_shares 表格操作
+
+```python
+# db.py 公開 API
+db.create_share(owner_id=1, shared_with_id=2, permission="read")  → dict | None
+db.remove_share(share_id=5, owner_id=1)                           → bool
+db.list_shares_by_owner(user_id=1)          # 我分享給誰（含對方 username）
+db.list_shares_for_user(user_id=2)          # 誰分享給我（含對方 username）
+db.get_shared_user_ids(user_id=2)           # 只回傳 ID 列表，供 search 使用
+```
+
+---
+
+## 10. 前端 UI 變更
+
+### HTML 結構 (`chat.html`) — +113 行
+
+**登入遮罩層 (Login Overlay)**
+- 支援雙模式顯示：
+  - **Legacy 模式**: 只顯示密碼輸入框（維持原樣）
+  - **Multi-user 模式**: 顯示 username + password 雙欄位 + 註冊切換連結
+- 完整的**註冊表單**（可切換登入/註冊），含表單切換函數 `showRegisterForm()` / `showLoginForm()`
+- 密碼顯示切換按鈕（眼睛圖示）
+
+**側邊欄 (Sidebar)**
+- 新增「👥 使用者管理」選單項目（預設 `hidden`，`role=admin` 才顯示）
+
+**頂部標題列 (Header)**
+- 新增**使用者下拉選單**：
+  - 頭像縮寫圓圈（取 username 前兩個字）
+  - 使用者名稱 + 角色標籤
+  - 「個人設定」→ 修改密碼
+  - 「使用者管理」→ admin view（僅 admin 可見）
+  - 「退出登入」
+
+**主要內容區**
+- 新增 `#view-profile` 容器 → 個人設定頁面
+- 新增 `#view-users` 容器 → 管理員使用者管理頁面
+
+### JavaScript 邏輯 (`console.js`) — +661/-29 行
+
+**i18n 翻譯擴充** — 三種語系共補了 30+ 個字串：
+
+| 語系 | 新增內容 |
+|------|---------|
+| `zh` | 登入、註冊、使用者管理、個人設定、分享相關 |
+| `zh-Hant` | 同上，完整繁中翻譯 |
+| `en` | 同上 |
+
+**全域狀態變數**
+
+```javascript
+let currentUser = null;       // {id, username, role}
+let isMultiuserMode = false;  // 是否為多使用者模式
+let isAdmin = false;          // 是否有管理權限
+```
+
+**認證流程重寫 (~300 行)**
+
+| 函數 | 說明 |
+|------|------|
+| `showLoginScreen()` | 雙模式偵測：multiuser 顯示 username 欄位 / legacy 只用密碼 |
+| `showLoginForm()` / `showRegisterForm()` | 表單切換 |
+| Login form submit | 雙模式 payload：`{username, password}` 或 `{password}` |
+| Register form submit | 完整註冊流程（含驗證），註冊後自動登入 |
+| `toggleUserMenu()` / `closeUserMenu()` | 使用者下拉選單 |
+| `setupUserMenu(user)` | 初始化選單（頭像縮寫、admin 選項顯示控制） |
+| `navigateTo()` 覆寫 | 切換到 profile/users view 時 lazy-render |
+
+**Admin 使用者管理 (`renderUsersView`)**
+
+- 使用者列表 table（ID、名稱、角色 select、刪除按鈕）
+- `fetchUsers()` — 呼叫 `GET /api/auth/users`
+- `renderUserList()` — 渲染使用者表格
+- `submitAddUser()` — 彈出 modal 新增使用者
+- `updateUserRole()` — 直接修改角色（admin/user）
+- `deleteUser()` — 刪除確認後刪除
+
+**個人設定頁面 (`renderProfileView`)**
+
+- 顯示目前使用者資訊（ID、名稱、角色、註冊時間）
+- 修改密碼表單（舊密碼 → 新密碼 → 確認新密碼）
+- `submitPasswordChange()` — 呼叫 `POST /api/auth/change-password`
+
+---
+
+## 11. 已修改檔案索引
+
+### 新增檔案（Phase 1）
 
 | 檔案 | 行數 | 說明 |
 |------|------|------|
 | `channel/web/multiuser/__init__.py` | 0 | Package marker |
-| `channel/web/multiuser/db.py` | ~300 | 資料庫層 (表格, CRUD, 密碼雜湊, 對話隔離) |
+| `channel/web/multiuser/db.py` | ~577 | 資料庫層 (mu_users, mu_sessions, mu_kb_shares, CRUD, 密碼雜湊, 對話隔離, 知識庫分享) |
 | `channel/web/multiuser/auth.py` | ~200 | 認證中間件 (cookie, session, RBAC) |
 
-### 修改檔案
+### 修改檔案（Phase 1 & Phase 2）
 
 | 檔案 | +/- 行 | 說明 |
 |------|--------|------|
-| `channel/web/web_channel.py` | +218/-6 | 新增 6 個 handler + route + import + SessionsHandler 隔離 |
+| `channel/web/web_channel.py` | +347/-6 | 新增 8 個 handler（含 KnowledgeShare）+ route + import + SessionsHandler 隔離 |
+| `channel/web/chat.html` | +113/-0 | 登入/註冊 UI、使用者選單、admin view、profile view 容器 |
+| `channel/web/static/js/console.js` | +661/-29 | 完整前端邏輯：雙模式登入、使用者管理、修改密碼、i18n 翻譯 |
 | `bridge/agent_bridge.py` | +12/-3 | `_pre_persist_user_message` + `_persist_messages` 串接 user_id |
 | `agent/memory/conversation_store.py` | +9/-0 | `append_messages` 新增 `user_id` 參數 |
+| `agent/memory/storage.py` | +70/-4 | 所有搜尋方法（vector/FTS5/like/trigram）新增 `shared_user_ids` 參數 |
+| `agent/memory/manager.py` | +35/-2 | `sync()` 掃描 `knowledge/users/{user_id}/`；`search()` 傳遞 `shared_user_ids` |
 
 ---
 
-## 10. Phase 2 展望
+## 12. Phase 2 完成項目與展望
 
-### 前端 (chat.html)
+### Phase 2 已實作 ✅
 
-- **登入頁面** — username + password 輸入框，取代原本的密碼輸入
-- **註冊頁面** — 第一次啟動時顯示註冊表單
-- **使用者管理頁面** — Admin 可看到使用者列表、新增/刪除/修改
-- **個人設定** — 修改密碼、頭像等
+| 類別 | 項目 | 狀態 |
+|------|------|:----:|
+| **後端** | 知識庫目錄隔離 `knowledge/users/{id}/` | ✅ |
+| **後端** | `MemoryManager.sync()` 掃描使用者知識庫 | ✅ |
+| **後端** | 搜尋管線 `shared_user_ids` 傳遞鏈（4 種 search method） | ✅ |
+| **後端** | `mu_kb_shares` 分享表 + 完整 CRUD | ✅ |
+| **後端** | `KnowledgeShareHandler` + route | ✅ |
+| **後端** | `ChangePasswordHandler`（multiuser + legacy 雙模式） | ✅ |
+| **後端** | `create_user()` 自動建立知識庫目錄 | ✅ |
+| **前端** | 登入/註冊 UI（雙模式） | ✅ |
+| **前端** | 使用者下拉選單（頭像、名稱、角色） | ✅ |
+| **前端** | Admin 使用者管理頁面（CRUD） | ✅ |
+| **前端** | 個人設定頁面（修改密碼） | ✅ |
+| **前端** | i18n 翻譯（zh / zh-Hant / en）30+ 字串 | ✅ |
+| **文件** | AGENTS.md Phase 2 完整記錄 | ✅ |
 
-### 知識庫隔離
+### 待加強／未來展望
 
-- 每個使用者的知識庫放在 `knowledge/{user_id}/` 目錄
-- 系統知識（共用的）放在 `knowledge/shared/`
-- `knowledge-wiki` 技能需增加使用者上下文參數
-
-### 知識庫分享機制
-
-- 使用者可以選擇性分享知識頁面給其他使用者
-- 類似 Google Docs 的權限模型（view / edit / admin）
-- 透過 `mu_kb_shares` 表格管理分享關係
-
-### 其他可擴充
-
-- **OAuth / SSO** 整合 (LDAP, Google, GitHub)
-- **API Token** 支援（機器對機器呼叫）
-- **Rate Limiting** 內建支援
-- **Session 黑名單**（管理員可強制登出特定使用者）
-- **操作日誌** Audit Log
+| 類別 | 項目 | 優先級 |
+|------|------|:------:|
+| **測試** | 完整測試多使用者登入/註冊/管理/分享流程 | 🔴 高 |
+| **分享** | 分享 UI 整合到前端（目前僅有後端 API） | 🟡 中 |
+| **知識庫** | 使用者知識庫管理頁面（上傳、刪除、列表） | 🟡 中 |
+| **認證** | OAuth / SSO 整合（LDAP, Google, GitHub） | 🟢 低 |
+| **認證** | API Token 支援（機器對機器呼叫） | 🟢 低 |
+| **安全** | Rate Limiting 內建支援 | 🟢 低 |
+| **安全** | Session 黑名單（管理員可強制登出特定使用者） | 🟢 低 |
+| **監控** | 操作日誌 Audit Log | 🟢 低 |
 
 ---
 
@@ -497,4 +688,4 @@ curl -X PUT http://localhost:9899/api/auth/users/2 \
 > **Date**: 2026-07-08  
 > **Base**: `anomixer/CowAgent`  
 > **Branch**: `feat-multiuser`  
-> **Status**: Phase 1 Complete ✅
+> **Status**: Phase 1 ✅ + Phase 2 ✅

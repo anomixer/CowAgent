@@ -51,6 +51,23 @@ CREATE INDEX IF NOT EXISTS idx_mu_sessions_user
 
 CREATE INDEX IF NOT EXISTS idx_mu_sessions_expires
     ON mu_sessions (expires_at);
+
+CREATE TABLE IF NOT EXISTS mu_kb_shares (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id        INTEGER NOT NULL,
+    shared_with_id  INTEGER NOT NULL,
+    permission      TEXT    NOT NULL DEFAULT 'read',
+    created_at      INTEGER NOT NULL,
+    FOREIGN KEY (owner_id) REFERENCES mu_users(id) ON DELETE CASCADE,
+    FOREIGN KEY (shared_with_id) REFERENCES mu_users(id) ON DELETE CASCADE,
+    UNIQUE(owner_id, shared_with_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_owner
+    ON mu_kb_shares (owner_id);
+
+CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_target
+    ON mu_kb_shares (shared_with_id);
 """
 
 _MIGRATION_ADD_USER_ID_TO_SESSIONS = """
@@ -129,7 +146,12 @@ class MultiUserDB:
     # -- user CRUD --------------------------------------------------------
 
     def create_user(self, username: str, password: str, role: str = "user") -> Optional[Dict]:
-        """Create a new user. Returns user dict or None if username exists."""
+        """Create a new user. Returns user dict or None if username exists.
+
+        Also creates the user's knowledge directory at ``knowledge/users/{id}/``
+        under the workspace root.
+        """
+        user = None
         with self._lock:
             conn = self._get_conn()
             try:
@@ -141,11 +163,28 @@ class MultiUserDB:
                     (username, password_hash, role, now, now),
                 )
                 conn.commit()
-                return self._get_user_by_username(conn, username)
+                user = self._get_user_by_username(conn, username)
             except sqlite3.IntegrityError:
                 return None
             finally:
                 conn.close()
+
+        # Create user's knowledge directory after successful registration
+        if user:
+            self._ensure_user_knowledge_dir(user["id"])
+        return user
+
+    def _ensure_user_knowledge_dir(self, user_id: int) -> None:
+        """Create ``knowledge/users/{user_id}/`` directory for a user."""
+        try:
+            from config import conf
+            workspace = conf().get("agent_workspace", "~/cow")
+            workspace = os.path.expanduser(workspace)
+            user_kb_dir = os.path.join(workspace, "knowledge", "users", str(user_id))
+            os.makedirs(user_kb_dir, exist_ok=True)
+            logger.debug(f"[MultiUserDB] Created knowledge directory for user {user_id}: {user_kb_dir}")
+        except Exception as e:
+            logger.warning(f"[MultiUserDB] Failed to create knowledge dir for user {user_id}: {e}")
 
     def get_user_by_id(self, user_id: int) -> Optional[Dict]:
         with self._lock:
@@ -380,6 +419,95 @@ class MultiUserDB:
                     "page_size": page_size,
                     "total_pages": max(1, (total + page_size - 1) // page_size),
                 }
+            finally:
+                conn.close()
+
+    # -- knowledge share management ---------------------------------------
+
+    def create_share(self, owner_id: int, shared_with_id: int,
+                     permission: str = "read") -> Optional[Dict]:
+        """Share knowledge base with another user. Returns share dict or None."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                now = int(time.time())
+                conn.execute(
+                    "INSERT INTO mu_kb_shares (owner_id, shared_with_id, permission, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (owner_id, shared_with_id, permission, now),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT id, owner_id, shared_with_id, permission, created_at "
+                    "FROM mu_kb_shares WHERE owner_id = ? AND shared_with_id = ?",
+                    (owner_id, shared_with_id),
+                ).fetchone()
+                return dict(row) if row else None
+            except sqlite3.IntegrityError:
+                return None
+            finally:
+                conn.close()
+
+    def remove_share(self, share_id: int, owner_id: int) -> bool:
+        """Remove a share. Returns True if found and deleted."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM mu_kb_shares WHERE id = ? AND owner_id = ?",
+                    (share_id, owner_id),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def list_shares_by_owner(self, owner_id: int) -> List[Dict]:
+        """List all shares created by a user (who they shared with)."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT s.id, s.owner_id, s.shared_with_id, s.permission, "
+                    "s.created_at, u.username AS shared_with_username "
+                    "FROM mu_kb_shares s "
+                    "JOIN mu_users u ON u.id = s.shared_with_id "
+                    "WHERE s.owner_id = ? "
+                    "ORDER BY s.created_at DESC",
+                    (owner_id,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+
+    def list_shares_for_user(self, user_id: int) -> List[Dict]:
+        """List all shares targeting a user (knowledge shared with them)."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT s.id, s.owner_id, s.shared_with_id, s.permission, "
+                    "s.created_at, u.username AS owner_username "
+                    "FROM mu_kb_shares s "
+                    "JOIN mu_users u ON u.id = s.owner_id "
+                    "WHERE s.shared_with_id = ? "
+                    "ORDER BY s.created_at DESC",
+                    (user_id,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+
+    def get_shared_user_ids(self, user_id: int) -> List[int]:
+        """Return list of user IDs whose knowledge is shared with this user."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT owner_id FROM mu_kb_shares WHERE shared_with_id = ?",
+                    (user_id,),
+                ).fetchall()
+                return [r[0] for r in rows]
             finally:
                 conn.close()
 

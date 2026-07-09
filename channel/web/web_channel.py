@@ -1308,6 +1308,7 @@ class WebChannel(ChatChannel):
             '/api/auth/me', 'MeHandler',
             '/api/auth/users/(.*)', 'AdminUserDetailHandler',
             '/api/auth/users', 'AdminUsersHandler',
+            '/api/auth/change-password', 'ChangePasswordHandler',
             '/message', 'MessageHandler',
             '/upload', 'UploadHandler',
             '/uploads/(.*)', 'UploadsHandler',
@@ -1332,6 +1333,8 @@ class WebChannel(ChatChannel):
             '/api/knowledge/graph', 'KnowledgeGraphHandler',
             '/api/knowledge/action', 'KnowledgeActionHandler',
             '/api/knowledge/import', 'KnowledgeImportHandler',
+            '/api/knowledge/shares', 'KnowledgeShareHandler',
+            '/api/knowledge/shares/(.*)', 'KnowledgeShareDetailHandler',
             '/api/scheduler', 'SchedulerHandler',
             '/api/scheduler/toggle', 'SchedulerToggleHandler',
             '/api/scheduler/update', 'SchedulerUpdateHandler',
@@ -1677,6 +1680,52 @@ class AdminUserDetailHandler:
             db.update_user_password(uid, new_pw)
 
         return json.dumps({"status": "success"})
+
+
+# ---------------------------------------------------------------------------
+# Change password (for the currently logged-in user)
+# ---------------------------------------------------------------------------
+
+class ChangePasswordHandler:
+    def POST(self):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+
+        current_pw = str(data.get("current_password", "") or "")
+        new_pw = str(data.get("new_password", "") or "")
+
+        if not current_pw or not new_pw:
+            return json.dumps({"status": "error", "message": "Current and new password required"})
+        if len(new_pw) < 6:
+            return json.dumps({"status": "error", "message": "Password must be at least 6 characters"})
+        if current_pw == new_pw:
+            return json.dumps({"status": "error", "message": "New password must differ from current password"})
+
+        if is_multiuser_enabled():
+            user = get_current_user()
+            if not user:
+                return json.dumps({"status": "error", "message": "Not logged in"})
+            db = get_multiuser_db()
+            if not db.verify_password(user["id"], current_pw):
+                return json.dumps({"status": "error", "message": "Current password is incorrect"})
+            db.update_user_password(user["id"], new_pw)
+            logger.info(f"[WebChannel] User '{user['username']}' changed their password")
+            return json.dumps({"status": "success", "message": "Password updated"})
+        else:
+            # Legacy mode: change web_password
+            expected = _get_web_password()
+            if expected and not hmac.compare_digest(current_pw, expected):
+                return json.dumps({"status": "error", "message": "Current password is incorrect"})
+            # Update config
+            from config import save_config
+            cfg = conf()
+            cfg["web_password"] = new_pw
+            save_config(cfg)
+            logger.info("[WebChannel] Web password changed")
+            return json.dumps({"status": "success", "message": "Password updated"})
 
 
 class MessageHandler:
@@ -5317,6 +5366,86 @@ class KnowledgeImportHandler:
         except Exception as e:
             logger.error(f"[WebChannel] Knowledge import error: {e}", exc_info=True)
             return json.dumps({"status": "error", "code": 500, "message": str(e), "payload": None})
+
+
+class KnowledgeShareHandler:
+    def GET(self):
+        """List knowledge shares for the current user (both as owner and as recipient)."""
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            db = get_multiuser_db()
+            if db.user_count() == 0:
+                return json.dumps({"status": "success", "owned": [], "received": []})
+
+            user = require_login()
+            user_id = user["id"]
+            owned = db.list_shares_by_owner(user_id)
+            received = db.list_shares_for_user(user_id)
+            return json.dumps({
+                "status": "success",
+                "owned": owned,
+                "received": received,
+            }, ensure_ascii=False)
+        except web.HTTPError:
+            raise
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def POST(self):
+        """Create a knowledge share with another user."""
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            db = get_multiuser_db()
+            if db.user_count() == 0:
+                return json.dumps({"status": "error", "message": "Multi-user mode not enabled"})
+
+            user = require_login()
+            body = json.loads(web.data() or b"{}")
+            shared_with_id = body.get("shared_with_id")
+            permission = body.get("permission", "read")
+
+            if not shared_with_id:
+                return json.dumps({"status": "error", "message": "shared_with_id is required"})
+
+            shared_with_id = int(shared_with_id)
+            if shared_with_id == user["id"]:
+                return json.dumps({"status": "error", "message": "Cannot share with yourself"})
+
+            target = db.get_user_by_id(shared_with_id)
+            if not target:
+                return json.dumps({"status": "error", "message": "Target user not found"})
+
+            result = db.create_share(user["id"], shared_with_id, permission)
+            if result is None:
+                return json.dumps({"status": "error", "message": "Share already exists or database error"})
+            return json.dumps({"status": "success", "share": result}, ensure_ascii=False)
+        except web.HTTPError:
+            raise
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class KnowledgeShareDetailHandler:
+    def DELETE(self, share_id: str):
+        """Remove a knowledge share by ID."""
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            db = get_multiuser_db()
+            if db.user_count() == 0:
+                return json.dumps({"status": "error", "message": "Multi-user mode not enabled"})
+
+            user = require_login()
+            result = db.remove_share(int(share_id), user["id"])
+            if not result:
+                return json.dumps({"status": "error", "message": "Share not found or not authorized"})
+            return json.dumps({"status": "success", "message": "Share removed"})
+        except web.HTTPError:
+            raise
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
 
 
 class VersionHandler:

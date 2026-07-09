@@ -519,12 +519,16 @@ class MemoryStorage:
         query_embedding: List[float],
         user_id: Optional[str] = None,
         scopes: List[str] = None,
-        limit: int = 10
+        limit: int = 10,
+        shared_user_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """
         Vector similarity search using numpy-vectorized cosine similarity.
         All embeddings are loaded then scored in a single BLAS matrix-vector
         multiply, which is ~100x faster than the pure-Python per-row loop.
+
+        When shared_user_ids is provided (knowledge sharing enabled), chunks
+        belonging to those users are also included in the search scope.
         """
         if scopes is None:
             scopes = ["shared"]
@@ -535,13 +539,18 @@ class MemoryStorage:
         params = list(scopes)
 
         if user_id:
+            # Build user_id filter: own user OR shared users
+            all_user_ids = [str(user_id)]
+            if shared_user_ids:
+                all_user_ids.extend(str(uid) for uid in shared_user_ids)
+            user_placeholders = ','.join('?' * len(all_user_ids))
             query = f"""
                 SELECT * FROM chunks
                 WHERE scope IN ({scope_placeholders})
-                AND (scope = 'shared' OR user_id = ?)
+                AND (scope = 'shared' OR user_id IN ({user_placeholders}))
                 AND embedding IS NOT NULL
             """
-            params.append(user_id)
+            params.extend(all_user_ids)
         else:
             query = f"""
                 SELECT * FROM chunks
@@ -639,7 +648,8 @@ class MemoryStorage:
         query: str,
         user_id: Optional[str] = None,
         scopes: List[str] = None,
-        limit: int = 10
+        limit: int = 10,
+        shared_user_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """
         Keyword search using FTS5 + LIKE fallback
@@ -649,6 +659,9 @@ class MemoryStorage:
         2. Always fall back to LIKE for CJK queries
         3. If FTS5 fails OR returns empty for non-CJK, also try LIKE so a
            broken FTS5 shadow table doesn't silently kill keyword search.
+
+        When shared_user_ids is provided, chunks belonging to those shared
+        users are also included in the search scope.
         """
         if scopes is None:
             scopes = ["shared"]
@@ -666,7 +679,7 @@ class MemoryStorage:
                 and not MemoryStorage._contains_cjk(query)
                 and MemoryStorage._build_fts_query(query)):
             fts1_attempted = True
-            fts_results = self._search_fts5(query, user_id, scopes, limit)
+            fts_results = self._search_fts5(query, user_id, scopes, limit, shared_user_ids)
             if fts_results:
                 return fts_results
 
@@ -676,14 +689,14 @@ class MemoryStorage:
         if self.trigram_fts5_available and (
             MemoryStorage._contains_cjk(query) or fts1_attempted
         ):
-            trigram_results = self._search_fts5_trigram(query, user_id, scopes, limit)
+            trigram_results = self._search_fts5_trigram(query, user_id, scopes, limit, shared_user_ids)
             if trigram_results:
                 return trigram_results
 
         # Step 3: LIKE fallback — last resort (FTS5 unavailable, or CJK tokens
         # shorter than 3 characters that trigram cannot match, e.g. a single-char query).
         if not self.fts5_available or MemoryStorage._contains_cjk(query):
-            return self._search_like(query, user_id, scopes, limit)
+            return self._search_like(query, user_id, scopes, limit, shared_user_ids)
 
         return []
     
@@ -692,7 +705,8 @@ class MemoryStorage:
         query: str,
         user_id: Optional[str],
         scopes: List[str],
-        limit: int
+        limit: int,
+        shared_user_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """FTS5 full-text search"""
         fts_query = self._build_fts_query(query)
@@ -703,17 +717,22 @@ class MemoryStorage:
         params = [fts_query] + scopes
         
         if user_id:
+            all_user_ids = [str(user_id)]
+            if shared_user_ids:
+                all_user_ids.extend(str(uid) for uid in shared_user_ids)
+            user_placeholders = ','.join('?' * len(all_user_ids))
             sql_query = f"""
                 SELECT chunks.*, bm25(chunks_fts) as rank
                 FROM chunks_fts
                 JOIN chunks ON chunks.rowid = chunks_fts.rowid
                 WHERE chunks_fts MATCH ? 
                 AND chunks.scope IN ({scope_placeholders})
-                AND (chunks.scope = 'shared' OR chunks.user_id = ?)
+                AND (chunks.scope = 'shared' OR chunks.user_id IN ({user_placeholders}))
                 ORDER BY rank
                 LIMIT ?
             """
-            params.extend([user_id, limit])
+            params.extend(all_user_ids)
+            params.append(limit)
         else:
             sql_query = f"""
                 SELECT chunks.*, bm25(chunks_fts) as rank
@@ -750,13 +769,16 @@ class MemoryStorage:
         query: str,
         user_id: Optional[str],
         scopes: List[str],
-        limit: int
+        limit: int,
+        shared_user_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
         """LIKE-based search.
 
         Used as the keyword-search fallback when FTS5 is unavailable, fails,
         or returns empty. Supports both CJK runs (1+ chars) and ASCII word
         tokens (3+ chars) so it can serve as a true safety net for any query.
+
+        When shared_user_ids is provided, their chunks are also included.
         """
         # CJK runs (1+ chars, wide Unicode range) + ASCII words (3+ chars to avoid noise)
         cjk_words = _RE_CJK_WORDS.findall(query)
@@ -778,14 +800,19 @@ class MemoryStorage:
         params.extend(scopes)
         
         if user_id:
+            all_user_ids = [str(user_id)]
+            if shared_user_ids:
+                all_user_ids.extend(str(uid) for uid in shared_user_ids)
+            user_placeholders = ','.join('?' * len(all_user_ids))
             sql_query = f"""
                 SELECT * FROM chunks
                 WHERE ({where_clause})
                 AND scope IN ({scope_placeholders})
-                AND (scope = 'shared' OR user_id = ?)
+                AND (scope = 'shared' OR user_id IN ({user_placeholders}))
                 LIMIT ?
             """
-            params.extend([user_id, limit])
+            params.extend(all_user_ids)
+            params.append(limit)
         else:
             sql_query = f"""
                 SELECT * FROM chunks
@@ -954,9 +981,13 @@ class MemoryStorage:
         query: str,
         user_id: Optional[str],
         scopes: List[str],
-        limit: int
+        limit: int,
+        shared_user_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
-        """Trigram FTS5 search — handles CJK and mixed queries with BM25 ranking."""
+        """Trigram FTS5 search — handles CJK and mixed queries with BM25 ranking.
+
+        When shared_user_ids is provided, their chunks are also included.
+        """
         trigram_query = self._build_trigram_query(query)
         if not trigram_query:
             return []
@@ -965,17 +996,22 @@ class MemoryStorage:
         params = [trigram_query] + list(scopes)
 
         if user_id:
+            all_user_ids = [str(user_id)]
+            if shared_user_ids:
+                all_user_ids.extend(str(uid) for uid in shared_user_ids)
+            user_placeholders = ','.join('?' * len(all_user_ids))
             sql = f"""
                 SELECT chunks.*, bm25(chunks_fts_trigram) as rank
                 FROM chunks_fts_trigram
                 JOIN chunks ON chunks.rowid = chunks_fts_trigram.rowid
                 WHERE chunks_fts_trigram MATCH ?
                 AND chunks.scope IN ({scope_placeholders})
-                AND (chunks.scope = 'shared' OR chunks.user_id = ?)
+                AND (chunks.scope = 'shared' OR chunks.user_id IN ({user_placeholders}))
                 ORDER BY rank
                 LIMIT ?
             """
-            params.extend([user_id, limit])
+            params.extend(all_user_ids)
+            params.append(limit)
         else:
             sql = f"""
                 SELECT chunks.*, bm25(chunks_fts_trigram) as rank
