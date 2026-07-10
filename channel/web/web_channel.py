@@ -1739,10 +1739,25 @@ class ChangePasswordHandler:
 class TeamsHandler:
     """GET → list teams (admin: all, user: own); POST → create team (admin only)."""
 
+    def _auth(self):
+        """Authenticate in both single-user and multiuser mode. Returns user dict."""
+        if is_multiuser_enabled():
+            return require_login()
+        else:
+            _require_auth()
+            return {"id": 0, "username": "admin", "role": "admin"}
+
+    def _auth_admin(self):
+        """Authenticate as admin in both modes. Returns user dict."""
+        if is_multiuser_enabled():
+            return require_admin()
+        else:
+            _require_auth()
+            return {"id": 0, "username": "admin", "role": "admin"}
+
     def GET(self):
-        require_login()
         web.header('Content-Type', 'application/json; charset=utf-8')
-        user = get_current_user()
+        user = self._auth()
         db = get_multiuser_db()
         if user["role"] == "admin":
             teams = db.list_teams()
@@ -1752,8 +1767,8 @@ class TeamsHandler:
 
     def POST(self):
         """Create a new team. Admin only."""
-        admin = require_admin()
         web.header('Content-Type', 'application/json; charset=utf-8')
+        admin = self._auth_admin()
         try:
             data = json.loads(web.data())
         except Exception:
@@ -1778,10 +1793,23 @@ class TeamsHandler:
 class TeamDetailHandler:
     """GET → detail; PUT → update; DELETE → remove team."""
 
+    def _auth(self):
+        if is_multiuser_enabled():
+            return require_login()
+        else:
+            _require_auth()
+            return {"id": 0, "username": "admin", "role": "admin"}
+
+    def _auth_admin(self):
+        if is_multiuser_enabled():
+            return require_admin()
+        else:
+            _require_auth()
+            return {"id": 0, "username": "admin", "role": "admin"}
+
     def GET(self, team_id: str):
-        require_login()
         web.header('Content-Type', 'application/json; charset=utf-8')
-        user = get_current_user()
+        user = self._auth()
         db = get_multiuser_db()
         try:
             tid = int(team_id)
@@ -1802,8 +1830,8 @@ class TeamDetailHandler:
 
     def PUT(self, team_id: str):
         """Update team name/description. Admin only for now (Phase 4 adds team admin)."""
-        admin = require_admin()
         web.header('Content-Type', 'application/json; charset=utf-8')
+        admin = self._auth_admin()
         try:
             tid = int(team_id)
         except (ValueError, TypeError):
@@ -1827,8 +1855,8 @@ class TeamDetailHandler:
 
     def DELETE(self, team_id: str):
         """Delete a team. Admin only."""
-        admin = require_admin()
         web.header('Content-Type', 'application/json; charset=utf-8')
+        admin = self._auth_admin()
         try:
             tid = int(team_id)
         except (ValueError, TypeError):
@@ -1847,10 +1875,23 @@ class TeamDetailHandler:
 class TeamMembersHandler:
     """GET → list members; POST → add a member."""
 
+    def _auth(self):
+        if is_multiuser_enabled():
+            return require_login()
+        else:
+            _require_auth()
+            return {"id": 0, "username": "admin", "role": "admin"}
+
+    def _auth_admin(self):
+        if is_multiuser_enabled():
+            return require_admin()
+        else:
+            _require_auth()
+            return {"id": 0, "username": "admin", "role": "admin"}
+
     def GET(self, team_id: str):
-        require_login()
         web.header('Content-Type', 'application/json; charset=utf-8')
-        user = get_current_user()
+        user = self._auth()
         db = get_multiuser_db()
         try:
             tid = int(team_id)
@@ -1871,8 +1912,8 @@ class TeamMembersHandler:
 
     def POST(self, team_id: str):
         """Add a member to the team. Admin only for now (Phase 4 adds team admin)."""
-        admin = require_admin()
         web.header('Content-Type', 'application/json; charset=utf-8')
+        admin = self._auth_admin()
         try:
             tid = int(team_id)
         except (ValueError, TypeError):
@@ -1909,10 +1950,17 @@ class TeamMembersHandler:
 class TeamMemberDetailHandler:
     """DELETE → remove member; PUT → update member role."""
 
+    def _auth_admin(self):
+        if is_multiuser_enabled():
+            return require_admin()
+        else:
+            _require_auth()
+            return {"id": 0, "username": "admin", "role": "admin"}
+
     def DELETE(self, team_id: str, user_id: str):
         """Remove a member from the team."""
-        admin = require_admin()
         web.header('Content-Type', 'application/json; charset=utf-8')
+        admin = self._auth_admin()
         try:
             tid = int(team_id)
             uid = int(user_id)
@@ -1927,8 +1975,8 @@ class TeamMemberDetailHandler:
 
     def PUT(self, team_id: str, user_id: str):
         """Update member role."""
-        admin = require_admin()
         web.header('Content-Type', 'application/json; charset=utf-8')
+        admin = self._auth_admin()
         try:
             tid = int(team_id)
             uid = int(user_id)

@@ -9448,6 +9448,9 @@ function showLoginScreen() {
                     isAdmin = data.user.role === 'admin';
                     setupUserMenu(data.user);
                 } else {
+                    // Single-user mode: assign a default user so teams/profile views work
+                    currentUser = { id: 0, username: 'admin', role: 'admin' };
+                    isAdmin = true;
                     const logoutBtn = document.getElementById('logout-btn-header');
                     if (logoutBtn) logoutBtn.classList.remove('hidden');
                 }
@@ -10473,6 +10476,9 @@ fetch('/auth/check').then(r => r.json()).then(data => {
                 isAdmin = data.user.role === 'admin';
                 setupUserMenu(data.user);
             } else {
+                // Single-user mode: assign a default user so teams/profile views work
+                currentUser = { id: 0, username: 'admin', role: 'admin' };
+                isAdmin = true;
                 const logoutBtn = document.getElementById('logout-btn-header');
                 if (logoutBtn) logoutBtn.classList.remove('hidden');
             }
