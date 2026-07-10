@@ -1958,8 +1958,7 @@ class TeamMembersHandler:
                 # Create a session for this new admin and set the mu_session cookie
                 # so the current operator stays logged in after the transition
                 session = db.create_session(user["id"], 86400 * 7)
-                from .auth import set_session_cookie
-                set_session_cookie(session["id"], session["expires_at"])
+                mu_set_session_cookie(session["id"], session["expires_at"])
             target_uid = user["id"]
 
         if db.add_team_member(tid, target_uid, role=role):
