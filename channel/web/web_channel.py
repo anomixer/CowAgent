@@ -1928,18 +1928,25 @@ class TeamMembersHandler:
         if not team:
             return json.dumps({"status": "error", "message": "Team not found"})
 
-        target_user_id = data.get("user_id")
         role = str(data.get("role", "member")).strip()
         if role not in ("admin", "member"):
             role = "member"
 
-        if not target_user_id:
-            return json.dumps({"status": "error", "message": "user_id required"})
-
-        try:
-            target_uid = int(target_user_id)
-        except (ValueError, TypeError):
-            return json.dumps({"status": "error", "message": "Invalid user_id"})
+        # Accept either user_id (number) or username (string)
+        target_uid = data.get("user_id")
+        if target_uid is not None:
+            try:
+                target_uid = int(target_uid)
+            except (ValueError, TypeError):
+                return json.dumps({"status": "error", "message": "Invalid user_id"})
+        else:
+            username = str(data.get("username", "") or "").strip()
+            if not username:
+                return json.dumps({"status": "error", "message": "user_id or username required"})
+            user = db.get_user_by_username(username)
+            if not user:
+                return json.dumps({"status": "error", "message": "User not found"})
+            target_uid = user["id"]
 
         if db.add_team_member(tid, target_uid, role=role):
             logger.info(f"[WebChannel] Admin '{admin['username']}' added user id={target_uid} to team id={tid} as {role}")
