@@ -1950,9 +1950,16 @@ class TeamMembersHandler:
                 # Single-user mode: auto-provision a user entry in mu_users for FK compliance
                 import secrets
                 tmp_pwd = secrets.token_hex(16)
-                user = db.create_user(username, tmp_pwd, role="member")
+                # First user created from single-user mode becomes system admin
+                # so the operator doesn't get locked out on transition
+                user = db.create_user(username, tmp_pwd, role="admin")
                 if not user:
                     return json.dumps({"status": "error", "message": "Failed to create user"})
+                # Create a session for this new admin and set the mu_session cookie
+                # so the current operator stays logged in after the transition
+                session = db.create_session(user["id"], 86400 * 7)
+                from .auth import set_session_cookie
+                set_session_cookie(session["id"], session["expires_at"])
             target_uid = user["id"]
 
         if db.add_team_member(tid, target_uid, role=role):
