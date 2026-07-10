@@ -1945,7 +1945,14 @@ class TeamMembersHandler:
                 return json.dumps({"status": "error", "message": "user_id or username required"})
             user = db.get_user_by_username(username)
             if not user:
-                return json.dumps({"status": "error", "message": "User not found"})
+                if is_multiuser_enabled():
+                    return json.dumps({"status": "error", "message": "User not found"})
+                # Single-user mode: auto-provision a user entry in mu_users for FK compliance
+                import secrets
+                tmp_pwd = secrets.token_hex(16)
+                user = db.create_user(username, tmp_pwd, role="member")
+                if not user:
+                    return json.dumps({"status": "error", "message": "Failed to create user"})
             target_uid = user["id"]
 
         if db.add_team_member(tid, target_uid, role=role):
