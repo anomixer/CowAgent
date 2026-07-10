@@ -10482,6 +10482,10 @@ fetch('/auth/check').then(r => r.json()).then(data => {
                 const logoutBtn = document.getElementById('logout-btn-header');
                 if (logoutBtn) logoutBtn.classList.remove('hidden');
             }
+        } else {
+            // No-password mode: still need a currentUser for teams/profile views
+            currentUser = { id: 0, username: 'admin', role: 'admin' };
+            isAdmin = true;
         }
         initApp();
     }
