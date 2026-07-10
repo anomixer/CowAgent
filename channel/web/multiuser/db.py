@@ -558,6 +558,13 @@ class MultiUserDB:
         with self._lock:
             conn = self._get_conn()
             try:
+                # Check if referenced user exists; if not (single-user mode), skip FK enforcement
+                user_exists = conn.execute(
+                    "SELECT 1 FROM mu_users WHERE id = ?", (created_by,)
+                ).fetchone() is not None
+                if not user_exists:
+                    conn.execute("PRAGMA foreign_keys = OFF")
+
                 now = int(time.time())
                 cur = conn.execute(
                     "INSERT INTO mu_teams (name, description, created_by, created_at, updated_at) "
@@ -690,6 +697,13 @@ class MultiUserDB:
         with self._lock:
             conn = self._get_conn()
             try:
+                # Check if referenced user exists; if not (single-user mode), skip FK enforcement
+                user_exists = conn.execute(
+                    "SELECT 1 FROM mu_users WHERE id = ?", (user_id,)
+                ).fetchone() is not None
+                if not user_exists:
+                    conn.execute("PRAGMA foreign_keys = OFF")
+
                 now = int(time.time())
                 conn.execute(
                     "INSERT INTO mu_team_members (team_id, user_id, role, joined_at) "
