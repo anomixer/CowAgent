@@ -96,11 +96,10 @@ def require_admin() -> Dict:
 
 def set_session_cookie(session_id: str, expires_at: int) -> None:
     """Set the mu_session cookie on the response."""
-    max_age = expires_at - int(time.time())
     web.setcookie(
         _SESSION_COOKIE,
         session_id,
-        max_age=max_age,
+        expires=expires_at,
         path="/",
         httponly=True,
         samesite="Lax",
