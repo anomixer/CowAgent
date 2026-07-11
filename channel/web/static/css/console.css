@@ -1683,3 +1683,15 @@
     cursor: not-allowed !important;
     opacity: 0.35 !important;
 }
+
+/* ── Select / Option dark theme fix ── */
+/* Native <option> popup inherits color from <select> but uses system bg.
+   In dark theme, light text on white system bg becomes invisible. */
+select option {
+    color: #475569;
+    background: #fff;
+}
+.dark select option {
+    color: #cbd5e1;
+    background: #1e293b;
+}
