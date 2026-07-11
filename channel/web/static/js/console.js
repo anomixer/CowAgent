@@ -10005,6 +10005,7 @@ function renderTeamsView() {
                     ` : ''}
                 </div>
 
+                <p id="teams-list-status" class="text-sm text-center opacity-0 transition-opacity duration-500 mb-3"></p>
                 <div id="teams-list" class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
                     <div class="flex items-center justify-center py-20 text-slate-400">
                         <i class="fas fa-spinner fa-spin text-lg mr-2"></i> Loading...
@@ -10193,7 +10194,7 @@ function submitCreateTeam() {
     }).then(r => r.json()).then(data => {
         if (data.status === 'success') {
             backToTeamList();
-            showStatus('teams-list', 'team_created', false);
+            showStatus('teams-list-status', 'team_created', false);
         } else {
             statusEl.textContent = data.message || (currentLang === 'en' ? 'Failed to create team' : '创建团队失败');
             statusEl.classList.remove('hidden');
@@ -10222,7 +10223,7 @@ function doDeleteTeam(teamId) {
     }).then(r => r.json()).then(data => {
         if (data.status === 'success') {
             fetchTeams();
-            showStatus('teams-list', 'team_deleted', false);
+            showStatus('teams-list-status', 'team_deleted', false);
         }
     }).catch(() => {});
 }
@@ -10264,6 +10265,7 @@ function showTeamMembersView(teamId, teamName) {
                     ` : ''}
                 </div>
 
+                <p id="team-members-status" class="text-sm text-center opacity-0 transition-opacity duration-500 mb-3"></p>
                 <div id="team-members-list" class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
                     <div class="flex items-center justify-center py-20 text-slate-400">
                         <i class="fas fa-spinner fa-spin text-lg mr-2"></i> Loading...
@@ -10508,7 +10510,7 @@ function submitAddMember(teamId) {
         if (data.status === 'success') {
             closeAddMemberForm();
             fetchTeamMembers(teamId);
-            showStatus('team-members-list', 'member_added', false);
+            showStatus('team-members-status', 'member_added', false);
         } else {
             statusEl.textContent = data.message || (currentLang === 'en' ? 'Failed to add member' : '添加成员失败');
             statusEl.classList.remove('hidden');
@@ -10544,7 +10546,7 @@ function removeTeamMember(teamId, userId, username) {
         }).then(r => r.json()).then(data => {
             if (data.status === 'success') {
                 fetchTeamMembers(teamId);
-                showStatus('team-members-list', 'member_removed', false);
+                showStatus('team-members-status', 'member_removed', false);
             }
         }).catch(function() {});
     });
@@ -10559,7 +10561,7 @@ function leaveTeam(teamId) {
         }).then(r => r.json()).then(data => {
             if (data.status === 'success') {
                 backToTeamList();
-                showStatus('teams-list', 'member_removed', false);
+                showStatus('teams-list-status', 'member_removed', false);
             }
         }).catch(function() {});
     });
