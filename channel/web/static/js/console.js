@@ -295,6 +295,8 @@ const I18N = {
         new_password: '新密码',
         password_min_hint: '至少6个字符',
         password_changed: '密码已更新',
+        default_password_banner: '你正在使用默认密码，建议立即修改',
+        change_password_now: '立即修改',
         password_change_error: '密码修改失败',
         user_info: '账户信息',
         role_admin: '管理员',
@@ -598,6 +600,8 @@ const I18N = {
         new_password: '新密碼',
         password_min_hint: '至少6個字元',
         password_changed: '密碼已更新',
+        default_password_banner: '你正在使用預設密碼，建議立即修改',
+        change_password_now: '立即修改',
         password_change_error: '密碼修改失敗',
         user_info: '帳戶資訊',
         role_admin: '管理員',
@@ -899,7 +903,9 @@ const I18N = {
         current_password: 'Current Password',
         new_password: 'New Password',
         password_min_hint: 'At least 6 characters',
-        password_changed: 'Password updated successfully',
+        password_changed: 'Password updated',
+        default_password_banner: 'You are using a default password. Please change it for security.',
+        change_password_now: 'Change Now',
         password_change_error: 'Failed to change password',
         user_info: 'Account Info',
         role_admin: 'Admin',
@@ -9335,6 +9341,38 @@ document.addEventListener('click', function(e) {
     }
 });
 
+// --- Default password change banner ---
+function showDefaultPasswordBanner() {
+    if (document.getElementById('default-pwd-banner')) return;
+    const app = document.getElementById('app');
+    if (!app) return;
+    const banner = document.createElement('div');
+    banner.id = 'default-pwd-banner';
+    banner.className = 'flex items-center justify-between gap-3 px-5 py-3 bg-amber-50 dark:bg-amber-900/30 border-b border-amber-200 dark:border-amber-700/40';
+    banner.innerHTML = `
+        <div class="flex items-center gap-2 text-sm text-amber-800 dark:text-amber-200">
+            <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span>${t('default_password_banner')}</span>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+            <button onclick="navigateTo('profile'); document.getElementById('default-pwd-banner').remove()"
+                    class="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500 hover:bg-amber-600 text-white cursor-pointer">
+                ${t('change_password_now')}
+            </button>
+            <button onclick="this.parentElement.parentElement.remove()"
+                    class="p-1 rounded-lg hover:bg-amber-200/50 dark:hover:bg-amber-800/50 text-amber-500 cursor-pointer">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+    `;
+    app.prepend(banner);
+}
+window.showDefaultPasswordBanner = showDefaultPasswordBanner;
+
 // --- Set up user menu for multiuser mode ---
 function setupUserMenu(user) {
     const avatar = document.getElementById('user-menu-avatar');
@@ -9455,6 +9493,9 @@ function showLoginScreen() {
                     if (logoutBtn) logoutBtn.classList.remove('hidden');
                 }
                 initApp();
+                if (data.default_password) {
+                    showDefaultPasswordBanner();
+                }
             } else {
                 const msg = data.message || (currentLang === 'en' ? 'Login failed' : currentLang === 'zh-Hant' ? '登入失敗' : '登录失败');
                 errEl.textContent = msg;
@@ -9806,7 +9847,7 @@ function renderUserList(users) {
             <tbody>
                 ${users.map(u => {
                     const isSelf = u.id === currentUserId;
-                    const createdDate = u.created_at ? new Date(u.created_at).toLocaleDateString() : '-';
+                    const createdDate = u.created_at ? new Date(u.created_at * 1000).toLocaleDateString() : '-';
                     return `
                         <tr class="border-b border-slate-50 dark:border-white/5 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
                             <td class="px-5 py-3 text-slate-500 dark:text-slate-400">${u.id}</td>

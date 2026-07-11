@@ -1512,10 +1512,15 @@ class AuthLoginHandler:
             if not result:
                 logger.warning(f"[WebChannel] Failed login attempt for user '{username}'")
                 return json.dumps({"status": "error", "message": "Invalid username or password"})
+            db = get_multiuser_db()
+            user_obj = result["user"]
+            pwd_changed = db.get_user_config(user_obj["id"], "password_changed")
+            default_pwd = pwd_changed is None or pwd_changed == "false"
             return json.dumps({
                 "status": "success",
-                "user": result["user"],
+                "user": user_obj,
                 "multiuser": True,
+                "default_password": default_pwd,
             })
 
         # Legacy mode: single password
@@ -1716,6 +1721,7 @@ class ChangePasswordHandler:
             if not db.verify_password(user["id"], current_pw):
                 return json.dumps({"status": "error", "message": "Current password is incorrect"})
             db.update_user_password(user["id"], new_pw)
+            db.set_user_config(user["id"], "password_changed", "true")
             logger.info(f"[WebChannel] User '{user['username']}' changed their password")
             return json.dumps({"status": "success", "message": "Password updated"})
         else:
@@ -1784,8 +1790,6 @@ class TeamsHandler:
         if not team:
             return json.dumps({"status": "error", "message": "Team name already exists"})
 
-        # Auto-add creator as admin member
-        db.add_team_member(team["id"], admin["id"], role="admin")
         logger.info(f"[WebChannel] Admin '{admin['username']}' created team '{name}' (id={team['id']})")
         return json.dumps({"status": "success", "team": team})
 
@@ -1951,12 +1955,18 @@ class TeamMembersHandler:
                 user = db.create_user(username, tmp_pwd, role=role)
                 if not user:
                     return json.dumps({"status": "error", "message": "Failed to create user"})
+                db.set_user_config(user["id"], "password_changed", "false")
                 logger.info(f"[WebChannel] Auto-provisioned user '{username}' (id={user['id']}) with role={role} via team add")
+            else:
+                tmp_pwd = None
             target_uid = user["id"]
 
         if db.add_team_member(tid, target_uid, role=role):
             logger.info(f"[WebChannel] Admin '{admin['username']}' added user id={target_uid} to team id={tid} as {role}")
-            return json.dumps({"status": "success"})
+            result = {"status": "success"}
+            if tmp_pwd:
+                result["generated_password"] = tmp_pwd
+            return json.dumps(result)
         return json.dumps({"status": "error", "message": "User already in team or not found"})
 
 

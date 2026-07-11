@@ -297,6 +297,18 @@ class MultiUserDB:
             finally:
                 conn.close()
 
+    def verify_password(self, user_id: int, password: str) -> bool:
+        """Verify a user's password by user ID. Returns True if correct."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                user = self._get_user_by_id(conn, user_id)
+                if not user:
+                    return False
+                return _verify_password(password, user["password_hash"])
+            finally:
+                conn.close()
+
     def delete_user(self, user_id: int) -> bool:
         """Delete a user and all their sessions. Returns True if found."""
         with self._lock:
