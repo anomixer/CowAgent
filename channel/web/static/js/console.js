@@ -10337,7 +10337,7 @@ function renderTeamMemberList(teamId, members) {
                             <td class="px-5 py-3">
                                 ${isOwner ? `
                                     <span class="text-xs px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 font-medium">${t('team_role_owner')}</span>
-                                ` : `
+                                ` : isAdmin ? `
                                     <select class="team-member-role-select text-xs rounded-lg border border-slate-200 dark:border-white/10 bg-transparent px-2 py-1
                                                   text-slate-600 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-primary-400/50"
                                             data-team-id="${teamId}" data-user-id="${m.user_id}"
@@ -10346,11 +10346,13 @@ function renderTeamMemberList(teamId, members) {
                                         <option value="admin" ${m.role === 'admin' ? 'selected' : ''}>${t('team_role_admin')}</option>
                                         <option value="member" ${m.role === 'member' ? 'selected' : ''}>${t('team_role_member')}</option>
                                     </select>
-                                    ${isSelf ? '<span class="text-xs text-slate-400 ml-1">(you)</span>' : ''}
+                                ` : `
+                                    <span class="text-xs px-2 py-0.5 rounded-full bg-slate-50 dark:bg-white/5 text-slate-500 dark:text-slate-400">${m.role === 'admin' ? t('team_role_admin') : t('team_role_member')}</span>
                                 `}
+                                ${isSelf && !isOwner ? '<span class="text-xs text-slate-400 ml-1">(you)</span>' : ''}
                             </td>
                             <td class="px-5 py-3 text-right">
-                                ${(!isOwner && !isSelf) ? `
+                                ${(!isOwner && !isSelf && isAdmin) ? `
                                     <button onclick="removeTeamMember(${teamId}, ${m.user_id}, '${escapeHtml(m.username || '')}')"
                                             class="text-xs text-red-400 hover:text-red-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-500/10" title="${t('team_remove_member')}">
                                         <i class="fas fa-user-minus"></i>
