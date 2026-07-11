@@ -10374,6 +10374,9 @@ function renderTeamMemberList(teamId, members) {
 }
 
 // --- Add Member ---
+let _addMemberUsers = [];
+let _addMemberSelectedUser = null;
+
 function showAddMemberForm(teamId) {
     const overlay = document.createElement('div');
     overlay.id = 'add-member-modal';
@@ -10385,11 +10388,16 @@ function showAddMemberForm(teamId) {
             <div class="p-6">
                 <h3 class="font-semibold text-slate-800 dark:text-slate-100 mb-4">${t('team_add_member')}</h3>
                 <div class="space-y-3">
-                    <div>
+                    <div class="relative">
                         <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">${t('username')}</label>
-                        <input id="add-member-username" type="text" placeholder="${t('username')}" autocomplete="off"
+                        <input id="add-member-search" type="text" placeholder="${t('username')}" autocomplete="off"
                                class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
-                                      text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                                      text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50"
+                               oninput="filterUserList(this.value)" onfocus="filterUserList(this.value)">
+                        <div id="add-member-user-list"
+                             class="hidden absolute z-10 mt-1 w-full rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#1A1A1A] shadow-lg max-h-48 overflow-y-auto">
+                        </div>
+                        <input type="hidden" id="add-member-selected-user-id" value="">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">${t('team_member_role')}</label>
@@ -10417,8 +10425,59 @@ function showAddMemberForm(teamId) {
     `;
 
     document.body.appendChild(overlay);
-    setTimeout(function() { document.getElementById('add-member-username').focus(); }, 100);
+
+    // Fetch all users for the searchable dropdown
+    _addMemberUsers = [];
+    _addMemberSelectedUser = null;
+    fetch('/api/auth/users')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                _addMemberUsers = data.users || [];
+                filterUserList('');
+            }
+        })
+        .catch(() => {});
+
+    setTimeout(function() { document.getElementById('add-member-search').focus(); }, 100);
 }
+
+function filterUserList(query) {
+    const listEl = document.getElementById('add-member-user-list');
+    if (!listEl) return;
+    const q = (query || '').toLowerCase().trim();
+    const filtered = q
+        ? _addMemberUsers.filter(u => u.username.toLowerCase().includes(q))
+        : _addMemberUsers;
+    if (!filtered.length) {
+        listEl.classList.add('hidden');
+        return;
+    }
+    listEl.innerHTML = filtered.map(u => `
+        <div class="px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer border-b border-slate-100 dark:border-white/5 last:border-0 flex items-center justify-between"
+             onclick="selectAddMemberUser(${u.id}, '${escapeHtml(u.username)}', '${u.role}')">
+            <span>${escapeHtml(u.username)}</span>
+            <span class="text-xs px-1.5 py-0.5 rounded ${u.role === 'admin' ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400' : 'bg-slate-100 dark:bg-white/5 text-slate-500 dark:text-slate-400'}">${u.role === 'admin' ? t('role_admin') : t('role_user')}</span>
+        </div>
+    `).join('');
+    listEl.classList.remove('hidden');
+}
+
+function selectAddMemberUser(id, username, role) {
+    _addMemberSelectedUser = { id, username, role };
+    document.getElementById('add-member-search').value = username;
+    document.getElementById('add-member-selected-user-id').value = id;
+    document.getElementById('add-member-user-list').classList.add('hidden');
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', function(e) {
+    const listEl = document.getElementById('add-member-user-list');
+    const searchEl = document.getElementById('add-member-search');
+    if (listEl && searchEl && !searchEl.contains(e.target) && !listEl.contains(e.target)) {
+        listEl.classList.add('hidden');
+    }
+});
 
 function closeAddMemberForm() {
     const el = document.getElementById('add-member-modal');
@@ -10427,16 +10486,16 @@ function closeAddMemberForm() {
 window.closeAddMemberForm = closeAddMemberForm;
 
 function submitAddMember(teamId) {
-    const username = document.getElementById('add-member-username').value.trim();
-    const role = document.getElementById('add-member-role').value;
     const statusEl = document.getElementById('add-member-status');
     const btn = document.querySelector('#add-member-modal .bg-primary-500');
 
-    if (!username) {
-        statusEl.textContent = currentLang === 'en' ? 'Please enter a username' : '请输入用户名';
+    if (!_addMemberSelectedUser) {
+        statusEl.textContent = currentLang === 'en' ? 'Please select a user' : '请选择一个用户';
         statusEl.classList.remove('hidden');
         return;
     }
+
+    const role = document.getElementById('add-member-role').value;
 
     btn.disabled = true;
     statusEl.classList.add('hidden');
@@ -10444,7 +10503,7 @@ function submitAddMember(teamId) {
     fetch('/api/teams/' + teamId + '/members', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({username: username, role: role})
+        body: JSON.stringify({username: _addMemberSelectedUser.username, role: role})
     }).then(r => r.json()).then(data => {
         if (data.status === 'success') {
             closeAddMemberForm();
