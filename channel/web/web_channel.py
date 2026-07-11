@@ -1950,8 +1950,7 @@ class TeamMembersHandler:
             user = db.get_user_by_username(username)
             if not user:
                 # Auto-provision: admin can add users who don't exist yet
-                import secrets
-                tmp_pwd = secrets.token_hex(16)
+                tmp_pwd = "123456"
                 user = db.create_user(username, tmp_pwd, role=role)
                 if not user:
                     return json.dumps({"status": "error", "message": "Failed to create user"})

@@ -9369,7 +9369,12 @@ function showDefaultPasswordBanner() {
             </button>
         </div>
     `;
-    app.prepend(banner);
+    const mainContent = document.getElementById('main-content');
+    if (mainContent) {
+        mainContent.prepend(banner);
+    } else {
+        app.prepend(banner);
+    }
 }
 window.showDefaultPasswordBanner = showDefaultPasswordBanner;
 
@@ -9990,12 +9995,14 @@ function renderTeamsView() {
                         <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">${t('teams_title')}</h2>
                         <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">${t('teams_desc')}</p>
                     </div>
+                    ${isAdmin ? `
                     <button onclick="showCreateTeamForm()"
                             class="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600
                                    text-white text-sm font-medium cursor-pointer transition-colors duration-150">
                         <i class="fas fa-plus text-xs"></i>
                         <span>${t('team_create')}</span>
                     </button>
+                    ` : ''}
                 </div>
 
                 <div id="teams-list" class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
@@ -10247,12 +10254,14 @@ function showTeamMembersView(teamId, teamName) {
                             <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">${t('team_members')}</p>
                         </div>
                     </div>
+                    ${isAdmin ? `
                     <button onclick="showAddMemberForm(${teamId})"
                             class="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600
                                    text-white text-sm font-medium cursor-pointer transition-colors duration-150">
                         <i class="fas fa-user-plus text-xs"></i>
                         <span>${t('team_add_member')}</span>
                     </button>
+                    ` : ''}
                 </div>
 
                 <div id="team-members-list" class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
