@@ -9767,6 +9767,7 @@ function renderUsersView() {
                     </button>
                 </div>
 
+                <p id="users-list-status" class="text-sm text-center opacity-0 transition-opacity duration-500 mb-3"></p>
                 <div id="users-list" class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
                     <div class="flex items-center justify-center py-20 text-slate-400">
                         <i class="fas fa-spinner fa-spin text-lg mr-2"></i> Loading...
@@ -9928,7 +9929,7 @@ function submitAddUser() {
         if (data.status === 'success') {
             closeAddUserForm();
             fetchUsers();
-            showStatus('add-user-btn', 'user_created', false);
+            showStatus('users-list-status', 'user_created', false);
         } else {
             statusEl.textContent = data.message || (currentLang === 'en' ? 'Failed to create user' : currentLang === 'zh-Hant' ? '建立使用者失敗' : '创建用户失败');
             statusEl.classList.remove('hidden');
