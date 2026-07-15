@@ -775,6 +775,18 @@ if (isMultiuserMode) {
 | **文件** | AGENTS.md Phase 3 更新 | 🟡 進行中 |
 | **分享** | 分享 UI 整合到前端（目前僅有後端 API） | 🟡 中 |
 
+##### ✅ Phase 3 sub: Team Member Leave（已完成）
+| 類別 | 項目 | 狀態 |
+|------|------|:----:|
+| **後端** | `TeamMemberLeaveHandler` + route `/api/teams/(.*)/members/leave` | ✅ |
+| **前端** | member list 踢人按鈕排除 admin（`m.role !== 'admin'`） | ✅ |
+| **前端** | 退出按鈕所有人都能退（最後一位 admin 隱藏退鈕改顯示提示） | ✅ |
+| **前端** | 最後一位 admin 顯示「唯一管理員，無法退出」 | ✅ |
+| **前端** | 跳脫字元修復：`can't` 被過度跳脫為 `can\\'t`，修正為 `can\'t` | ✅ |
+| **前端** | `submitAddMember()` 加 admin 警告：選 role=admin 時跳 `showConfirmModal()` 確認 | ✅ |
+
+---
+
 #### 🔲 Phase 4 — Prompt 繼承與 RBAC 擴充
 | 類別 | 項目 | 優先級 |
 |------|------|:------:|

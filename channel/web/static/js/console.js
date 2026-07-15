@@ -10344,6 +10344,7 @@ function renderTeamMemberList(teamId, members) {
     if (!listEl) return;
 
     const currentUserId = currentUser ? currentUser.id : null;
+    const adminCount = members.filter(m => m.role === 'admin').length;
 
     if (!members.length) {
         listEl.innerHTML = `
@@ -10371,6 +10372,8 @@ function renderTeamMemberList(teamId, members) {
                 ${members.map(m => {
                     const isSelf = m.user_id === currentUserId;
                     const isOwner = m.role === 'owner';
+                    const isMemberAdmin = m.role === 'admin';
+                    const isLastAdmin = isMemberAdmin && adminCount <= 1;
                     return `
                         <tr class="border-b border-slate-50 dark:border-white/5 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
                             <td class="px-5 py-3 text-slate-500 dark:text-slate-400">${m.user_id}</td>
@@ -10396,17 +10399,20 @@ function renderTeamMemberList(teamId, members) {
                                 ${isSelf && !isOwner ? '<span class="text-xs text-slate-400 ml-1">(you)</span>' : ''}
                             </td>
                             <td class="px-5 py-3 text-right">
-                                ${(!isOwner && !isSelf && isAdmin) ? `
+                                ${(!isOwner && !isSelf && isAdmin && m.role !== 'admin') ? `
                                     <button onclick="removeTeamMember(${teamId}, ${m.user_id}, '${escapeHtml(m.username || '')}')"
                                             class="text-xs text-red-400 hover:text-red-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-500/10" title="${t('team_remove_member')}">
                                         <i class="fas fa-user-minus"></i>
                                     </button>
                                 ` : ''}
-                                ${isSelf && !isOwner ? `
+                                ${isSelf && !isOwner && !isLastAdmin ? `
                                     <button onclick="leaveTeam(${teamId})"
                                             class="text-xs text-amber-400 hover:text-amber-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-amber-50 dark:hover:bg-amber-500/10" title="${t('team_leave')}">
                                         <i class="fas fa-sign-out-alt"></i>
                                     </button>
+                                ` : ''}
+                                ${isSelf && !isOwner && isLastAdmin ? `
+                                    <span class="text-xs text-slate-500 dark:text-slate-500 italic">${currentLang === 'en' ? 'Last admin, can\'t leave' : currentLang === 'zh-Hant' ? '唯一管理員，無法退出' : '唯一管理员，无法退出'}</span>
                                 ` : ''}
                             </td>
                         </tr>
@@ -10539,6 +10545,27 @@ function submitAddMember(teamId) {
         return;
     }
 
+    const role = document.getElementById('add-member-role').value;
+
+    // Admin warning: confirm before adding another admin
+    if (role === 'admin') {
+        const confirmMsg = currentLang === 'en'
+            ? '⚠️ Adding this admin means only they can leave the team themselves. You will not be able to remove them. Continue?'
+            : currentLang === 'zh-Hant'
+                ? '⚠️ 新增此管理員後，只有他能自己退出，你無法將其移除。確定要繼續？'
+                : '⚠️ 新增此管理员后，只有他能自己退出，你无法将其移除。确定要继续？';
+        showConfirmModal(
+            currentLang === 'en' ? 'Confirm Add Admin' : '确认添加管理员',
+            confirmMsg,
+            function() { doAddMemberFetch(teamId, btn, statusEl); }
+        );
+        return;
+    }
+
+    doAddMemberFetch(teamId, btn, statusEl);
+}
+
+function doAddMemberFetch(teamId, btn, statusEl) {
     const role = document.getElementById('add-member-role').value;
 
     btn.disabled = true;

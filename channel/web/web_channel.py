@@ -1315,6 +1315,7 @@ class WebChannel(ChatChannel):
             '/api/auth/users/(.*)', 'AdminUserDetailHandler',
             '/api/auth/users', 'AdminUsersHandler',
             '/api/auth/change-password', 'ChangePasswordHandler',
+            '/api/teams/(.*)/members/leave', 'TeamMemberLeaveHandler',
             '/api/teams/(.*)/members/(.*)', 'TeamMemberDetailHandler',
             '/api/teams/(.*)/members', 'TeamMembersHandler',
             '/api/teams/(.*)', 'TeamDetailHandler',
@@ -2024,6 +2025,46 @@ class TeamMemberDetailHandler:
             logger.info(f"[WebChannel] Admin '{admin['username']}' changed user id={uid} to role={new_role} in team id={tid}")
             return json.dumps({"status": "success"})
         return json.dumps({"status": "error", "message": "Member not found or role unchanged"})
+
+
+class TeamMemberLeaveHandler:
+    """POST → self-service leave team."""
+
+    def POST(self, team_id: str):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        user = self._auth()
+        try:
+            tid = int(team_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid team ID"})
+
+        db = get_multiuser_db()
+        team = db.get_team(tid)
+        if not team:
+            return json.dumps({"status": "error", "message": "Team not found"})
+
+        # Check membership
+        members = db.list_team_members(tid)
+        member_ids = [m["user_id"] for m in members]
+        if user["id"] not in member_ids:
+            return json.dumps({"status": "error", "message": "You are not a member of this team"})
+
+        # Cannot leave if you're the owner
+        for m in members:
+            if m["user_id"] == user["id"] and m["role"] == "owner":
+                return json.dumps({"status": "error", "message": "Team owner cannot leave the team"})
+
+        if db.remove_team_member(tid, user["id"]):
+            logger.info(f"[WebChannel] User '{user['username']}' left team id={tid}")
+            return json.dumps({"status": "success"})
+        return json.dumps({"status": "error", "message": "Cannot leave. You are the last admin in the team."})
+
+    def _auth(self):
+        if is_multiuser_enabled():
+            return require_login()
+        else:
+            _require_auth()
+            return {"id": 0, "username": "admin", "role": "admin"}
 
 
 class MessageHandler:
