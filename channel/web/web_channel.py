@@ -122,13 +122,19 @@ def _get_query_token():
 
 def _check_auth():
     """Return True if request is authenticated or password not enabled."""
+    if is_multiuser_enabled():
+        # Multiuser mode: web_password is bypassed entirely.
+        # Authentication is handled by mu_session (RequireLogin / RequireAdmin).
+        return True
     if not _is_password_enabled():
         return True
     if _verify_auth_token(web.cookies().get("cow_auth_token", "")):
         return True
     if _verify_auth_token(_get_bearer_token()):
         return True
-    return _verify_auth_token(_get_query_token())
+    if _verify_auth_token(_get_query_token()):
+        return True
+    return False
 
 
 def _require_auth():
@@ -2464,6 +2470,7 @@ class ConfigHandler:
                 "api_bases": api_bases,
                 "api_keys": api_keys_masked,
                 "providers": providers,
+                "multiuser": is_multiuser_enabled(),
                 "web_password_masked": masked_pwd,
             }
             # The desktop app runs on the local trusted machine, so it can edit
@@ -2484,6 +2491,10 @@ class ConfigHandler:
             updates = data.get("updates", {})
             if not updates:
                 return json.dumps({"status": "error", "message": "no updates provided"})
+
+            # Multi-user mode: never allow web_password to be changed via config
+            if is_multiuser_enabled():
+                updates.pop("web_password", None)
 
             local_config = conf()
             applied = {}

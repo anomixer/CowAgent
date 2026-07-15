@@ -390,6 +390,47 @@ web.setcookie(
 }
 ```
 
+### `_check_auth()` — web_password 繞過
+
+在 multiuser 模式下，`_check_auth()` 在**最頂頭**就回傳 `True`，完全繞過 `web_password` 的檢查邏輯：
+
+```python
+def _check_auth():
+    if is_multiuser_enabled():
+        # Multiuser mode: web_password is bypassed entirely.
+        # Authentication is handled by mu_session (RequireLogin / RequireAdmin).
+        return True
+    ...
+```
+
+這確保了：
+- `ConfigHandler`、`KnowledgeListHandler` 等由 `@_require_auth()` 保護的 handler，在 multiuser 模式下不再檢查 `cow_auth_token`，統一交由 `mu_session` cookie 管理
+- 原有的 `get_current_user()` fallback 邏輯已移除（已被頂頭 bypass 取代，更乾淨）
+- Legacy 模式下行為完全不變
+
+### `ConfigHandler.GET` — 新增 `multiuser` 標誌
+
+```json
+{
+  "status": "success",
+  "multiuser": true,
+  "web_password_masked": "...",
+  ...
+}
+```
+
+前端 `initConfigView()` 可用 `data.multiuser`（或全域 `isMultiuserMode`）判斷是否要灰掉密碼欄位。
+
+### `ConfigHandler.POST` — 安全閥
+
+```python
+# Multi-user mode: never allow web_password to be changed via config
+if is_multiuser_enabled():
+    updates.pop("web_password", None)
+```
+
+即使前端繞過 UI 直接發送 `web_password` 更新，後端也會靜默忽略，多一層防護。
+
 #### `AuthLoginHandler.POST`
 
 根據 `is_multiuser_enabled()` 自動決定驗證方式：
@@ -650,6 +691,24 @@ let isAdmin = false;          // 是否有管理權限
 - 修改密碼表單（舊密碼 → 新密碼 → 確認新密碼）
 - `submitPasswordChange()` — 呼叫 `POST /api/auth/change-password`
 
+**安全設定頁面灰化（Settings → 訪問密碼）**
+
+Multiuser 模式下，`initConfigView()` 會以全域 `isMultiuserMode` 變數判斷，自動灰化 `web_password` 相關元件：
+
+```javascript
+if (isMultiuserMode) {
+    pwdInput.disabled = true;           // 輸入框無法編輯
+    pwdInput.placeholder = '由多使用者帳密管理';
+    pwdInput.classList.add('opacity-50', 'cursor-not-allowed');
+    pwdSaveBtn.classList.add('hidden'); // 隱藏存檔按鈕
+    // 提示文字改為「密碼驗證由多使用者帳號系統管理」
+}
+```
+
+安全閥還包含：
+- `savePasswordConfig()` 頂頭 `if (isMultiuserMode) return;` 直接跳過
+- ConfigHandler.POST 後端 `updates.pop("web_password", None)` 雙重防護
+
 ---
 
 ## 11. 已修改檔案索引
@@ -666,9 +725,9 @@ let isAdmin = false;          // 是否有管理權限
 
 | 檔案 | +/- 行 | 說明 |
 |------|--------|------|
-| `channel/web/web_channel.py` | +347/-6 | 新增 8 個 handler（含 KnowledgeShare）+ route + import + SessionsHandler 隔離 |
+| `channel/web/web_channel.py` | +353/-9 | 新增 8 個 handler（含 KnowledgeShare）+ route + import + SessionsHandler 隔離 + `_check_auth()` 頂頭 bypass + ConfigHandler multiuser 標誌 + POST 安全閥 |
 | `channel/web/chat.html` | +113/-0 | 登入/註冊 UI、使用者選單、admin view、profile view 容器 |
-| `channel/web/static/js/console.js` | +661/-29 | 完整前端邏輯：雙模式登入、使用者管理、修改密碼、i18n 翻譯 |
+| `channel/web/static/js/console.js` | +680/-29 | 完整前端邏輯：雙模式登入、使用者管理、修改密碼、i18n 翻譯、Settings 密碼欄位灰化 + `savePasswordConfig()` 安全跳過 |
 | `bridge/agent_bridge.py` | +12/-3 | `_pre_persist_user_message` + `_persist_messages` 串接 user_id |
 | `agent/memory/conversation_store.py` | +9/-0 | `append_messages` 新增 `user_id` 參數 |
 | `agent/memory/storage.py` | +70/-4 | 所有搜尋方法（vector/FTS5/like/trigram）新增 `shared_user_ids` 參數 |

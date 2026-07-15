@@ -4820,31 +4820,63 @@ function initConfigView(data) {
         );
     }
 
+    // Multi-user mode: grey out the web_password field entirely
     const pwdInput = document.getElementById('cfg-password');
-    const maskedPwd = data.web_password_masked || '';
-    pwdInput.value = maskedPwd;
-    pwdInput.dataset.masked = maskedPwd ? '1' : '';
-    pwdInput.dataset.maskedVal = maskedPwd;
-    pwdInput.classList.toggle('cfg-key-masked', !!maskedPwd);
+    const pwdSaveBtn = document.getElementById('cfg-password-save');
+    const pwdHint = document.querySelector('#cfg-password')?.closest('div')?.querySelector('.cfg-hint');
+    const pwdStatus = document.getElementById('cfg-password-status');
 
-    if (maskedPwd) {
-        pwdInput.placeholder = '••••••••';
+    if (isMultiuserMode) {
+        pwdInput.disabled = true;
+        pwdInput.value = '';
+        pwdInput.placeholder = currentLang === 'en'
+            ? 'Managed by multi-user accounts'
+            : currentLang === 'zh-Hant'
+            ? '由多使用者帳密管理'
+            : '由多用户帐密管理';
+        pwdInput.classList.add('opacity-50', 'cursor-not-allowed');
+        if (pwdSaveBtn) pwdSaveBtn.classList.add('hidden');
+        if (pwdStatus) pwdStatus.classList.add('hidden');
+        // Update hint text
+        const hintEl = pwdInput.closest('div')?.querySelector('p');
+        if (hintEl) {
+            hintEl.textContent = currentLang === 'en'
+                ? 'Password authentication is handled by multi-user accounts. Not applicable here.'
+                : currentLang === 'zh-Hant'
+                ? '密碼驗證由多使用者帳號系統管理，此欄位不適用。'
+                : '密码验证由多用户账号系统管理，此字段不适用。';
+        }
     } else {
-        pwdInput.placeholder = '';
-    }
+        pwdInput.disabled = false;
+        pwdInput.classList.remove('opacity-50', 'cursor-not-allowed');
+        if (pwdSaveBtn) pwdSaveBtn.classList.remove('hidden');
+        if (pwdStatus) pwdStatus.classList.remove('hidden');
 
-    if (!pwdInput._cfgBound) {
-        pwdInput.addEventListener('focus', function() {
-            if (this.dataset.masked === '1') {
-                this.value = '';
+        const maskedPwd = data.web_password_masked || '';
+        pwdInput.value = maskedPwd;
+        pwdInput.dataset.masked = maskedPwd ? '1' : '';
+        pwdInput.dataset.maskedVal = maskedPwd;
+        pwdInput.classList.toggle('cfg-key-masked', !!maskedPwd);
+
+        if (maskedPwd) {
+            pwdInput.placeholder = '••••••••';
+        } else {
+            pwdInput.placeholder = '';
+        }
+
+        if (!pwdInput._cfgBound) {
+            pwdInput.addEventListener('focus', function() {
+                if (this.dataset.masked === '1') {
+                    this.value = '';
+                    this.dataset.masked = '';
+                    this.classList.remove('cfg-key-masked');
+                }
+            });
+            pwdInput.addEventListener('input', function() {
                 this.dataset.masked = '';
-                this.classList.remove('cfg-key-masked');
-            }
-        });
-        pwdInput.addEventListener('input', function() {
-            this.dataset.masked = '';
-        });
-        pwdInput._cfgBound = true;
+            });
+            pwdInput._cfgBound = true;
+        }
     }
 }
 
@@ -5088,6 +5120,9 @@ function saveAgentConfig() {
 }
 
 function savePasswordConfig() {
+    // Multi-user mode: web_password is managed by accounts, skip entirely
+    if (isMultiuserMode) return;
+
     const input = document.getElementById('cfg-password');
     if (input.dataset.masked === '1') {
         showStatus('cfg-password-status', 'config_saved', false);
