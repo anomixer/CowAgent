@@ -9420,6 +9420,9 @@ function setupUserMenu(user) {
     const roleEl = document.getElementById('user-menu-role');
     const adminLink = document.getElementById('user-menu-admin-link');
     const sidebarUsers = document.getElementById('sidebar-users');
+    const sidebarModels = document.getElementById('sidebar-models');
+    const sidebarSkills = document.getElementById('sidebar-skills');
+    const sidebarLogs = document.getElementById('sidebar-logs');
 
     avatar.textContent = (user.username.charAt(0) || 'U').toUpperCase();
     nameEl.textContent = user.username;
@@ -9429,6 +9432,9 @@ function setupUserMenu(user) {
     const isAdm = user.role === 'admin';
     if (adminLink) adminLink.classList.toggle('hidden', !isAdm);
     if (sidebarUsers) sidebarUsers.classList.toggle('hidden', !isAdm);
+    if (sidebarModels) sidebarModels.classList.toggle('hidden', !isAdm);
+    if (sidebarSkills) sidebarSkills.classList.toggle('hidden', !isAdm);
+    if (sidebarLogs) sidebarLogs.classList.toggle('hidden', !isAdm);
 
     // Show user menu, hide legacy logout button
     document.getElementById('user-menu').classList.remove('hidden');
