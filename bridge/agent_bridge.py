@@ -485,7 +485,8 @@ class AgentBridge:
                 cancel_event = registry.register(token_key, session_id=session_id)
 
             # Get agent for this session (will auto-initialize if needed)
-            agent = self.get_agent(session_id=session_id)
+            # Pass ctx_user_id for per-user memory and prompt scoping
+            agent = self.get_agent(session_id=session_id, user_id=ctx_user_id)
             if not agent:
                 return Reply(ReplyType.ERROR, "Failed to initialize super agent")
             

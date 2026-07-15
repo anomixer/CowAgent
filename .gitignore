@@ -1,5 +1,13 @@
 # Runtime data
 channel/sessions/
+*.log
+tmp/
+
+# Plugin runtime configs
+plugins/banwords/config.json
+plugins/godcmd/config.json
+plugins/keyword/config.json
+plugins/plugins.json
 
 # Python
 __pycache__/

@@ -772,7 +772,7 @@ if (isMultiuserMode) {
 | **API** | Team CRUD API + Prompt API handlers | 🔴 待做 |
 | **Bridge** | Global + User 提示詞合併 | 🔴 待做 |
 | **前端** | Team 管理 UI + Prompt 編輯器 | 🔴 待做 |
-| **文件** | AGENTS.md Phase 3 更新 | 🟡 進行中 |
+| **文件** | AGENTS.md Phase 3 更新 | 🟢 完成 |
 | **分享** | 分享 UI 整合到前端（目前僅有後端 API） | 🟡 中 |
 
 ##### ✅ Phase 3 sub: Team Member Leave（已完成）
@@ -784,6 +784,17 @@ if (isMultiuserMode) {
 | **前端** | 最後一位 admin 顯示「唯一管理員，無法退出」 | ✅ |
 | **前端** | 跳脫字元修復：`can't` 被過度跳脫為 `can\\'t`，修正為 `can\'t` | ✅ |
 | **前端** | `submitAddMember()` 加 admin 警告：選 role=admin 時跳 `showConfirmModal()` 確認 | ✅ |
+
+##### ✅ Phase 3 sub: Per-user Memory & Language（已完成）
+| 類別 | 項目 | 狀態 |
+|------|------|:----:|
+| **後端** | `MemorySearchTool` 初始化傳入 `user_id`（`agent_initializer.py`） | ✅ |
+| **後端** | `agent_bridge.py` 呼叫 `get_agent()` 傳遞 `ctx_user_id` | ✅ |
+| **後端** | `UserConfigHandler` — `GET/PUT /api/auth/my-config` 讀寫 `mu_user_configs` | ✅ |
+| **後端** | route 註冊 `/api/auth/my-config` | ✅ |
+| **前端** | `syncLanguageToBackend()` multiuser 模式改用 `PUT /api/auth/my-config` | ✅ |
+| **前端** | `loadUserLanguage()` — 登入後從後端載入使用者語言偏好 | ✅ |
+| **前端** | Login / 註冊 / Auth check 三處皆呼叫 `loadUserLanguage()` | ✅ |
 
 ---
 

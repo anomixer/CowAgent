@@ -1312,6 +1312,7 @@ class WebChannel(ChatChannel):
             '/auth/logout', 'AuthLogoutHandler',
             '/api/auth/register', 'RegisterHandler',
             '/api/auth/me', 'MeHandler',
+            '/api/auth/my-config', 'UserConfigHandler',
             '/api/auth/users/(.*)', 'AdminUserDetailHandler',
             '/api/auth/users', 'AdminUsersHandler',
             '/api/auth/change-password', 'ChangePasswordHandler',
@@ -1610,6 +1611,45 @@ class MeHandler:
         if not user:
             return json.dumps({"status": "error", "message": "Not logged in"})
         return json.dumps({"status": "success", "user": user})
+
+
+class UserConfigHandler:
+    """Per-user config (e.g. language preference)."""
+
+    def GET(self):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        if not is_multiuser_enabled():
+            return json.dumps({"status": "error", "message": "Multi-user mode not enabled"})
+        user = get_current_user()
+        if not user:
+            return json.dumps({"status": "error", "message": "Not logged in"})
+        key = web.input().get('key')
+        if not key:
+            return json.dumps({"status": "error", "message": "key parameter required"})
+        db = get_multiuser_db()
+        value = db.get_user_config(user['id'], key)
+        return json.dumps({"status": "success", "key": key, "value": value})
+
+    def PUT(self):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        if not is_multiuser_enabled():
+            return json.dumps({"status": "error", "message": "Multi-user mode not enabled"})
+        user = get_current_user()
+        if not user:
+            return json.dumps({"status": "error", "message": "Not logged in"})
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+        key = data.get('key')
+        value = data.get('value')
+        if not key or value is None:
+            return json.dumps({"status": "error", "message": "key and value required"})
+        db = get_multiuser_db()
+        ok = db.set_user_config(user['id'], key, str(value))
+        if ok:
+            return json.dumps({"status": "success"})
+        return json.dumps({"status": "error", "message": "Failed to save config"})
 
 
 class AdminUsersHandler:

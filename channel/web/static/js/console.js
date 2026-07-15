@@ -1027,20 +1027,50 @@ function setLanguage(lang) {
     });
 }
 
-// Persist the language to the backend `cow_lang` config (best-effort; the UI
-// has already switched locally, so a network failure is non-blocking).
+// Persist the language to the backend (best-effort; the UI has already
+// switched locally, so a network failure is non-blocking).
+// In multi-user mode, stores per-user via /api/auth/my-config.
+// In legacy mode, stores globally via /config.
 function syncLanguageToBackend(lang, callback) {
     try {
-        fetch('/config', {
-            method: 'POST',
+        const url = isMultiuserMode
+            ? '/api/auth/my-config'
+            : '/config';
+        const body = isMultiuserMode
+            ? JSON.stringify({ key: 'cow_lang', value: lang })
+            : JSON.stringify({ updates: { cow_lang: lang } });
+        fetch(url, {
+            method: isMultiuserMode ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ updates: { cow_lang: lang } })
+            body: body
         })
         .then(() => { if (callback) callback(); })
         .catch(() => { if (callback) callback(); });
     } catch (e) {
         if (callback) callback();
     }
+}
+
+// Load the current user's language preference from backend and apply it.
+// Called after login / auth check so each user sees their own language.
+function loadUserLanguage() {
+    if (!isMultiuserMode || !currentUser) return;
+    fetch('/api/auth/my-config?key=cow_lang')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success' && data.value) {
+                const lang = data.value;
+                if (lang !== currentLang) {
+                    currentLang = lang;
+                    localStorage.setItem('cow_lang', lang);
+                    applyI18n();
+                    _applyInputTooltips();
+                    try { updateLangControls(); } catch (e) {}
+                    try { rerenderDynamicViews(); } catch (e) {}
+                }
+            }
+        })
+        .catch(() => {});
 }
 
 // Reflect the current language on both the top-right toggle and the config
@@ -9531,6 +9561,7 @@ function showLoginScreen() {
                     isMultiuserMode = true;
                     isAdmin = data.user.role === 'admin';
                     setupUserMenu(data.user);
+                    loadUserLanguage();
                 } else {
                     // Single-user mode: assign a default user so teams/profile views work
                     currentUser = { id: 0, username: 'admin', role: 'admin' };
@@ -9604,6 +9635,7 @@ function showLoginScreen() {
                         isMultiuserMode = true;
                         isAdmin = data.user.role === 'admin';
                         setupUserMenu(data.user);
+                        loadUserLanguage();
                     }
                     initApp();
                 }, 800);
@@ -10657,6 +10689,7 @@ fetch('/auth/check').then(r => r.json()).then(data => {
                 isMultiuserMode = true;
                 isAdmin = data.user.role === 'admin';
                 setupUserMenu(data.user);
+                loadUserLanguage();
             } else {
                 // Single-user mode: assign a default user so teams/profile views work
                 currentUser = { id: 0, username: 'admin', role: 'admin' };

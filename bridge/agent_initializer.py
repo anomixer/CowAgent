@@ -74,7 +74,7 @@ class AgentInitializer:
             logger.info(f"[AgentInitializer] Workspace initialized at: {workspace_root}")
         
         # Setup memory system
-        memory_manager, memory_tools = self._setup_memory_system(workspace_root, session_id)
+        memory_manager, memory_tools = self._setup_memory_system(workspace_root, session_id, user_id=user_id)
         
         # Load tools
         tools = self._load_tools(workspace_root, memory_manager, memory_tools, session_id)
@@ -322,9 +322,15 @@ class AgentInitializer:
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to load .env file: {e}")
     
-    def _setup_memory_system(self, workspace_root: str, session_id: Optional[str] = None):
+    def _setup_memory_system(self, workspace_root: str, session_id: Optional[str] = None,
+                              user_id: Optional[int] = None):
         """
         Setup memory system
+        
+        Args:
+            workspace_root: Root directory for workspace
+            session_id: Session identifier
+            user_id: User ID for scoped memory search (multi-user mode)
         
         Returns:
             (memory_manager, memory_tools) tuple
@@ -346,8 +352,10 @@ class AgentInitializer:
             memory_manager = MemoryManager(memory_config, embedding_provider=embedding_provider)
             self._sync_memory(memory_manager, session_id)
 
+            # Convert user_id to string for MemorySearchTool if present
+            user_id_str = str(user_id) if user_id is not None else None
             memory_tools = [
-                MemorySearchTool(memory_manager),
+                MemorySearchTool(memory_manager, user_id=user_id_str),
                 MemoryGetTool(memory_manager)
             ]
             
