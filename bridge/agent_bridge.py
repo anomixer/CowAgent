@@ -391,7 +391,7 @@ class AgentBridge:
     
     def _init_agent_for_session(self, session_id: str, user_id: Optional[int] = None, team_ids: Optional[List[int]] = None):
         """Initialize agent for a specific session"""
-        agent = self.initializer.initialize_agent(session_id=session_id, user_id=user_id)
+        agent = self.initializer.initialize_agent(session_id=session_id, user_id=user_id, team_ids=team_ids)
         self.agents[session_id] = agent
 
     def sync_session_messages_from_store(self, session_id: str) -> int:
@@ -485,8 +485,9 @@ class AgentBridge:
                 cancel_event = registry.register(token_key, session_id=session_id)
 
             # Get agent for this session (will auto-initialize if needed)
-            # Pass ctx_user_id for per-user memory and prompt scoping
-            agent = self.get_agent(session_id=session_id, user_id=ctx_user_id)
+            # Pass ctx_user_id for per-user memory and prompt scoping,
+            # and ctx_team_ids for team-scoped knowledge inclusion.
+            agent = self.get_agent(session_id=session_id, user_id=ctx_user_id, team_ids=ctx_team_ids)
             if not agent:
                 return Reply(ReplyType.ERROR, "Failed to initialize super agent")
             

@@ -5788,18 +5788,23 @@ class KnowledgeShareHandler:
             user = require_login()
             body = json.loads(web.data() or b"{}")
             shared_with_id = body.get("shared_with_id")
+            shared_with_username = body.get("shared_with_username")
             permission = body.get("permission", "read")
 
-            if not shared_with_id:
-                return json.dumps({"status": "error", "message": "shared_with_id is required"})
+            # Resolve target user: either by shared_with_id or shared_with_username
+            target = None
+            if shared_with_id is not None:
+                shared_with_id = int(shared_with_id)
+                target = db.get_user_by_id(shared_with_id)
+            elif shared_with_username:
+                target = db.get_user_by_username(str(shared_with_username).strip())
 
-            shared_with_id = int(shared_with_id)
-            if shared_with_id == user["id"]:
-                return json.dumps({"status": "error", "message": "Cannot share with yourself"})
-
-            target = db.get_user_by_id(shared_with_id)
             if not target:
                 return json.dumps({"status": "error", "message": "Target user not found"})
+
+            shared_with_id = target["id"]
+            if shared_with_id == user["id"]:
+                return json.dumps({"status": "error", "message": "Cannot share with yourself"})
 
             result = db.create_share(user["id"], shared_with_id, permission)
             if result is None:

@@ -980,6 +980,10 @@
                                                 class="knowledge-tab px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-colors duration-150">
                                             <i class="fas fa-diagram-project mr-1.5"></i><span data-i18n="knowledge_tab_graph">图谱</span>
                                         </button>
+                                        <button id="knowledge-tab-shares" onclick="switchKnowledgeTab('shares')"
+                                                class="knowledge-tab px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-colors duration-150">
+                                            <i class="fas fa-share-nodes mr-1.5"></i><span data-i18n="knowledge_tab_shares">分享</span>
+                                        </button>
                                     </div>
                                     <div id="knowledge-new-menu" class="relative">
                                         <button onclick="toggleKnowledgeNewMenu(event)"
@@ -1071,6 +1075,11 @@
                                 <div class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
                                     <div id="knowledge-graph-container" class="w-full h-[60vh] md:h-[calc(100vh-220px)]"></div>
                                 </div>
+                            </div>
+
+                            <!-- Shares panel -->
+                            <div id="knowledge-panel-shares" class="hidden">
+                                <!-- Rendered dynamically by renderKnowledgeShares() -->
                             </div>
 
                         </div>

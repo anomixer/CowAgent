@@ -314,6 +314,33 @@ const I18N = {
         user_created: '用户已创建',
         user_deleted: '用户已删除',
         user_updated: '用户已更新',
+        /* Prompt editor */
+        prompt_editor_title: '系统提示词',
+        prompt_editor_desc: '自定义你的系统提示词，会附加到 AI 的系统提示中',
+        prompt_template_label: '提示词模板',
+        prompt_template_placeholder: '在此输入自定义提示词…',
+        prompt_save: '保存提示词',
+        prompt_saved: '提示词已保存',
+        prompt_save_error: '提示词保存失败',
+        prompt_clear: '清除提示词',
+        prompt_cleared: '提示词已清除',
+        /* Knowledge shares */
+        knowledge_tab_shares: '分享',
+        shares_title: '知识库分享',
+        shares_desc: '与其他用户分享你的知识库',
+        shares_by_me: '我分享的',
+        shares_with_me: '分享给我的',
+        shares_no_shares: '暂无分享',
+        share_add: '添加分享',
+        share_delete: '取消分享',
+        share_confirm_delete: '确定取消分享？',
+        share_select_user: '选择用户',
+        share_select_user_placeholder: '输入用户名…',
+        share_created: '分享已创建',
+        share_deleted: '分享已取消',
+        share_add_error: '添加分享失败',
+        share_delete_error: '取消分享失败',
+        share_load_error: '加载分享列表失败',
     },
     'zh-Hant': {
 
@@ -619,6 +646,33 @@ const I18N = {
         user_created: '使用者已建立',
         user_deleted: '使用者已刪除',
         user_updated: '使用者已更新',
+        /* Prompt editor */
+        prompt_editor_title: '系統提示詞',
+        prompt_editor_desc: '自訂你的系統提示詞，會附加到 AI 的系統提示中',
+        prompt_template_label: '提示詞模板',
+        prompt_template_placeholder: '在此輸入自訂提示詞…',
+        prompt_save: '儲存提示詞',
+        prompt_saved: '提示詞已儲存',
+        prompt_save_error: '提示詞儲存失敗',
+        prompt_clear: '清除提示詞',
+        prompt_cleared: '提示詞已清除',
+        /* Knowledge shares */
+        knowledge_tab_shares: '分享',
+        shares_title: '知識庫分享',
+        shares_desc: '與其他使用者分享你的知識庫',
+        shares_by_me: '我分享的',
+        shares_with_me: '分享給我的',
+        shares_no_shares: '暫無分享',
+        share_add: '新增分享',
+        share_delete: '取消分享',
+        share_confirm_delete: '確定取消分享？',
+        share_select_user: '選擇使用者',
+        share_select_user_placeholder: '輸入使用者名稱…',
+        share_created: '分享已建立',
+        share_deleted: '分享已取消',
+        share_add_error: '新增分享失敗',
+        share_delete_error: '取消分享失敗',
+        share_load_error: '載入分享清單失敗',
         },
     en: {
         console: 'Console',
@@ -923,6 +977,33 @@ const I18N = {
         user_created: 'User created successfully',
         user_deleted: 'User deleted',
         user_updated: 'User updated',
+        /* Prompt editor */
+        prompt_editor_title: 'System Prompt',
+        prompt_editor_desc: 'Customize your system prompt template, appended to the AI system prompt',
+        prompt_template_label: 'Prompt Template',
+        prompt_template_placeholder: 'Enter your custom prompt here…',
+        prompt_save: 'Save Prompt',
+        prompt_saved: 'Prompt saved',
+        prompt_save_error: 'Failed to save prompt',
+        prompt_clear: 'Clear Prompt',
+        prompt_cleared: 'Prompt cleared',
+        /* Knowledge shares */
+        knowledge_tab_shares: 'Shares',
+        shares_title: 'Knowledge Shares',
+        shares_desc: 'Share your knowledge base with other users',
+        shares_by_me: 'Shared by Me',
+        shares_with_me: 'Shared with Me',
+        shares_no_shares: 'No shares yet',
+        share_add: 'Add Share',
+        share_delete: 'Remove Share',
+        share_confirm_delete: 'Are you sure you want to remove this share?',
+        share_select_user: 'Select User',
+        share_select_user_placeholder: 'Enter username…',
+        share_created: 'Share created',
+        share_deleted: 'Share removed',
+        share_add_error: 'Failed to add share',
+        share_delete_error: 'Failed to remove share',
+        share_load_error: 'Failed to load shares',
     }
 };
 
@@ -9125,15 +9206,24 @@ function switchKnowledgeTab(tab) {
 
     const docsPanel = document.getElementById('knowledge-panel-docs');
     const graphPanel = document.getElementById('knowledge-panel-graph');
+    const sharesPanel = document.getElementById('knowledge-panel-shares');
+
+    // Hide all panels first
+    docsPanel.classList.add('hidden');
+    graphPanel.classList.add('hidden');
+    if (sharesPanel) sharesPanel.classList.add('hidden');
 
     if (tab === 'docs') {
         docsPanel.classList.remove('hidden');
-        graphPanel.classList.add('hidden');
-    } else {
-        docsPanel.classList.add('hidden');
+    } else if (tab === 'graph') {
         graphPanel.classList.remove('hidden');
         if (!_knowledgeGraphLoaded) {
             loadKnowledgeGraph();
+        }
+    } else if (tab === 'shares') {
+        if (sharesPanel) {
+            sharesPanel.classList.remove('hidden');
+            renderKnowledgeShares();
         }
     }
 }
@@ -9776,9 +9866,39 @@ function renderProfileView() {
                         </button>
                     </div>
                 </div>
+
+                <div class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-6">
+                    <h3 class="font-semibold text-slate-700 dark:text-slate-200 mb-4">${t('prompt_editor_title')}</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">${t('prompt_editor_desc')}</p>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">${t('prompt_template_label')}</label>
+                            <textarea id="profile-prompt-text"
+                                      placeholder="${t('prompt_template_placeholder')}"
+                                      class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                             text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50
+                                             resize-y min-h-[120px] max-h-[400px] font-mono leading-relaxed"></textarea>
+                        </div>
+                        <p id="profile-prompt-status" class="text-sm opacity-0 transition-opacity duration-300"></p>
+                        <div class="flex gap-2">
+                            <button onclick="savePromptTemplate()"
+                                    class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium
+                                           cursor-pointer transition-colors duration-150 disabled:opacity-50">
+                                ${t('prompt_save')}
+                            </button>
+                            <button onclick="clearPromptTemplate()"
+                                    class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm font-medium
+                                           cursor-pointer transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-white/5">
+                                ${t('prompt_clear')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     `;
+    // Load saved prompt
+    loadPromptTemplate();
 }
 
 function submitPasswordChange() {
@@ -11090,3 +11210,280 @@ document.getElementById('task-edit-modal-delete').addEventListener('click', dele
 document.getElementById('task-edit-modal-overlay').addEventListener('click', function(e) {
     if (e.target === this) closeTaskEditModal();
 });
+
+// =====================================================================
+// Prompt Editor
+// =====================================================================
+function loadPromptTemplate() {
+    const textarea = document.getElementById('profile-prompt-text');
+    if (!textarea) return;
+    if (!isMultiuserMode || !currentUser) return;
+    fetch('/api/auth/my-config?key=prompt_template')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success' && data.value) {
+                textarea.value = data.value;
+            }
+        })
+        .catch(() => {});
+}
+
+function savePromptTemplate() {
+    const textarea = document.getElementById('profile-prompt-text');
+    const statusEl = document.getElementById('profile-prompt-status');
+    if (!textarea || !statusEl) return;
+    const value = textarea.value.trim();
+    fetch('/api/auth/my-config', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key: 'prompt_template', value: value})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            statusEl.textContent = t('prompt_saved');
+            statusEl.className = 'text-sm text-green-500 opacity-100';
+        } else {
+            statusEl.textContent = data.message || t('prompt_save_error');
+            statusEl.className = 'text-sm text-red-500 opacity-100';
+        }
+    })
+    .catch(() => {
+        statusEl.textContent = t('prompt_save_error');
+        statusEl.className = 'text-sm text-red-500 opacity-100';
+    });
+    setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+}
+window.savePromptTemplate = savePromptTemplate;
+
+function clearPromptTemplate() {
+    const textarea = document.getElementById('profile-prompt-text');
+    const statusEl = document.getElementById('profile-prompt-status');
+    if (!textarea || !statusEl) return;
+    textarea.value = '';
+    fetch('/api/auth/my-config', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key: 'prompt_template', value: ''})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            statusEl.textContent = t('prompt_cleared');
+            statusEl.className = 'text-sm text-green-500 opacity-100';
+        } else {
+            statusEl.textContent = data.message || t('prompt_save_error');
+            statusEl.className = 'text-sm text-red-500 opacity-100';
+        }
+    })
+    .catch(() => {
+        statusEl.textContent = t('prompt_save_error');
+        statusEl.className = 'text-sm text-red-500 opacity-100';
+    });
+    setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+}
+window.clearPromptTemplate = clearPromptTemplate;
+
+// =====================================================================
+// Knowledge Share Management
+// =====================================================================
+function renderKnowledgeShares() {
+    const container = document.getElementById('knowledge-panel-shares');
+    if (!container) return;
+    if (!isMultiuserMode || !currentUser) {
+        container.innerHTML = '<div class="flex items-center justify-center py-20 text-slate-400 text-sm">' +
+            t('shares_no_shares') + '</div>';
+        return;
+    }
+    container.innerHTML = `
+        <div class="flex-1 min-h-0 overflow-y-auto p-4 md:p-0">
+            <div class="w-full max-w-[1600px] mx-auto">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 md:mb-6">
+                    <div>
+                        <h3 class="text-lg font-bold text-slate-800 dark:text-slate-100">${t('shares_title')}</h3>
+                        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">${t('shares_desc')}</p>
+                    </div>
+                    <button onclick="showAddShareDialog()"
+                            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-xs font-medium cursor-pointer transition-colors">
+                        <i class="fas fa-plus"></i> ${t('share_add')}
+                    </button>
+                </div>
+
+                <!-- Shared by me -->
+                <div class="mb-6">
+                    <h4 class="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-3">${t('shares_by_me')}</h4>
+                    <div id="shares-owned-list" class="space-y-2">
+                        <div class="text-center py-8 text-slate-400 text-sm">${t('shares_no_shares')}</div>
+                    </div>
+                </div>
+
+                <!-- Shared with me -->
+                <div>
+                    <h4 class="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-3">${t('shares_with_me')}</h4>
+                    <div id="shares-received-list" class="space-y-2">
+                        <div class="text-center py-8 text-slate-400 text-sm">${t('shares_no_shares')}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    fetchKnowledgeShares();
+}
+
+function fetchKnowledgeShares() {
+    fetch('/api/knowledge/shares')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                renderShareLists(data);
+            }
+        })
+        .catch(() => {});
+}
+
+function renderShareLists(data) {
+    const ownedList = document.getElementById('shares-owned-list');
+    const receivedList = document.getElementById('shares-received-list');
+    if (!ownedList || !receivedList) return;
+
+    // Owned shares
+    const owned = data.owned || [];
+    if (owned.length === 0) {
+        ownedList.innerHTML = '<div class="text-center py-8 text-slate-400 text-sm">' + t('shares_no_shares') + '</div>';
+    } else {
+        ownedList.innerHTML = owned.map(s => `
+            <div class="flex items-center justify-between p-3 bg-white dark:bg-[#1A1A1A] rounded-lg border border-slate-200 dark:border-white/10">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-primary-50 dark:bg-primary-900/20 flex items-center justify-center">
+                        <span class="text-xs font-bold text-primary-500">${escapeHtml((s.shared_with_username || '?')[0])}</span>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-slate-700 dark:text-slate-200">${escapeHtml(s.shared_with_username || '')}</p>
+                        <p class="text-xs text-slate-400">${t('share_delete')} · ${new Date(s.created_at * 1000).toLocaleDateString()}</p>
+                    </div>
+                </div>
+                <button onclick="deleteKnowledgeShare(${s.id})"
+                        class="px-3 py-1 rounded-md text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer transition-colors border border-red-200 dark:border-red-900/30">
+                    ${t('share_delete')}
+                </button>
+            </div>
+        `).join('');
+    }
+
+    // Received shares
+    const received = data.received || [];
+    if (received.length === 0) {
+        receivedList.innerHTML = '<div class="text-center py-8 text-slate-400 text-sm">' + t('shares_no_shares') + '</div>';
+    } else {
+        receivedList.innerHTML = received.map(s => `
+            <div class="flex items-center justify-between p-3 bg-white dark:bg-[#1A1A1A] rounded-lg border border-slate-200 dark:border-white/10">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center">
+                        <span class="text-xs font-bold text-amber-500">${escapeHtml((s.owner_username || '?')[0])}</span>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-slate-700 dark:text-slate-200">${escapeHtml(s.owner_username || '')}</p>
+                        <p class="text-xs text-slate-400">${new Date(s.created_at * 1000).toLocaleDateString()}</p>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+}
+
+function showAddShareDialog() {
+    const container = document.getElementById('knowledge-panel-shares');
+    if (!container) return;
+    // Create overlay dialog
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 bg-black/50 z-[200] flex items-center justify-center';
+    overlay.id = 'share-add-overlay';
+    overlay.innerHTML = `
+        <div class="bg-white dark:bg-[#1A1A1A] rounded-2xl border border-slate-200 dark:border-white/10 shadow-xl w-full max-w-md mx-4 p-6">
+            <h3 class="text-lg font-bold text-slate-800 dark:text-slate-100 mb-1">${t('share_add')}</h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mb-5">${t('shares_desc')}</p>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">${t('share_select_user')}</label>
+                    <input id="share-username-input" type="text" placeholder="${t('share_select_user_placeholder')}"
+                           class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                  text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                </div>
+                <p id="share-add-status" class="text-sm opacity-0 transition-opacity duration-300"></p>
+                <div class="flex justify-end gap-2">
+                    <button onclick="closeAddShareDialog()"
+                            class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm font-medium
+                                   cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-white/5">
+                        ${currentLang === 'en' ? 'Cancel' : (currentLang === 'zh-Hant' ? '取消' : '取消')}
+                    </button>
+                    <button onclick="submitAddShare()"
+                            class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer transition-colors">
+                        ${t('share_add')}
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    // Focus input
+    setTimeout(() => {
+        const input = document.getElementById('share-username-input');
+        if (input) input.focus();
+    }, 100);
+}
+
+function closeAddShareDialog() {
+    const overlay = document.getElementById('share-add-overlay');
+    if (overlay) overlay.remove();
+}
+window.closeAddShareDialog = closeAddShareDialog;
+
+function submitAddShare() {
+    const input = document.getElementById('share-username-input');
+    const statusEl = document.getElementById('share-add-status');
+    if (!input || !statusEl) return;
+    const username = input.value.trim();
+    if (!username) {
+        statusEl.textContent = currentLang === 'en' ? 'Please enter a username' : '请输入用户名';
+        statusEl.className = 'text-sm text-red-500 opacity-100';
+        setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+        return;
+    }
+    fetch('/api/knowledge/shares', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({shared_with_username: username, permission: 'read'})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            closeAddShareDialog();
+            fetchKnowledgeShares();
+        } else {
+            statusEl.textContent = data.message || t('share_add_error');
+            statusEl.className = 'text-sm text-red-500 opacity-100';
+            setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+        }
+    })
+    .catch(() => {
+        statusEl.textContent = t('share_add_error');
+        statusEl.className = 'text-sm text-red-500 opacity-100';
+        setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+    });
+}
+window.submitAddShare = submitAddShare;
+
+function deleteKnowledgeShare(shareId) {
+    if (!confirm(t('share_confirm_delete'))) return;
+    fetch('/api/knowledge/shares/' + shareId, {
+        method: 'DELETE'
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            fetchKnowledgeShares();
+        }
+    })
+    .catch(() => {});
+}
+window.deleteKnowledgeShare = deleteKnowledgeShare;
