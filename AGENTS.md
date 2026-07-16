@@ -1,10 +1,10 @@
 # feat-multiuser — 多使用者認證、對話隔離與知識庫分享系統
 
 > **Phase 1-2** — 後端核心 & 知識庫隔離 (已完成)  \
-> **Phase 3** — Team Scope (開發中)  \
-> **Phase 4-5** — Prompt 繼承 & Pro 企業功能 (規劃中)  \
-> **戰略基礎** — [三層 Scope (global/team/user) + Prompt 繼承 + RBAC 擴充](#0-戰略願景-strategic-vision)  
-> Branch: `feat-multiuser`  
+> **Phase 3** — Team Scope & 三層 Prompt 繼承 (✅ 已完成)  \
+> **Phase 4** — RBAC Manager 角色 & 企業功能 (規劃中)  \
+> **戰略基礎** — [三層 Scope (global/team/user) + Prompt 繼承 + RBAC 擴充](#0-戰略願景-strategic-vision)  \
+> Branch: `feat-multiuser`  \
 > Base: `main` (upstream `anomixer/CowAgent`)
 
 ---
@@ -24,6 +24,7 @@
 10. [前端 UI 變更](#10-前端-ui-變更)
 11. [已修改檔案索引](#11-已修改檔案索引)
 12. [Phase 2 完成項目與展望](#12-phase-2-完成項目與展望)
+13. [Phase 3 — Team Scope & 三層 Prompt 繼承](#13-phase-3--team-scope--三層-prompt-繼承)
 
 ---
 
@@ -197,11 +198,33 @@ KnowledgeShareHandler
     └── DELETE /api/knowledge/shares/:id ──► 移除分享
 ```
 
+### 三層 Prompt 注入流程 (Phase 3)
+
+```
+agent_initializer.py  initialize_agent()
+    │
+    ├── 1. 載入 Global Prompt（從 mu_user_configs, user_id=-1 sentinel）
+    │      GET /api/auth/global-config?key=global_prompt  ← Admin 設定
+    │
+    ├── 2. 載入 Team Prompt（從 mu_teams.prompt 欄位）
+    │      列出使用者所屬團隊，收集各團隊的 prompt
+    │
+    ├── 3. 載入 User Prompt（從 mu_user_configs, user_id=該使用者）
+    │      GET /api/auth/my-config?key=prompt_template
+    │
+    └── 依序注入 system_prompt：
+         base system prompt (from workspace)
+            + 🌐 全域提示詞  (admin 設定，對所有人生效)
+            + 👥 團隊資訊    (成員身份 + 團隊 prompt)
+            + 📝 使用者提示詞 (個人微調)
+```
+
+---
 ---
 
 ## 3. 資料庫層 — `multiuser/db.py`
 
-**路徑**: `channel/web/multiuser/db.py`  
+**路徑**: `channel/web/multiuser/db.py`  \
 **依賴**: 僅 `sqlite3`, `hashlib`, `hmac`, `os`, `time`, `threading`, `logging`
 
 ### 表格結構
@@ -225,6 +248,40 @@ KnowledgeShareHandler
 | `user_id` | INTEGER NOT NULL | 對應 `mu_users.id` |
 | `created_at` | INTEGER | Unix timestamp |
 | `expires_at` | INTEGER | 過期時間戳 (預設 7 天) |
+
+#### `mu_teams` (Phase 3)
+
+| 欄位 | 型態 | 說明 |
+|------|------|------|
+| `id` | INTEGER PK AUTOINCREMENT | 團隊 ID |
+| `name` | TEXT UNIQUE NOT NULL | 團隊名稱 |
+| `description` | TEXT NOT NULL DEFAULT '' | 團隊描述 |
+| `prompt` | TEXT NOT NULL DEFAULT '' | 團隊共享的提示詞模板 |
+| `created_by` | INTEGER NOT NULL | FK → mu_users.id |
+| `created_at` | INTEGER | Unix timestamp |
+| `updated_at` | INTEGER | Unix timestamp |
+
+#### `mu_team_members` (Phase 3)
+
+| 欄位 | 型態 | 說明 |
+|------|------|------|
+| `id` | INTEGER PK AUTOINCREMENT | 成員記錄 ID |
+| `team_id` | INTEGER NOT NULL | FK → mu_teams.id |
+| `user_id` | INTEGER NOT NULL | FK → mu_users.id |
+| `role` | TEXT NOT NULL DEFAULT 'member' | `admin` 或 `member` |
+| `joined_at` | INTEGER | Unix timestamp |
+| UNIQUE(team_id, user_id) | 避免重複加入 |
+
+#### `mu_user_configs` (Phase 3)
+
+| 欄位 | 型態 | 說明 |
+|------|------|------|
+| `id` | INTEGER PK AUTOINCREMENT | 設定記錄 ID |
+| `user_id` | INTEGER NOT NULL | FK → mu_users.id (-1 表示 global sentinel) |
+| `config_key` | TEXT NOT NULL | 設定名稱 (如 prompt_template, global_prompt) |
+| `config_value` | TEXT NOT NULL DEFAULT '' | 設定值 |
+| `updated_at` | INTEGER | Unix timestamp |
+| UNIQUE(user_id, config_key) | 避免衝突 |
 
 #### `mu_kb_shares` (Phase 2)
 
@@ -252,6 +309,7 @@ hash = hashlib.pbkdf2_hmac("sha256", password_bytes, salt, iterations=600000)
 
 ```python
 class MultiUserDB:
+    # ── User management ──
     def create_user(username, password, role="user") -> dict | None
     def authenticate(username, password) -> dict | None
     def get_user_by_id(user_id) -> dict | None
@@ -261,13 +319,48 @@ class MultiUserDB:
     def update_user_password(user_id, new_password) -> bool
     def delete_user(user_id) -> bool
     def count_users() -> int
-    def create_session(user_id) -> str           # 回傳 session token
+
+    # ── Sessions ──
+    def create_session(user_id) -> str
     def get_session(session_token) -> dict | None
     def delete_session(session_token) -> bool
     def cleanup_expired_sessions() -> int
-    # 對話隔離
-    def get_user_conversation_sessions(user_id, channel_type, page, page_size) -> dict
-    # 資料庫初始化 + 遷移
+
+    # ── Teams (Phase 3) ──
+    def create_team(name, description, prompt="", created_by) -> dict | None
+    def get_team(team_id) -> dict | None
+    def list_teams() -> list[dict]
+    def list_user_teams(user_id) -> list[dict]
+    def update_team(team_id, name=None, description=None, prompt=None) -> bool
+    def delete_team(team_id) -> bool
+    def add_team_member(team_id, user_id, role="member") -> dict | None
+    def remove_team_member(team_id, user_id) -> bool
+    def update_team_member_role(team_id, user_id, role) -> bool
+    def list_team_members(team_id) -> list[dict]
+    def get_user_team_ids(user_id) -> list[int]
+    def is_team_admin(team_id, user_id) -> bool
+
+    # ── User config (Phase 3) ──
+    def set_user_config(user_id, config_key, config_value) -> bool
+    def get_user_config(user_id, config_key) -> str | None
+    def get_all_user_configs(user_id) -> dict
+    def delete_user_config(user_id, config_key) -> bool
+
+    # ── Global config (Phase 3, user_id=-1 sentinel) ──
+    def set_global_config(config_key, config_value) -> bool
+    def get_global_config(config_key) -> str | None
+
+    # ── Knowledge shares (Phase 2) ──
+    def create_share(owner_id, shared_with_id, permission="read") -> dict | None
+    def remove_share(share_id, owner_id) -> bool
+    def list_shares_by_owner(user_id) -> list[dict]
+    def list_shares_for_user(user_id) -> list[dict]
+    def get_shared_user_ids(user_id) -> list[int]
+
+    # ── Conversation isolation ──
+    def get_user_conversation_sessions(user_id, ...) -> dict
+
+    # ── Migrations ──
     def ensure_conversation_user_id_column()
 ```
 
@@ -287,11 +380,13 @@ LIMIT ? OFFSET ?
 
 `ensure_conversation_user_id_column()` 在初始化時檢查 `conversations.db` 的 `sessions` 表是否有 `user_id` 欄位，沒有的話自動 `ALTER TABLE ADD COLUMN`。**現有資料不會遺失**。
 
+Phase 3 另加 migration：`ALTER TABLE mu_teams ADD COLUMN prompt TEXT NOT NULL DEFAULT ''`
+
 ---
 
 ## 4. 認證中間件 — `multiuser/auth.py`
 
-**路徑**: `channel/web/multiuser/auth.py`  
+**路徑**: `channel/web/multiuser/auth.py`  \
 **依賴**: `db.py`, `web.py` (web 框架)
 
 ### 功能函式
@@ -347,28 +442,28 @@ web.setcookie(
 
 ## 5. Route Handler — `web_channel.py`
 
-**路徑**: `channel/web/web_channel.py`  
-**改動量**: +347 行（Phase 1: +218, Phase 2: +129）
+**路徑**: `channel/web/web_channel.py`  \
+**改動量**: +~420 行（Phase 1-3 累計）
 
-### 新增 Route（Phase 1 — 認證 & 使用者管理）
+### 新增 Route
 
-| Method | Route | Handler | 權限 | 說明 |
-|--------|-------|---------|------|------|
-| POST | `/api/auth/register` | `RegisterHandler` | 公開 | 註冊（第一人 = admin） |
-| GET | `/api/auth/me` | `MeHandler` | 登入 | 查詢目前使用者 |
-| POST | `/api/auth/change-password` | `ChangePasswordHandler` | 登入 | 修改密碼（支援 multiuser & legacy） |
-| GET | `/api/auth/users` | `AdminUsersHandler` | Admin | 使用者列表 |
-| POST | `/api/auth/users` | `AdminUsersHandler` | Admin | 新增使用者 |
-| PUT | `/api/auth/users/:id` | `AdminUserDetailHandler` | Admin | 修改角色/密碼 |
-| DELETE | `/api/auth/users/:id` | `AdminUserDetailHandler` | Admin | 刪除使用者 |
-
-### 新增 Route（Phase 2 — 知識庫分享）
-
-| Method | Route | Handler | 權限 | 說明 |
-|--------|-------|---------|------|------|
-| GET | `/api/knowledge/shares` | `KnowledgeShareHandler` | 登入 | 列出我分享的 + 別人分享給我的 |
-| POST | `/api/knowledge/shares` | `KnowledgeShareHandler` | 登入 | 建立知識庫分享（指定 shared_with_id + permission） |
-| DELETE | `/api/knowledge/shares/:id` | `KnowledgeShareDetailHandler` | 登入+擁有者 | 移除知識庫分享 |
+| Method | Route | Handler | 權限 | Phase | 說明 |
+|--------|-------|---------|------|:----:|------|
+| POST | `/api/auth/register` | `RegisterHandler` | 公開 | P1 | 註冊（第一人 = admin） |
+| GET | `/api/auth/me` | `MeHandler` | 登入 | P1 | 查詢目前使用者 |
+| POST | `/api/auth/change-password` | `ChangePasswordHandler` | 登入 | P2 | 修改密碼 |
+| GET | `/api/auth/users` | `AdminUsersHandler` | Admin | P1 | 使用者列表 |
+| POST | `/api/auth/users` | `AdminUsersHandler` | Admin | P1 | 新增使用者 |
+| GET/PUT/DELETE | `/api/auth/users/:id` | `AdminUserDetailHandler` | Admin | P1 | 使用者 CRUD |
+| GET/PUT | `/api/auth/my-config` | `UserConfigHandler` | 登入 | P3 | 個人設定 (prompt_template) |
+| GET/PUT | `/api/auth/global-config` | `GlobalConfigHandler` | Admin | P3 | 全域設定 (global_prompt) |
+| GET/POST | `/api/teams` | `TeamsHandler` | Admin | P3 | 團隊列表/建立 |
+| GET/PUT/DELETE | `/api/teams/:id` | `TeamDetailHandler` | Admin | P3 | 團隊 CRUD |
+| GET/POST | `/api/teams/:id/members` | `TeamMembersHandler` | Admin | P3 | 成員列表/新增 |
+| PUT/DELETE | `/api/teams/:id/members/:uid` | `TeamMemberDetailHandler` | Admin | P3 | 成員角色/踢出 |
+| POST | `/api/teams/:id/members/leave` | `TeamMemberLeaveHandler` | 登入 | P3 | 退出團隊 |
+| GET/POST | `/api/knowledge/shares` | `KnowledgeShareHandler` | 登入 | P2 | 知識庫分享 |
+| DELETE | `/api/knowledge/shares/:id` | `KnowledgeShareDetailHandler` | 登入 | P2 | 移除分享 |
 
 ### 修改的 Handler
 
@@ -397,16 +492,9 @@ web.setcookie(
 ```python
 def _check_auth():
     if is_multiuser_enabled():
-        # Multiuser mode: web_password is bypassed entirely.
-        # Authentication is handled by mu_session (RequireLogin / RequireAdmin).
         return True
     ...
 ```
-
-這確保了：
-- `ConfigHandler`、`KnowledgeListHandler` 等由 `@_require_auth()` 保護的 handler，在 multiuser 模式下不再檢查 `cow_auth_token`，統一交由 `mu_session` cookie 管理
-- 原有的 `get_current_user()` fallback 邏輯已移除（已被頂頭 bypass 取代，更乾淨）
-- Legacy 模式下行為完全不變
 
 ### `ConfigHandler.GET` — 新增 `multiuser` 標誌
 
@@ -419,17 +507,12 @@ def _check_auth():
 }
 ```
 
-前端 `initConfigView()` 可用 `data.multiuser`（或全域 `isMultiuserMode`）判斷是否要灰掉密碼欄位。
-
 ### `ConfigHandler.POST` — 安全閥
 
 ```python
-# Multi-user mode: never allow web_password to be changed via config
 if is_multiuser_enabled():
     updates.pop("web_password", None)
 ```
-
-即使前端繞過 UI 直接發送 `web_password` 更新，後端也會靜默忽略，多一層防護。
 
 #### `AuthLoginHandler.POST`
 
@@ -437,16 +520,6 @@ if is_multiuser_enabled():
 
 - **Legacy**: 收 `password`，比對 `web_password`
 - **Multi-user**: 收 `username` + `password`，呼叫 `mu_login_user()`
-
-### Route 順序注意
-
-`web.py` 的 URL mapping 是用 tuple 順序比對的，所以：
-```
-'/api/auth/users/(.*)', 'AdminUserDetailHandler',   # 有參數 → 放前面
-'/api/auth/users', 'AdminUsersHandler',              # 無參數 → 放後面
-```
-
-這樣 `/api/auth/users/123` 會進 `AdminUserDetailHandler`，`/api/auth/users` 會進 `AdminUsersHandler`。
 
 ---
 
@@ -467,38 +540,17 @@ post_message()
 AgentBridge.agent_reply()
     │
     ├── _pre_persist_user_message(session_id, query, context, ...)
-    │       │
-    │       ├── 讀取 context["user_id"]
     │       └── store.append_messages(..., user_id=user_id)
     │
     └── _persist_messages(session_id, new_messages, channel_type, user_id)
-            │
-            ├── 接收從 context 傳來的 user_id
             └── store.append_messages(..., user_id=user_id)
                    │
                    ▼
             ConversationStore.append_messages()
-                │
-                └── INSERT OR IGNORE INTO sessions (...)
                 └── UPDATE sessions SET user_id = ? WHERE session_id = ? AND user_id = 0
 ```
 
 **關鍵設計**: `AND user_id = 0` 確保只有「第一次建立」時會寫入，後續訊息不會覆蓋已存在的 owner。
-
-### SessionsHandler 隔離
-
-```python
-if is_multiuser_enabled():
-    user = get_current_user()
-    if user:
-        db = get_multiuser_db()
-        result = db.get_user_conversation_sessions(user_id=user["id"])
-        return json.dumps({"status": "success", **result})
-```
-
-使用 `db.get_user_conversation_sessions()` 做 SQL-level 過濾，只回傳屬於該使用者的 session。
-
----
 
 ## 7. 向後相容設計
 
@@ -524,11 +576,7 @@ web_password 有設定？ ─YES─► Legacy 單密碼模式
 2. **一旦有人註冊**，自動切換為 multi-user 模式，legacy 密碼登入失效
 3. **現有對話 session** 因為 `user_id = 0`（預設值），不會被任何人看到（安全）
 4. Admin 可以透過 API 手動將舊 session 指定給某個 user
-
-### 切換注意事項
-
 - **Legacy → Multi-user 是不可逆的**（一旦有人註冊就回不去了）
-- 如果需要繼續用 legacy 模式，不要註冊任何使用者
 - 若想 reset，刪除 `multiuser.db` 檔案即可
 
 ---
@@ -542,18 +590,17 @@ web_password 有設定？ ─YES─► Legacy 單密碼模式
 | Session 劫持 | `httponly` cookie + `samesite=Lax` |
 | XSS | Cookie 無法被 JavaScript 讀取 |
 | CSRF | `samesite=Lax` 阻擋跨站請求 |
-| 密碼暴力破解 | 無 rate limiting → 建議在前端或反向代理層加上 |
 | Admin 操作 | 所有管理 API 都經 `require_admin()` 檢查 |
 | 不能刪除自己 | `DELETE /api/auth/users/:id` 檢查 `id != current_user["id"]` |
 | 不能降級自己 | `PUT` role 檢查，避免最後一個 admin 把自己降級 |
 | 最小權限 | 一般 user 無法存取 admin API |
 
-### 已知限制 (Phase 1)
+### 已知限制
 
 - 無 rate limiting（建議在 Nginx/Caddy 層做）
 - 無 email 驗證
 - 無 2FA
-- Session 被 stolen 後無法單一撤銷（可改用 redis 實作黑名單）
+- Session 被 stolen 後無法單一撤銷
 
 ---
 
@@ -561,177 +608,95 @@ web_password 有設定？ ─YES─► Legacy 單密碼模式
 
 ### 知識庫目錄隔離
 
-每個使用者的知識庫檔案存放在 `knowledge/users/{user_id}/` 目錄下，由 `MemoryManager.sync()` 在掃描時自動辨識：
+每個使用者的知識庫檔案存放在 `knowledge/users/{user_id}/` 目錄下：
 
 ```python
-# agent/memory/manager.py — sync() 掃描邏輯
-knowledge_dir = Path(workspace_dir).resolve() / "knowledge"
-if knowledge_dir.exists():
-    for file_path in knowledge_dir.rglob("*.md"):
-        rel_str = str(rel.relative_to(workspace))
-        rel_parts = rel_str.replace("\\\\", "/").split("/")
-
-        # knowledge/users/{user_id}/... → scope="user", user_id=整数
-        if rel_parts[:2] == ["knowledge", "users"] and rel_parts[2].isdigit():
-            user_id = int(rel_parts[2])
-            files_to_scan.append((file_path, "knowledge", "user", user_id))
-        else:
-            # 其他 → scope="shared"（共用知識庫）
-            files_to_scan.append((file_path, "knowledge", "shared", None))
+# knowledge/users/{user_id}/... → scope="user", user_id=整数
+if rel_parts[:2] == ["knowledge", "users"] and rel_parts[2].isdigit():
+    user_id = int(rel_parts[2])
+    files_to_scan.append((file_path, "knowledge", "user", user_id))
+else:
+    files_to_scan.append((file_path, "knowledge", "shared", None))
 ```
 
-**註冊時自動建立目錄**: `MultiUserDB.create_user()` 在成功建立使用者後，會呼叫 `_ensure_user_knowledge_dir(user_id)` 建立該使用者的知識庫目錄，確保開箱即用。
+**註冊時自動建立目錄**: `MultiUserDB.create_user()` 呼叫 `_ensure_user_knowledge_dir(user_id)`。
 
 ### 搜尋管線 — shared_user_ids 傳遞鏈
 
 ```
 MemoryManager.search(user_id="1")
-    │
     ├── get_shared_user_ids(user_id=1) → [2, 3]  # 從 mu_kb_shares 查
-    │
     ├── storage.search_vector(..., shared_user_ids=[2, 3])
-    │       └── SQL: WHERE scope IN (...) AND (scope='shared' OR user_id IN ('1','2','3'))
-    │
     └── storage.search_keyword(..., shared_user_ids=[2, 3])
-            └── _search_fts5/_search_like/_search_fts5_trigram
-                    └── SQL: 同樣的 user_id IN (...) 條件
 ```
 
-所有的搜尋方法（`search_vector`, `search_keyword`, `_search_fts5`, `_search_like`, `_search_fts5_trigram`）都新增了 `shared_user_ids: Optional[List[int]] = None` 參數，在 SQL 層將分享者的知識庫一併納入搜尋範圍。
-
-### 知識庫分享 CRUD
-
-| API | 說明 |
-|-----|------|
-| `POST /api/knowledge/shares` | 建立分享（body: `{"shared_with_id": 2, "permission": "read"}`） |
-| `GET /api/knowledge/shares` | 列出自己的分享（回傳 `owned` + `received` 兩組列表） |
-| `DELETE /api/knowledge/shares/:id` | 移除分享（僅擁有者可操作） |
-
-### mu_kb_shares 表格操作
-
-```python
-# db.py 公開 API
-db.create_share(owner_id=1, shared_with_id=2, permission="read")  → dict | None
-db.remove_share(share_id=5, owner_id=1)                           → bool
-db.list_shares_by_owner(user_id=1)          # 我分享給誰（含對方 username）
-db.list_shares_for_user(user_id=2)          # 誰分享給我（含對方 username）
-db.get_shared_user_ids(user_id=2)           # 只回傳 ID 列表，供 search 使用
-```
+所有搜尋方法都新增了 `shared_user_ids: Optional[List[int]] = None` 參數。
 
 ---
-
 ## 10. 前端 UI 變更
 
 ### HTML 結構 (`chat.html`) — +113 行
 
 **登入遮罩層 (Login Overlay)**
-- 支援雙模式顯示：
-  - **Legacy 模式**: 只顯示密碼輸入框（維持原樣）
-  - **Multi-user 模式**: 顯示 username + password 雙欄位 + 註冊切換連結
-- 完整的**註冊表單**（可切換登入/註冊），含表單切換函數 `showRegisterForm()` / `showLoginForm()`
+- 支援雙模式顯示：Legacy / Multi-user
+- 完整的**註冊表單**（可切換登入/註冊）
 - 密碼顯示切換按鈕（眼睛圖示）
 
 **側邊欄 (Sidebar)**
-- 新增「👥 使用者管理」選單項目（預設 `hidden`，`role=admin` 才顯示）
+- 新增「👥 使用者管理」選單項目（`role=admin` 才顯示）
 
 **頂部標題列 (Header)**
-- 新增**使用者下拉選單**：
-  - 頭像縮寫圓圈（取 username 前兩個字）
-  - 使用者名稱 + 角色標籤
-  - 「個人設定」→ 修改密碼
-  - 「使用者管理」→ admin view（僅 admin 可見）
-  - 「退出登入」
+- 使用者下拉選單：頭像縮寫、角色標籤、個人設定、使用者管理、退出登入
 
 **主要內容區**
-- 新增 `#view-profile` 容器 → 個人設定頁面
-- 新增 `#view-users` 容器 → 管理員使用者管理頁面
+- `#view-profile` 容器 → 個人設定頁面（含 Global Prompt 編輯器，admin only）
+- `#view-users` 容器 → 管理員使用者管理頁面
 
-### JavaScript 邏輯 (`console.js`) — +661/-29 行
+### JavaScript 邏輯 (`console.js`) — +~750 行
 
-**i18n 翻譯擴充** — 三種語系共補了 30+ 個字串：
+**i18n 翻譯擴充** — 三種語系共補了 40+ 個字串（含 global prompt）
 
-| 語系 | 新增內容 |
-|------|---------|
-| `zh` | 登入、註冊、使用者管理、個人設定、分享相關 |
-| `zh-Hant` | 同上，完整繁中翻譯 |
-| `en` | 同上 |
+**認證流程重寫 (~300 行)**：雙模式登入、註冊、使用者下拉選單
 
-**全域狀態變數**
+**Admin 使用者管理**：列表、新增、修改角色、刪除
 
-```javascript
-let currentUser = null;       // {id, username, role}
-let isMultiuserMode = false;  // 是否為多使用者模式
-let isAdmin = false;          // 是否有管理權限
-```
+**個人設定頁面**：
+- 修改密碼
+- User Prompt 編輯器（所有人）
+- Global Prompt 編輯器（admin only）— `/api/auth/global-config`
 
-**認證流程重寫 (~300 行)**
-
+**Global Prompt 前端函數**：
 | 函數 | 說明 |
 |------|------|
-| `showLoginScreen()` | 雙模式偵測：multiuser 顯示 username 欄位 / legacy 只用密碼 |
-| `showLoginForm()` / `showRegisterForm()` | 表單切換 |
-| Login form submit | 雙模式 payload：`{username, password}` 或 `{password}` |
-| Register form submit | 完整註冊流程（含驗證），註冊後自動登入 |
-| `toggleUserMenu()` / `closeUserMenu()` | 使用者下拉選單 |
-| `setupUserMenu(user)` | 初始化選單（頭像縮寫、admin 選項顯示控制） |
-| `navigateTo()` 覆寫 | 切換到 profile/users view 時 lazy-render |
-
-**Admin 使用者管理 (`renderUsersView`)**
-
-- 使用者列表 table（ID、名稱、角色 select、刪除按鈕）
-- `fetchUsers()` — 呼叫 `GET /api/auth/users`
-- `renderUserList()` — 渲染使用者表格
-- `submitAddUser()` — 彈出 modal 新增使用者
-- `updateUserRole()` — 直接修改角色（admin/user）
-- `deleteUser()` — 刪除確認後刪除
-
-**個人設定頁面 (`renderProfileView`)**
-
-- 顯示目前使用者資訊（ID、名稱、角色、註冊時間）
-- 修改密碼表單（舊密碼 → 新密碼 → 確認新密碼）
-- `submitPasswordChange()` — 呼叫 `POST /api/auth/change-password`
-
-**安全設定頁面灰化（Settings → 訪問密碼）**
-
-Multiuser 模式下，`initConfigView()` 會以全域 `isMultiuserMode` 變數判斷，自動灰化 `web_password` 相關元件：
-
-```javascript
-if (isMultiuserMode) {
-    pwdInput.disabled = true;           // 輸入框無法編輯
-    pwdInput.placeholder = '由多使用者帳密管理';
-    pwdInput.classList.add('opacity-50', 'cursor-not-allowed');
-    pwdSaveBtn.classList.add('hidden'); // 隱藏存檔按鈕
-    // 提示文字改為「密碼驗證由多使用者帳號系統管理」
-}
-```
-
-安全閥還包含：
-- `savePasswordConfig()` 頂頭 `if (isMultiuserMode) return;` 直接跳過
-- ConfigHandler.POST 後端 `updates.pop("web_password", None)` 雙重防護
+| `loadGlobalPrompt()` | GET `/api/auth/global-config?key=global_prompt` |
+| `saveGlobalPrompt()` | PUT `/api/auth/global-config` |
+| `clearGlobalPrompt()` | PUT 空值清除 |
 
 ---
 
 ## 11. 已修改檔案索引
 
-### 新增檔案（Phase 1）
+### 新增檔案
 
 | 檔案 | 行數 | 說明 |
 |------|------|------|
 | `channel/web/multiuser/__init__.py` | 0 | Package marker |
-| `channel/web/multiuser/db.py` | ~577 | 資料庫層 (mu_users, mu_sessions, mu_kb_shares, CRUD, 密碼雜湊, 對話隔離, 知識庫分享) |
-| `channel/web/multiuser/auth.py` | ~200 | 認證中間件 (cookie, session, RBAC) |
+| `channel/web/multiuser/db.py` | ~970 | 資料庫層 (mu_users, mu_sessions, mu_teams, mu_team_members, mu_user_configs, mu_kb_shares) |
+| `channel/web/multiuser/auth.py` | ~200 | 認證中間件 |
 
-### 修改檔案（Phase 1 & Phase 2）
+### 修改檔案
 
-| 檔案 | +/- 行 | 說明 |
-|------|--------|------|
-| `channel/web/web_channel.py` | +353/-9 | 新增 8 個 handler（含 KnowledgeShare）+ route + import + SessionsHandler 隔離 + `_check_auth()` 頂頭 bypass + ConfigHandler multiuser 標誌 + POST 安全閥 |
-| `channel/web/chat.html` | +113/-0 | 登入/註冊 UI、使用者選單、admin view、profile view 容器 |
-| `channel/web/static/js/console.js` | +680/-29 | 完整前端邏輯：雙模式登入、使用者管理、修改密碼、i18n 翻譯、Settings 密碼欄位灰化 + `savePasswordConfig()` 安全跳過 |
-| `bridge/agent_bridge.py` | +12/-3 | `_pre_persist_user_message` + `_persist_messages` 串接 user_id |
-| `agent/memory/conversation_store.py` | +9/-0 | `append_messages` 新增 `user_id` 參數 |
-| `agent/memory/storage.py` | +70/-4 | 所有搜尋方法（vector/FTS5/like/trigram）新增 `shared_user_ids` 參數 |
-| `agent/memory/manager.py` | +35/-2 | `sync()` 掃描 `knowledge/users/{user_id}/`；`search()` 傳遞 `shared_user_ids` |
+| 檔案 | 說明 |
+|------|------|
+| `channel/web/web_channel.py` | +15 routes (含 P3: Teams, TeamDetail, TeamMembers, TeamMemberDetail, TeamMemberLeave, UserConfig, GlobalConfig) |
+| `channel/web/chat.html` | 登入/註冊 UI、使用者選單、profile/users view 容器 |
+| `channel/web/static/js/console.js` | 前端邏輯 + i18n + Global Prompt admin UI |
+| `bridge/agent_bridge.py` | `_pre_persist_user_message` + `_persist_messages` 串接 user_id |
+| `bridge/agent_initializer.py` | 三層 Prompt 注入 (Global → Team → User) |
+| `agent/memory/conversation_store.py` | `append_messages` 新增 `user_id` 參數 |
+| `agent/memory/storage.py` | 搜尋方法新增 `shared_user_ids` 參數 |
+| `agent/memory/manager.py` | sync() 掃描 `knowledge/users/{user_id}/`；search() 傳遞 `shared_user_ids` |
+| `AGENTS.md` | 本文件 |
 
 ---
 
@@ -749,69 +714,74 @@ if (isMultiuserMode) {
 | **後端** | `ChangePasswordHandler`（multiuser + legacy 雙模式） | ✅ |
 | **後端** | `create_user()` 自動建立知識庫目錄 | ✅ |
 | **前端** | 登入/註冊 UI（雙模式） | ✅ |
-| **前端** | 使用者下拉選單（頭像、名稱、角色） | ✅ |
 | **前端** | Admin 使用者管理頁面（CRUD） | ✅ |
-| **前端** | 個人設定頁面（修改密碼） | ✅ |
 | **前端** | i18n 翻譯（zh / zh-Hant / en）30+ 字串 | ✅ |
 | **文件** | AGENTS.md Phase 2 完整記錄 | ✅ |
 
-### 路線圖：對齊三層 Scope 戰略
+---
 
-#### ✅ Phase 1 — 後端核心（已完成）
-多使用者認證、Session 管理、RBAC（admin/user）、對話隔離、向後相容
+## 13. Phase 3 — Team Scope & 三層 Prompt 繼承
 
-#### ✅ Phase 2 — 知識庫隔離與分享（已完成）
-知識庫目錄隔離、搜尋管線 `shared_user_ids` 傳遞、知識庫分享 CRUD、前端 UI（登入/註冊/管理/個人設定）、i18n 三語系
+### 已實作 ✅
 
-#### 🟡 Phase 3 — Team Scope（開發中）
-| 類別 | 項目 | 優先級 |
-|------|------|:------:|
-| **DB** | `mu_teams` / `mu_team_members` / `mu_user_configs` 三表 DDL + CRUD | 🟢 完成 |
-| **Storage** | `MemoryChunk` scope 擴充 team、`team_id` 欄位 + migration + 4 種 search method WHERE 子句 | 🟢 完成 |
-| **Manager** | `sync()` 掃描 `knowledge/teams/{id}/`、`search()` 傳遞 `team_ids` | 🟡 進行中 |
-| **API** | Team CRUD API + Prompt API handlers | 🔴 待做 |
-| **Bridge** | Global + User 提示詞合併 | 🔴 待做 |
-| **前端** | Team 管理 UI + Prompt 編輯器 | 🔴 待做 |
-| **文件** | AGENTS.md Phase 3 更新 | 🟢 完成 |
-| **分享** | 分享 UI 整合到前端（目前僅有後端 API） | 🟡 中 |
-
-##### ✅ Phase 3 sub: Team Member Leave（已完成）
 | 類別 | 項目 | 狀態 |
 |------|------|:----:|
-| **後端** | `TeamMemberLeaveHandler` + route `/api/teams/(.*)/members/leave` | ✅ |
-| **前端** | member list 踢人按鈕排除 admin（`m.role !== 'admin'`） | ✅ |
-| **前端** | 退出按鈕所有人都能退（最後一位 admin 隱藏退鈕改顯示提示） | ✅ |
-| **前端** | 最後一位 admin 顯示「唯一管理員，無法退出」 | ✅ |
-| **前端** | 跳脫字元修復：`can't` 被過度跳脫為 `can\\'t`，修正為 `can\'t` | ✅ |
-| **前端** | `submitAddMember()` 加 admin 警告：選 role=admin 時跳 `showConfirmModal()` 確認 | ✅ |
+| **DB** | `mu_teams` / `mu_team_members` / `mu_user_configs` 三表 DDL + CRUD | ✅ |
+| **DB** | `mu_teams.prompt` 欄位 + ALTER TABLE migration | ✅ |
+| **DB** | `get_global_config()` / `set_global_config()`（user_id=-1 sentinel） | ✅ |
+| **API** | Team CRUD API（TeamsHandler, TeamDetailHandler） | ✅ |
+| **API** | Team Member CRUD（TeamMembersHandler, TeamMemberDetailHandler） | ✅ |
+| **API** | Team Member Leave（TeamMemberLeaveHandler） | ✅ |
+| **API** | UserConfigHandler（GET/PUT /api/auth/my-config） | ✅ |
+| **API** | GlobalConfigHandler（GET/PUT /api/auth/global-config） | ✅ |
+| **API** | TeamsHandler POST / TeamDetailHandler PUT 收 prompt 欄位 | ✅ |
+| **Bridge** | 三層 Prompt 注入：Global → Team → User | ✅ |
+| **前端** | Team 管理 UI（建立、編輯、成員管理、退出） | ✅ |
+| **前端** | Team Prompt 編輯器（建立/編輯時設定） | ✅ |
+| **前端** | User Prompt 編輯器（個人 profile） | ✅ |
+| **前端** | Global Prompt 編輯器（admin profile） | ✅ |
+| **前端** | 分享 UI 整合（knowledge shares tab） | ✅ |
+| **Memory** | per-user memory scope（`MemorySearchTool` 傳遞 user_id） | ✅ |
+| **Memory** | per-user language preference（`UserConfigHandler`） | ✅ |
+| **文件** | AGENTS.md Phase 3 完整記錄 | ✅ |
 
-##### ✅ Phase 3 sub: Per-user Memory & Language（已完成）
-| 類別 | 項目 | 狀態 |
-|------|------|:----:|
-| **後端** | `MemorySearchTool` 初始化傳入 `user_id`（`agent_initializer.py`） | ✅ |
-| **後端** | `agent_bridge.py` 呼叫 `get_agent()` 傳遞 `ctx_user_id` | ✅ |
-| **後端** | `UserConfigHandler` — `GET/PUT /api/auth/my-config` 讀寫 `mu_user_configs` | ✅ |
-| **後端** | route 註冊 `/api/auth/my-config` | ✅ |
-| **前端** | `syncLanguageToBackend()` multiuser 模式改用 `PUT /api/auth/my-config` | ✅ |
-| **前端** | `loadUserLanguage()` — 登入後從後端載入使用者語言偏好 | ✅ |
-| **前端** | Login / 註冊 / Auth check 三處皆呼叫 `loadUserLanguage()` | ✅ |
+### 三層 Prompt 注入架構
+
+```
+base system prompt (from workspace files)
+    + 🌐 全域提示詞  (admin 設定，對所有人生效)
+    + 👥 團隊資訊    (所屬團隊列表 + 團隊 shared prompt)
+    + 📝 使用者提示詞 (個人微調)
+```
+
+每一層都是 **append** 而非覆蓋，越個人化的 prompt 越在後面、權重越高。
 
 ---
 
-#### 🔲 Phase 4 — Prompt 繼承與 RBAC 擴充
+## 路線圖
+
+#### ✅ Phase 1 — 後端核心
+多使用者認證、Session 管理、RBAC（admin/user）、對話隔離、向後相容
+
+#### ✅ Phase 2 — 知識庫隔離與分享
+知識庫目錄隔離、搜尋管線 `shared_user_ids` 傳遞、知識庫分享 CRUD、前端 UI
+
+#### ✅ Phase 3 — Team Scope & 三層 Prompt 繼承
+Team CRUD + 成員管理 + 三層 Prompt 注入 (Global/Team/User) + 個人/全域設定
+
+#### 🔲 Phase 4 — RBAC Manager 角色 & 企業功能
+
 | 類別 | 項目 | 優先級 |
 |------|------|:------:|
-| **DB** | `mu_prompts` 表（scope: global/team/user, 繼承鏈） | 🔴 高 |
-| **後端** | Prompt 繼承引擎：Admin 基底 → Team 覆蓋 → User 微調 | 🔴 高 |
 | **後端** | Manager 角色新增（team scope 管理員） | 🔴 高 |
-| **API** | Prompt CRUD API + 繼承狀態查詢 | 🔴 高 |
-| **前端** | Prompt 編輯器（含繼承預覽、版本對比） | 🔴 高 |
+| **後端** | Team 層級知識庫隔離 `knowledge/teams/{id}/` | 🔴 高 |
 | **前端** | Manager view：管理 team 成員與共享資源 | 🟡 中 |
 | **安全** | Rate Limiting 內建支援 | 🟡 中 |
 | **安全** | Session 黑名單（管理員可強制登出特定使用者） | 🟡 中 |
-| **測試** | 完整測試全角色 + 繼承 + 分享流程 | 🟡 中 |
+| **測試** | 完整測試全角色 + 分享流程 | 🟡 中 |
 
 #### 🔲 Phase 5 — CowAgent Pro 企業功能
+
 | 類別 | 項目 | 優先級 |
 |------|------|:------:|
 | **認證** | OAuth / SSO 整合（LDAP, Google, GitHub） | 🟡 中 |
@@ -823,48 +793,8 @@ if (isMultiuserMode) {
 
 ---
 
-## 開發備註
-
-### 測試方式
-
-```bash
-# 1. 啟動後端
-python app.py
-
-# 2. 註冊第一個使用者 (自動成為 admin)
-curl -X POST http://localhost:9899/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "admin123"}'
-
-# 3. 檢查登入狀態
-curl -X GET http://localhost:9899/auth/check
-
-# 4. 註冊第二個使用者
-curl -X POST http://localhost:9899/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username": "user1", "password": "user1234"}'
-
-# 5. [Admin] 列出使用者
-curl -X GET http://localhost:9899/api/auth/users
-
-# 6. [Admin] 修改使用者角色
-curl -X PUT http://localhost:9899/api/auth/users/2 \
-  -H "Content-Type: application/json" \
-  -d '{"role": "admin"}'
-
-# 7. 用不同使用者登入測試對話隔離
-```
-
-### 注意事項
-
-- `multiuser.db` 建立在 `get_data_root()` 目錄下（與 `config.json` 同層）
-- 密碼驗證用 `secret` 參數傳遞（`@web.data()`），Log 中不會明文記錄密碼
-- 啟動時會自動執行 `ensure_conversation_user_id_column()` 做 migration
-
----
-
-> **Author**: CowAgent 🐮  
-> **Date**: 2026-07-08  
-> **Base**: `anomixer/CowAgent`  
-> **Branch**: `feat-multiuser`  
-> **Status**: Phase 1 ✅ + Phase 2 ✅
+> **Author**: CowAgent 🐮  \
+> **Date**: 2026-07-16  \
+> **Base**: `anomixer/CowAgent`  \
+> **Branch**: `feat-multiuser`  \
+> **Status**: Phase 1 ✅ + Phase 2 ✅ + Phase 3 ✅ (三層 Prompt 繼承完成) 🎉

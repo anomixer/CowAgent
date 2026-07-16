@@ -1313,6 +1313,7 @@ class WebChannel(ChatChannel):
             '/api/auth/register', 'RegisterHandler',
             '/api/auth/me', 'MeHandler',
             '/api/auth/my-config', 'UserConfigHandler',
+            '/api/auth/global-config', 'GlobalConfigHandler',
             '/api/auth/users/(.*)', 'AdminUserDetailHandler',
             '/api/auth/users', 'AdminUsersHandler',
             '/api/auth/change-password', 'ChangePasswordHandler',
@@ -1652,6 +1653,41 @@ class UserConfigHandler:
         return json.dumps({"status": "error", "message": "Failed to save config"})
 
 
+class GlobalConfigHandler:
+    """Admin-only global config (global prompt, etc.). GET/PUT with key/value."""
+
+    def GET(self):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        if not is_multiuser_enabled():
+            return json.dumps({"status": "error", "message": "Multi-user mode not enabled"})
+        require_admin()
+        key = web.input().get('key')
+        if not key:
+            return json.dumps({"status": "error", "message": "key parameter required"})
+        db = get_multiuser_db()
+        value = db.get_global_config(key)
+        return json.dumps({"status": "success", "key": key, "value": value})
+
+    def PUT(self):
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        if not is_multiuser_enabled():
+            return json.dumps({"status": "error", "message": "Multi-user mode not enabled"})
+        require_admin()
+        try:
+            data = json.loads(web.data())
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+        key = data.get('key')
+        value = data.get('value')
+        if not key or value is None:
+            return json.dumps({"status": "error", "message": "key and value required"})
+        db = get_multiuser_db()
+        ok = db.set_global_config(key, str(value))
+        if ok:
+            return json.dumps({"status": "success"})
+        return json.dumps({"status": "error", "message": "Failed to save config"})
+
+
 class AdminUsersHandler:
     def GET(self):
         require_admin()
@@ -1829,11 +1865,12 @@ class TeamsHandler:
 
         name = str(data.get("name", "") or "").strip()
         description = str(data.get("description", "") or "").strip()
+        prompt = str(data.get("prompt", "") or "").strip()
         if not name:
             return json.dumps({"status": "error", "message": "Team name required"})
 
         db = get_multiuser_db()
-        team = db.create_team(name, description, created_by=admin["id"])
+        team = db.create_team(name, description, prompt=prompt, created_by=admin["id"])
         if not team:
             return json.dumps({"status": "error", "message": "Team name already exists"})
 
@@ -1899,7 +1936,10 @@ class TeamDetailHandler:
 
         name = str(data.get("name", "") or "").strip() or None
         description = str(data.get("description", "") or "").strip() or None
-        if db.update_team(tid, name=name, description=description):
+        prompt = data.get("prompt")  # keep None if not sent, allow empty string to clear
+        if prompt is not None:
+            prompt = str(prompt).strip()
+        if db.update_team(tid, name=name, description=description, prompt=prompt):
             logger.info(f"[WebChannel] Admin '{admin['username']}' updated team id={tid}")
             return json.dumps({"status": "success"})
         return json.dumps({"status": "error", "message": "Team name conflict or update failed"})

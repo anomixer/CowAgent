@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS mu_teams (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT    NOT NULL UNIQUE,
     description     TEXT    NOT NULL DEFAULT '',
+    prompt          TEXT    NOT NULL DEFAULT '',
     created_by      INTEGER NOT NULL,
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
@@ -565,7 +566,7 @@ class MultiUserDB:
 
     # -- team management --------------------------------------------------
 
-    def create_team(self, name: str, description: str, created_by: int) -> Optional[Dict]:
+    def create_team(self, name: str, description: str, created_by: int, prompt: str = '') -> Optional[Dict]:
         """Create a new team. Also adds creator as admin member. Returns team dict or None."""
         with self._lock:
             conn = self._get_conn()
@@ -579,9 +580,9 @@ class MultiUserDB:
 
                 now = int(time.time())
                 cur = conn.execute(
-                    "INSERT INTO mu_teams (name, description, created_by, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (name, description, created_by, now, now),
+                    "INSERT INTO mu_teams (name, description, prompt, created_by, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (name, description, prompt, created_by, now, now),
                 )
                 team_id = cur.lastrowid
                 # Add creator as team admin
@@ -620,7 +621,7 @@ class MultiUserDB:
             conn = self._get_conn()
             try:
                 row = conn.execute(
-                    "SELECT id, name, description, created_by, created_at, updated_at "
+                    "SELECT id, name, description, prompt, created_by, created_at, updated_at "
                     "FROM mu_teams WHERE id = ?", (team_id,)
                 ).fetchone()
                 return dict(row) if row else None
@@ -633,7 +634,7 @@ class MultiUserDB:
             conn = self._get_conn()
             try:
                 rows = conn.execute(
-                    "SELECT t.id, t.name, t.description, t.created_by, t.created_at, "
+                    "SELECT t.id, t.name, t.description, t.prompt, t.created_by, t.created_at, "
                     "(SELECT COUNT(*) FROM mu_team_members m WHERE m.team_id = t.id) AS member_count "
                     "FROM mu_teams t ORDER BY t.name ASC"
                 ).fetchall()
@@ -647,7 +648,7 @@ class MultiUserDB:
             conn = self._get_conn()
             try:
                 rows = conn.execute(
-                    "SELECT t.id, t.name, t.description, t.created_by, t.created_at, "
+                    "SELECT t.id, t.name, t.description, t.prompt, t.created_by, t.created_at, "
                     "m.role AS my_role "
                     "FROM mu_teams t "
                     "JOIN mu_team_members m ON m.team_id = t.id "
@@ -672,8 +673,8 @@ class MultiUserDB:
             finally:
                 conn.close()
 
-    def update_team(self, team_id: int, name: str = None, description: str = None) -> bool:
-        """Update team name/description. Returns True if found."""
+    def update_team(self, team_id: int, name: str = None, description: str = None, prompt: str = None) -> bool:
+        """Update team name/description/prompt. Returns True if found."""
         with self._lock:
             conn = self._get_conn()
             try:
@@ -686,6 +687,9 @@ class MultiUserDB:
                 if description is not None:
                     fields.append("description = ?")
                     params.append(description)
+                if prompt is not None:
+                    fields.append("prompt = ?")
+                    params.append(prompt)
                 if not fields:
                     return False
                 fields.append("updated_at = ?")
@@ -889,6 +893,16 @@ class MultiUserDB:
             finally:
                 conn.close()
 
+    # -- global config (user_id = -1 is the global/system sentinel) -------
+
+    def set_global_config(self, config_key: str, config_value: str) -> bool:
+        """Set a global config value (upsert, user_id=-1 sentinel)."""
+        return self.set_user_config(-1, config_key, config_value)
+
+    def get_global_config(self, config_key: str) -> Optional[str]:
+        """Get a global config value."""
+        return self.get_user_config(-1, config_key)
+
     # -- internals --------------------------------------------------------
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -906,6 +920,13 @@ class MultiUserDB:
             conn.executescript(_DDL)
             conn.commit()
             self.ensure_conversation_user_id_column()
+            # Migrate: add prompt column to mu_teams if missing (legacy databases)
+            try:
+                conn.execute("ALTER TABLE mu_teams ADD COLUMN prompt TEXT NOT NULL DEFAULT ''")
+                conn.commit()
+                logger.debug("[MultiUserDB] Migration: added prompt column to mu_teams")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             logger.debug(f"[MultiUserDB] Initialized at {self._db_path}")
         except Exception as e:
             logger.error(f"[MultiUserDB] Init error: {e}")

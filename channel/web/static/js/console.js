@@ -324,6 +324,14 @@ const I18N = {
         prompt_save_error: '提示词保存失败',
         prompt_clear: '清除提示词',
         prompt_cleared: '提示词已清除',
+        /* Global prompt (admin) */
+        global_prompt_title: '全局提示词',
+        global_prompt_desc: '设置全局 AI 系统提示词，对当前所有用户生效',
+        global_prompt_save: '保存全局提示词',
+        global_prompt_saved: '全局提示词已保存',
+        global_prompt_save_error: '全局提示词保存失败',
+        global_prompt_clear: '清除全局提示词',
+        global_prompt_cleared: '全局提示词已清除',
         /* Knowledge shares */
         knowledge_tab_shares: '分享',
         shares_title: '知识库分享',
@@ -656,6 +664,14 @@ const I18N = {
         prompt_save_error: '提示詞儲存失敗',
         prompt_clear: '清除提示詞',
         prompt_cleared: '提示詞已清除',
+        /* Global prompt (admin) */
+        global_prompt_title: '全域提示詞',
+        global_prompt_desc: '設定全域 AI 系統提示詞，對當前所有使用者生效',
+        global_prompt_save: '儲存全域提示詞',
+        global_prompt_saved: '全域提示詞已儲存',
+        global_prompt_save_error: '全域提示詞儲存失敗',
+        global_prompt_clear: '清除全域提示詞',
+        global_prompt_cleared: '全域提示詞已清除',
         /* Knowledge shares */
         knowledge_tab_shares: '分享',
         shares_title: '知識庫分享',
@@ -987,6 +1003,14 @@ const I18N = {
         prompt_save_error: 'Failed to save prompt',
         prompt_clear: 'Clear Prompt',
         prompt_cleared: 'Prompt cleared',
+        /* Global prompt (admin) */
+        global_prompt_title: 'Global Prompt',
+        global_prompt_desc: 'Set a global system prompt that applies to all users',
+        global_prompt_save: 'Save Global Prompt',
+        global_prompt_saved: 'Global prompt saved',
+        global_prompt_save_error: 'Failed to save global prompt',
+        global_prompt_clear: 'Clear Global Prompt',
+        global_prompt_cleared: 'Global prompt cleared',
         /* Knowledge shares */
         knowledge_tab_shares: 'Shares',
         shares_title: 'Knowledge Shares',
@@ -9894,11 +9918,43 @@ function renderProfileView() {
                         </div>
                     </div>
                 </div>
+
+                ${isAdmin ? `
+                <div class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-6">
+                    <h3 class="font-semibold text-slate-700 dark:text-slate-200 mb-4">${t('global_prompt_title')}</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">${t('global_prompt_desc')}</p>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">${t('prompt_template_label')}</label>
+                            <textarea id="global-prompt-text"
+                                      placeholder="${t('prompt_template_placeholder')}"
+                                      class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                             text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50
+                                             resize-y min-h-[120px] max-h-[400px] font-mono leading-relaxed"></textarea>
+                        </div>
+                        <p id="global-prompt-status" class="text-sm opacity-0 transition-opacity duration-300"></p>
+                        <div class="flex gap-2">
+                            <button onclick="saveGlobalPrompt()"
+                                    class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium
+                                           cursor-pointer transition-colors duration-150 disabled:opacity-50">
+                                ${t('global_prompt_save')}
+                            </button>
+                            <button onclick="clearGlobalPrompt()"
+                                    class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm font-medium
+                                           cursor-pointer transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-white/5">
+                                ${t('global_prompt_clear')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                ` : ''}
+
             </div>
         </div>
     `;
     // Load saved prompt
     loadPromptTemplate();
+    if (isAdmin) loadGlobalPrompt();
 }
 
 function submitPasswordChange() {
@@ -11283,6 +11339,77 @@ function clearPromptTemplate() {
     setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
 }
 window.clearPromptTemplate = clearPromptTemplate;
+
+// ── Global Prompt (admin only) ─────────────────────────────────────────
+function loadGlobalPrompt() {
+    const textarea = document.getElementById('global-prompt-text');
+    if (!textarea) return;
+    if (!isMultiuserMode || !currentUser) return;
+    fetch('/api/auth/global-config?key=global_prompt')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success' && data.value) {
+                textarea.value = data.value;
+            }
+        })
+        .catch(() => {});
+}
+
+function saveGlobalPrompt() {
+    const textarea = document.getElementById('global-prompt-text');
+    const statusEl = document.getElementById('global-prompt-status');
+    if (!textarea || !statusEl) return;
+    const value = textarea.value.trim();
+    fetch('/api/auth/global-config', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key: 'global_prompt', value: value})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            statusEl.textContent = t('global_prompt_saved');
+            statusEl.className = 'text-sm text-green-500 opacity-100';
+        } else {
+            statusEl.textContent = data.message || t('global_prompt_save_error');
+            statusEl.className = 'text-sm text-red-500 opacity-100';
+        }
+    })
+    .catch(() => {
+        statusEl.textContent = t('global_prompt_save_error');
+        statusEl.className = 'text-sm text-red-500 opacity-100';
+    });
+    setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+}
+window.saveGlobalPrompt = saveGlobalPrompt;
+
+function clearGlobalPrompt() {
+    const textarea = document.getElementById('global-prompt-text');
+    const statusEl = document.getElementById('global-prompt-status');
+    if (!textarea || !statusEl) return;
+    textarea.value = '';
+    fetch('/api/auth/global-config', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key: 'global_prompt', value: ''})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            statusEl.textContent = t('global_prompt_cleared');
+            statusEl.className = 'text-sm text-green-500 opacity-100';
+        } else {
+            statusEl.textContent = data.message || t('global_prompt_save_error');
+            statusEl.className = 'text-sm text-red-500 opacity-100';
+        }
+    })
+    .catch(() => {
+        statusEl.textContent = t('global_prompt_save_error');
+        statusEl.className = 'text-sm text-red-500 opacity-100';
+    });
+    setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+}
+window.clearGlobalPrompt = clearGlobalPrompt;
 
 // =====================================================================
 // Knowledge Share Management
