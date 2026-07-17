@@ -965,10 +965,6 @@ def get_multiuser_db() -> MultiUserDB:
             if _db_instance is None:
                 db_path = MultiUserDB.get_default_db_path()
                 _db_instance = MultiUserDB(db_path)
-                # Bootstrap: if no users exist, create default admin
-                if _db_instance.user_count() == 0:
-                    _db_instance.create_user("admin", "123456", role="admin")
-                    logger.info("[MultiUserDB] Bootstrapped default admin user (admin / 123456)")
     return _db_instance
 
 

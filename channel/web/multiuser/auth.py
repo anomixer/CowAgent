@@ -33,9 +33,9 @@ _SESSION_EXPIRE_SECONDS = 86400 * 7  # 7 days
 # ---------------------------------------------------------------------------
 
 def is_multiuser_enabled() -> bool:
-    """Return True if at least one user has been registered (multi-user mode)."""
-    db = get_multiuser_db()
-    return db.user_count() > 0
+    """Return True if multi-user mode is enabled via config."""
+    from config import conf
+    return conf().get("multi_user", False) is True
 
 
 def get_current_user() -> Optional[Dict]:
