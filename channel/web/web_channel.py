@@ -1288,15 +1288,23 @@ class WebChannel(ChatChannel):
         # In desktop mode the Electron shell renders the UI, so don't pop a
         # browser window (also avoids issues when running detached/headless).
         if os.environ.get("COW_DESKTOP") != "1":
-            # Only pop a browser when a desktop display is available (suppresses
-            # "gio: Operation not supported" noise on headless Linux machines).
-            if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or sys.platform == "win32":
+            # Try to open the browser.  On headless Linux / WSL the gio helper
+            # often prints "Operation not supported" to stderr; redirect that
+            # to os.devnull so it doesn't clutter the console.
+            try:
+                import os as _os, webbrowser
+                _devnull_fd = _os.open(_os.devnull, _os.O_WRONLY)
+                _old_stderr = _os.dup(2)
+                _os.dup2(_devnull_fd, 2)
+                _os.close(_devnull_fd)
                 try:
-                    import webbrowser
                     webbrowser.open(f"http://localhost:{port}")
-                    logger.debug(f"[WebChannel] Opened browser at http://localhost:{port}")
-                except Exception as e:
-                    logger.debug(f"[WebChannel] Could not open browser: {e}")
+                finally:
+                    _os.dup2(_old_stderr, 2)
+                    _os.close(_old_stderr)
+                logger.debug(f"[WebChannel] Opened browser at http://localhost:{port}")
+            except Exception as e:
+                logger.debug(f"[WebChannel] Could not open browser: {e}")
 
         # Ensure the static dir exists. In a packaged build it ships read-only
         # inside the bundle, so swallow errors instead of failing startup.
