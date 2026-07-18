@@ -676,6 +676,16 @@ MemoryManager.search(user_id="1")
 
 ## 11. 已修改檔案索引
 
+### v2.0 (2026-07-19) 安全性強化與路徑修正
+
+| 類別 | 項目 | 說明 |
+|------|------|------|
+| **Fix** | DB 路徑統一 | `get_default_db_path()` 從 `__file__` 改為 `agent_workspace`（`~/cow/sessions/`） |
+| **Security** | 保護主 admin（id=1） | 其他 admin 無法刪除或降級第一個管理員 |
+| **Fix** | Team Members 不能改 role | role 只能在加入時設定，加入後 locked |
+| **Feat** | Edit Team UI | Team Members 頁面新增編輯按鈕，可改名稱與 Prompt |
+| **Fix** | `config-template.json` | 補上 `"multi_user": false` |
+
 ### 新增檔案
 
 | 檔案 | 行數 | 說明 |
@@ -688,14 +698,17 @@ MemoryManager.search(user_id="1")
 
 | 檔案 | 說明 |
 |------|------|
-| `channel/web/web_channel.py` | +15 routes (含 P3: Teams, TeamDetail, TeamMembers, TeamMemberDetail, TeamMemberLeave, UserConfig, GlobalConfig) |
+| `channel/web/web_channel.py` | +15 routes；移除 `TeamMemberDetailHandler.PUT`（禁止 role 變更）；保護主 admin |
 | `channel/web/chat.html` | 登入/註冊 UI、使用者選單、profile/users view 容器 |
-| `channel/web/static/js/console.js` | 前端邏輯 + i18n + Global Prompt admin UI |
+| `channel/web/static/js/console.js` | 前端邏輯 + i18n + Global Prompt admin UI；移除 role 下拉；保護主 admin UI；新增 Edit Team |
+| `config-template.json` | 新增 `"multi_user": false` |
 | `bridge/agent_bridge.py` | `_pre_persist_user_message` + `_persist_messages` 串接 user_id |
 | `bridge/agent_initializer.py` | 三層 Prompt 注入 (Global → Team → User) |
 | `agent/memory/conversation_store.py` | `append_messages` 新增 `user_id` 參數 |
 | `agent/memory/storage.py` | 搜尋方法新增 `shared_user_ids` 參數 |
 | `agent/memory/manager.py` | sync() 掃描 `knowledge/users/{user_id}/`；search() 傳遞 `shared_user_ids` |
+| `README.md` | 新增英文 Multi-User 說明章節 |
+| `docs/zh/README-Hant.md` | 新增繁體中文多使用者說明章節 |
 | `AGENTS.md` | 本文件 |
 
 ---

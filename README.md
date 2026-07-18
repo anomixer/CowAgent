@@ -151,6 +151,67 @@ A single Agent instance can serve multiple channels in parallel. Most channels c
 
 <br/>
 
+## 👥 Multi-User Mode
+
+CowAgent supports multi-user authentication with role-based access control (RBAC) for team deployments.
+
+### Enable
+
+Add `"multi_user": true` to `config.json`:
+
+```json
+{
+  "multi_user": true,
+  "web_password": ""
+}
+```
+
+> ⚠️ Once enabled, `web_password` is bypassed. The first registered user becomes the **primary admin** (id=1), which cannot be deleted or demoted by other admins.
+
+### User Management
+
+| Role | Permissions |
+|------|-------------|
+| **admin** | Full access: manage users, teams, global settings, model config, knowledge base |
+| **user** | Personal chat sessions, own knowledge base, team spaces |
+
+- **First user** registered is auto-promoted to **admin**
+- **Admin panel**: Web console → 👥 Users to add/delete/manage users
+- **Password change**: Profile page or `/api/auth/change-password`
+- **Primary admin** (id=1) is protected: cannot be deleted or demoted by other admins
+
+### Database
+
+User accounts and sessions are stored in the `conversations.db` SQLite database under the workspace (`~/cow/sessions/`):
+
+| Table | Contents |
+|-------|----------|
+| `mu_users` | Registered users (username, password hash, role) |
+| `mu_sessions` | Login sessions (7-day expiry) |
+| `mu_teams` | Teams with shared prompts |
+| `mu_team_members` | Team membership and roles |
+| `mu_kb_shares` | Knowledge base sharing records |
+
+### Reset
+
+To fully reset the multi-user system:
+
+```bash
+# Stop the service, then:
+rm ~/cow/sessions/conversations.db
+# Restart — the first registered user will become admin again
+```
+
+### Team Management
+
+Admins can create teams, add members with `admin` or `member` roles (role is fixed after adding), and set a shared **Team Prompt** that all members inherit. Team prompts are layered with the user's personal prompt and the global prompt.
+
+### Knowledge Base Isolation
+
+Each user's uploaded knowledge base is isolated at `knowledge/users/{user_id}/`. Users can optionally share their knowledge with other users through the Knowledge → Shares panel.
+
+<br/>
+
 ## 🧠 Memory & Knowledge Base
 
 **Long-term memory** uses a three-tier architecture: conversation context (short-term) → daily memory (mid-term) → MEMORY.md (long-term). A nightly **Deep Dream** pass distills scattered memories into refined long-term entries and a narrative journal. See [Long-term Memory](https://docs.cowagent.ai/memory/index) · [Deep Dream](https://docs.cowagent.ai/memory/deep-dream).
