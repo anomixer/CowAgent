@@ -315,8 +315,8 @@ const I18N = {
         user_deleted: '用户已删除',
         user_updated: '用户已更新',
         /* Prompt editor */
-        prompt_editor_title: '系统提示词',
-        prompt_editor_desc: '自定义你的系统提示词，会附加到 AI 的系统提示中',
+        prompt_editor_title: '个人提示词',
+        prompt_editor_desc: '自定义你的个人提示词，会附加到 AI 的系统提示中',
         prompt_template_label: '提示词模板',
         prompt_template_placeholder: '在此输入自定义提示词…',
         prompt_save: '保存提示词',
@@ -655,8 +655,8 @@ const I18N = {
         user_deleted: '使用者已刪除',
         user_updated: '使用者已更新',
         /* Prompt editor */
-        prompt_editor_title: '系統提示詞',
-        prompt_editor_desc: '自訂你的系統提示詞，會附加到 AI 的系統提示中',
+        prompt_editor_title: '個人提示詞',
+        prompt_editor_desc: '自訂你的個人提示詞，會附加到 AI 的系統提示中',
         prompt_template_label: '提示詞模板',
         prompt_template_placeholder: '在此輸入自訂提示詞…',
         prompt_save: '儲存提示詞',
@@ -994,8 +994,8 @@ const I18N = {
         user_deleted: 'User deleted',
         user_updated: 'User updated',
         /* Prompt editor */
-        prompt_editor_title: 'System Prompt',
-        prompt_editor_desc: 'Customize your system prompt template, appended to the AI system prompt',
+        prompt_editor_title: 'Personal Prompt',
+        prompt_editor_desc: 'Customize your personal prompt template, appended to the AI system prompt',
         prompt_template_label: 'Prompt Template',
         prompt_template_placeholder: 'Enter your custom prompt here…',
         prompt_save: 'Save Prompt',
