@@ -391,7 +391,7 @@ class AgentBridge:
     
     def _init_agent_for_session(self, session_id: str, user_id: Optional[int] = None, team_ids: Optional[List[int]] = None):
         """Initialize agent for a specific session"""
-        agent = self.initializer.initialize_agent(session_id=session_id, user_id=user_id, team_ids=team_ids)
+        agent = self.initializer.initialize_agent(session_id=session_id, user_id=user_id)
         self.agents[session_id] = agent
 
     def sync_session_messages_from_store(self, session_id: str) -> int:

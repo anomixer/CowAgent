@@ -688,6 +688,9 @@ MemoryManager.search(user_id="1")
 | **Fix** | User Prompt 標題混淆 | 原「系統提示詞」改為「個人提示詞」/「Personal Prompt」，避免與 Global Prompt 混淆 |
 | **Fix** | user 看團隊成員數為 0 | `list_user_teams()` SQL 補 `member_count` subquery |
 | **Fix** | Global Prompt 存檔 FK 失敗 | `set_global_config()` 原本用 `user_id=-1` sentinel 撞 FK，改獨立 `mu_global_configs` table |
+| **Fix** | agent_initializer.py 縮排全壞（1空格→4空格） | 三層Prompt commit 意外把所有縮排從4空格變1空格，導致 IndentationError，Agent 模式 fallback |
+| **Fix** | `initialize_agent()` 不認 `team_ids` | `agent_bridge.py` 傳了不存在的參數，TypeError 被 try/except 吃掉 |
+| **Fix** | Agent 模式 fallback 到 normal mode | 修好縮排後，三層 Prompt 注入恢復正常運作 |
 
 ### 新增檔案
 
