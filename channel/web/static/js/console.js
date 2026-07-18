@@ -1159,8 +1159,8 @@ function syncLanguageToBackend(lang, callback) {
 // Load the current user's language preference from backend and apply it.
 // Called after login / auth check so each user sees their own language.
 function loadUserLanguage() {
-    if (!isMultiuserMode || !currentUser) return;
-    fetch('/api/auth/my-config?key=cow_lang')
+    if (!isMultiuserMode || !currentUser) return Promise.resolve();
+    return fetch('/api/auth/my-config?key=cow_lang')
         .then(r => r.json())
         .then(data => {
             if (data.status === 'success' && data.value) {
@@ -9675,17 +9675,22 @@ function showLoginScreen() {
                     isMultiuserMode = true;
                     isAdmin = data.user.role === 'admin';
                     setupUserMenu(data.user);
-                    loadUserLanguage();
+                    loadUserLanguage().then(function() {
+                        initApp();
+                        if (data.default_password) {
+                            showDefaultPasswordBanner();
+                        }
+                    });
                 } else {
                     // Single-user mode: assign a default user so teams/profile views work
                     currentUser = { id: 0, username: 'admin', role: 'admin' };
                     isAdmin = true;
                     const logoutBtn = document.getElementById('logout-btn-header');
                     if (logoutBtn) logoutBtn.classList.remove('hidden');
-                }
-                initApp();
-                if (data.default_password) {
-                    showDefaultPasswordBanner();
+                    initApp();
+                    if (data.default_password) {
+                        showDefaultPasswordBanner();
+                    }
                 }
             } else {
                 const msg = data.message || (currentLang === 'en' ? 'Login failed' : currentLang === 'zh-Hant' ? '登入失敗' : '登录失败');
@@ -9749,9 +9754,12 @@ function showLoginScreen() {
                         isMultiuserMode = true;
                         isAdmin = data.user.role === 'admin';
                         setupUserMenu(data.user);
-                        loadUserLanguage();
+                        loadUserLanguage().then(function() {
+                            initApp();
+                        });
+                    } else {
+                        initApp();
                     }
-                    initApp();
                 }, 800);
             } else {
                 errEl.textContent = data.message || (currentLang === 'en' ? 'Registration failed' : currentLang === 'zh-Hant' ? '註冊失敗' : '注册失败');
@@ -10949,13 +10957,14 @@ fetch('/auth/check').then(r => r.json()).then(data => {
         }
         showLoginScreen();
     } else {
+        var ready = Promise.resolve();
         if (data.auth_required) {
             if (data.multiuser && data.user) {
                 currentUser = data.user;
                 isMultiuserMode = true;
                 isAdmin = data.user.role === 'admin';
                 setupUserMenu(data.user);
-                loadUserLanguage();
+                ready = loadUserLanguage();
             } else {
                 // Single-user mode: assign a default user so teams/profile views work
                 currentUser = { id: 0, username: 'admin', role: 'admin' };
@@ -10968,7 +10977,9 @@ fetch('/auth/check').then(r => r.json()).then(data => {
             currentUser = { id: 0, username: 'admin', role: 'admin' };
             isAdmin = true;
         }
-        initApp();
+        ready.then(function() {
+            initApp();
+        });
     }
 }).catch(() => {
     initApp();
