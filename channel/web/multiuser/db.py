@@ -178,11 +178,9 @@ class MultiUserDB:
         data_root = conf().get("data_root", "")
         if data_root:
             return os.path.join(data_root, "sessions", "conversations.db")
-        # Fallback: use workspace root
-        return os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "sessions", "conversations.db"
-        )
+        # Fallback: use agent_workspace (統一放在 ~/cow/sessions/)
+        workspace = os.path.expanduser(conf().get("agent_workspace", "~/cow"))
+        return os.path.join(workspace, "sessions", "conversations.db")
 
     # -- user CRUD --------------------------------------------------------
 
