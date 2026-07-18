@@ -1744,6 +1744,8 @@ class AdminUserDetailHandler:
             return json.dumps({"status": "error", "message": "Invalid user ID"})
         if uid == admin["id"]:
             return json.dumps({"status": "error", "message": "Cannot delete yourself"})
+        if uid == 1:
+            return json.dumps({"status": "error", "message": "Cannot delete the primary admin account"})
         db = get_multiuser_db()
         if db.delete_user(uid):
             logger.info(f"[WebChannel] Admin '{admin['username']}' deleted user id={uid}")
@@ -1770,9 +1772,12 @@ class AdminUserDetailHandler:
             new_role = str(data["role"]).strip()
             if new_role not in ("admin", "user"):
                 return json.dumps({"status": "error", "message": "Role must be 'admin' or 'user'"})
-            # Prevent demoting the last admin
+            # Prevent demoting yourself
             if uid == admin["id"] and new_role != "admin":
                 return json.dumps({"status": "error", "message": "Cannot demote yourself"})
+            # Prevent demoting the primary admin
+            if uid == 1 and admin["id"] != 1 and new_role != "admin":
+                return json.dumps({"status": "error", "message": "Cannot change the primary admin's role"})
             db.update_user_role(uid, new_role)
             logger.info(f"[WebChannel] Admin '{admin['username']}' changed user id={uid} to role={new_role}")
 

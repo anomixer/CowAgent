@@ -10110,16 +10110,17 @@ function renderUserList(users) {
                             <td class="px-5 py-3">
                                 <select class="user-role-select text-xs rounded-lg border border-slate-200 dark:border-white/10 bg-transparent px-2 py-1
                                               text-slate-600 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-primary-400/50"
-                                        data-user-id="${u.id}" ${isSelf ? 'disabled' : ''}
+                                        data-user-id="${u.id}" ${(isSelf || (u.id === 1 && currentUserId !== 1)) ? 'disabled' : ''}
                                         onchange="updateUserRole(${u.id}, this.value)">
                                     <option value="user" ${u.role === 'user' ? 'selected' : ''}>${t('role_user')}</option>
                                     <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>${t('role_admin')}</option>
                                 </select>
                                 ${isSelf ? '<span class="text-xs text-slate-400 ml-1">(cannot change own role)</span>' : ''}
+                                ${(u.id === 1 && currentUserId !== 1) ? '<span class="text-xs text-slate-400 ml-1">(primary admin, locked)</span>' : ''}
                             </td>
                             <td class="px-5 py-3 text-slate-500 dark:text-slate-400 text-xs">${createdDate}</td>
                             <td class="px-5 py-3 text-right">
-                                ${!isSelf ? `
+                                ${!isSelf && u.id !== 1 ? `
                                     <button onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')"
                                             class="text-xs text-red-400 hover:text-red-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-500/10">
                                         <i class="fas fa-trash-alt"></i>
