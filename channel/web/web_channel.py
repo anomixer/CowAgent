@@ -2094,31 +2094,6 @@ class TeamMemberDetailHandler:
             return json.dumps({"status": "success"})
         return json.dumps({"status": "error", "message": "Member not found or last admin in team"})
 
-    def PUT(self, team_id: str, user_id: str):
-        """Update member role."""
-        web.header('Content-Type', 'application/json; charset=utf-8')
-        admin = self._auth_admin()
-        try:
-            tid = int(team_id)
-            uid = int(user_id)
-        except (ValueError, TypeError):
-            return json.dumps({"status": "error", "message": "Invalid ID"})
-        try:
-            data = json.loads(web.data())
-        except Exception:
-            return json.dumps({"status": "error", "message": "Invalid request"})
-
-        new_role = str(data.get("role", "")).strip()
-        if new_role not in ("admin", "member"):
-            return json.dumps({"status": "error", "message": "Role must be 'admin' or 'member'"})
-
-        db = get_multiuser_db()
-        if db.update_team_member_role(tid, uid, new_role):
-            logger.info(f"[WebChannel] Admin '{admin['username']}' changed user id={uid} to role={new_role} in team id={tid}")
-            return json.dumps({"status": "success"})
-        return json.dumps({"status": "error", "message": "Member not found or role unchanged"})
-
-
 class TeamMemberLeaveHandler:
     """POST → self-service leave team."""
 

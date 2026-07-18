@@ -10592,17 +10592,10 @@ function renderTeamMemberList(teamId, members) {
                             <td class="px-5 py-3">
                                 ${isOwner ? `
                                     <span class="text-xs px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 font-medium">${t('team_role_owner')}</span>
-                                ` : isAdmin ? `
-                                    <select class="team-member-role-select text-xs rounded-lg border border-slate-200 dark:border-white/10 bg-transparent px-2 py-1
-                                                  text-slate-600 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-primary-400/50"
-                                            data-team-id="${teamId}" data-user-id="${m.user_id}"
-                                            ${isSelf ? 'disabled' : ''}
-                                            onchange="updateTeamMemberRole(${teamId}, ${m.user_id}, this.value)">
-                                        <option value="admin" ${m.role === 'admin' ? 'selected' : ''}>${t('team_role_admin')}</option>
-                                        <option value="member" ${m.role === 'member' ? 'selected' : ''}>${t('team_role_member')}</option>
-                                    </select>
+                                ` : m.role === 'admin' ? `
+                                    <span class="text-xs px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 font-medium">${t('team_role_admin')}</span>
                                 ` : `
-                                    <span class="text-xs px-2 py-0.5 rounded-full bg-slate-50 dark:bg-white/5 text-slate-500 dark:text-slate-400">${m.role === 'admin' ? t('team_role_admin') : t('team_role_member')}</span>
+                                    <span class="text-xs px-2 py-0.5 rounded-full bg-slate-50 dark:bg-white/5 text-slate-500 dark:text-slate-400">${t('team_role_member')}</span>
                                 `}
                                 ${isSelf && !isOwner ? '<span class="text-xs text-slate-400 ml-1">(you)</span>' : ''}
                             </td>
@@ -10802,19 +10795,6 @@ function doAddMemberFetch(teamId, btn, statusEl) {
 window.submitAddMember = submitAddMember;
 
 // --- Update / Remove Member ---
-function updateTeamMemberRole(teamId, userId, newRole) {
-    fetch('/api/teams/' + teamId + '/members/' + userId, {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({role: newRole})
-    }).then(r => r.json()).then(data => {
-        if (data.status === 'success') {
-            fetchTeamMembers(teamId);
-        }
-    }).catch(function() {});
-}
-window.updateTeamMemberRole = updateTeamMemberRole;
-
 function removeTeamMember(teamId, userId, username) {
     const msg = (currentLang === 'en' ? 'Remove "' + username + '" from this team?' : currentLang === 'zh-Hant' ? '從團隊移除「' + username + '」？' : '从团队移除「' + username + '」？');
     showConfirmModal(t('team_remove_member'), msg, function() {
