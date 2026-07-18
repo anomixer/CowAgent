@@ -685,6 +685,8 @@ MemoryManager.search(user_id="1")
 | **Fix** | Team Members 不能改 role | role 只能在加入時設定，加入後 locked |
 | **Feat** | Edit Team UI | Team Members 頁面新增編輯按鈕，可改名稱與 Prompt |
 | **Fix** | `config-template.json` | 補上 `"multi_user": false` |
+| **Fix** | User Prompt 標題混淆 | 原「系統提示詞」改為「個人提示詞」/「Personal Prompt」，避免與 Global Prompt 混淆 |
+| **Fix** | user 看團隊成員數為 0 | `list_user_teams()` SQL 補 `member_count` subquery |
 
 ### 新增檔案
 
@@ -700,7 +702,8 @@ MemoryManager.search(user_id="1")
 |------|------|
 | `channel/web/web_channel.py` | +15 routes；移除 `TeamMemberDetailHandler.PUT`（禁止 role 變更）；保護主 admin |
 | `channel/web/chat.html` | 登入/註冊 UI、使用者選單、profile/users view 容器 |
-| `channel/web/static/js/console.js` | 前端邏輯 + i18n + Global Prompt admin UI；移除 role 下拉；保護主 admin UI；新增 Edit Team |
+| `channel/web/static/js/console.js` | 前端邏輯 + i18n + Global Prompt admin UI；移除 role 下拉；保護主 admin UI；新增 Edit Team；Prompt 標題改名 |
+| `channel/web/multiuser/db.py` | `list_user_teams()` 補 `member_count` subquery（user 看團隊人數正確） |
 | `config-template.json` | 新增 `"multi_user": false` |
 | `bridge/agent_bridge.py` | `_pre_persist_user_message` + `_persist_messages` 串接 user_id |
 | `bridge/agent_initializer.py` | 三層 Prompt 注入 (Global → Team → User) |
