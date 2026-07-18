@@ -687,6 +687,7 @@ MemoryManager.search(user_id="1")
 | **Fix** | `config-template.json` | 補上 `"multi_user": false` |
 | **Fix** | User Prompt 標題混淆 | 原「系統提示詞」改為「個人提示詞」/「Personal Prompt」，避免與 Global Prompt 混淆 |
 | **Fix** | user 看團隊成員數為 0 | `list_user_teams()` SQL 補 `member_count` subquery |
+| **Fix** | Global Prompt 存檔 FK 失敗 | `set_global_config()` 原本用 `user_id=-1` sentinel 撞 FK，改獨立 `mu_global_configs` table |
 
 ### 新增檔案
 

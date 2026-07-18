@@ -109,6 +109,12 @@ CREATE TABLE IF NOT EXISTS mu_user_configs (
 
 CREATE INDEX IF NOT EXISTS idx_mu_user_configs_user
     ON mu_user_configs (user_id);
+
+CREATE TABLE IF NOT EXISTS mu_global_configs (
+    config_key      TEXT    PRIMARY KEY,
+    config_value    TEXT    NOT NULL DEFAULT '',
+    updated_at      INTEGER NOT NULL
+);
 """
 
 _MIGRATION_ADD_USER_ID_TO_SESSIONS = """
@@ -892,15 +898,44 @@ class MultiUserDB:
             finally:
                 conn.close()
 
-    # -- global config (user_id = -1 is the global/system sentinel) -------
+    # -- global config (mu_global_configs table, no FK constraint) -------
 
     def set_global_config(self, config_key: str, config_value: str) -> bool:
-        """Set a global config value (upsert, user_id=-1 sentinel)."""
-        return self.set_user_config(-1, config_key, config_value)
+        """Set a global config value (own table, no FK constraint)."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                now = int(time.time())
+                conn.execute(
+                    "INSERT INTO mu_global_configs (config_key, config_value, updated_at) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(config_key) "
+                    "DO UPDATE SET config_value = excluded.config_value, updated_at = ?",
+                    (config_key, config_value, now, now),
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.warning(f"[MultiUserDB] set_global_config error: {e}")
+                return False
+            finally:
+                conn.close()
 
     def get_global_config(self, config_key: str) -> Optional[str]:
         """Get a global config value."""
-        return self.get_user_config(-1, config_key)
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT config_value FROM mu_global_configs WHERE config_key = ?",
+                    (config_key,),
+                ).fetchone()
+                return row["config_value"] if row else None
+            except Exception as e:
+                logger.warning(f"[MultiUserDB] get_global_config error: {e}")
+                return None
+            finally:
+                conn.close()
 
     # -- internals --------------------------------------------------------
 
@@ -926,6 +961,24 @@ class MultiUserDB:
                 logger.debug("[MultiUserDB] Migration: added prompt column to mu_teams")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            # Migrate: copy legacy global configs from mu_user_configs (user_id=-1) to mu_global_configs
+            try:
+                legacy = conn.execute(
+                    "SELECT config_key, config_value, updated_at FROM mu_user_configs WHERE user_id = -1"
+                ).fetchall()
+                if legacy:
+                    now = int(time.time())
+                    for row in legacy:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO mu_global_configs (config_key, config_value, updated_at) "
+                            "VALUES (?, ?, ?)",
+                            (row["config_key"], row["config_value"], row["updated_at"] or now),
+                        )
+                    conn.execute("DELETE FROM mu_user_configs WHERE user_id = -1")
+                    conn.commit()
+                    logger.info(f"[MultiUserDB] Migration: moved {len(legacy)} global config(s) from mu_user_configs")
+            except Exception as e:
+                logger.warning(f"[MultiUserDB] Global config migration: {e}")
             logger.debug(f"[MultiUserDB] Initialized at {self._db_path}")
         except Exception as e:
             logger.error(f"[MultiUserDB] Init error: {e}")
