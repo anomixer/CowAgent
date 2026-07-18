@@ -10459,6 +10459,107 @@ function submitCreateTeam() {
 }
 window.submitCreateTeam = submitCreateTeam;
 
+// --- Edit Team ---
+function showEditTeamForm(teamId) {
+    // Fetch current team data
+    fetch('/api/teams/' + teamId)
+        .then(r => r.json())
+        .then(data => {
+            if (data.status !== 'success' || !data.team) return;
+            const team = data.team;
+            const overlay = document.createElement('div');
+            overlay.id = 'edit-team-overlay';
+            overlay.className = 'fixed inset-0 bg-black/50 z-[200] flex items-center justify-center';
+            overlay.onclick = function(e) { if (e.target === overlay) closeEditTeamForm(); };
+
+            overlay.innerHTML = `
+                <div class="bg-white dark:bg-[#1A1A1A] rounded-2xl border border-slate-200 dark:border-white/10 shadow-xl w-full max-w-lg mx-4">
+                    <div class="p-6">
+                        <h3 class="font-semibold text-slate-800 dark:text-slate-100 mb-4">${t('team_edit')}</h3>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">${t('team_name')}</label>
+                                <input id="edit-team-name" type="text" value="${escapeHtml(team.name)}"
+                                       class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                              text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">${t('team_prompt_label')}</label>
+                                <textarea id="edit-team-prompt" rows="4"
+                                          class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
+                                                 text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50"
+                                          placeholder="${t('team_prompt_hint')}">${escapeHtml(team.prompt || '')}</textarea>
+                            </div>
+                            <p id="edit-team-status" class="text-sm text-red-500 hidden"></p>
+                        </div>
+                    </div>
+                    <div class="flex justify-end gap-3 px-6 py-4 border-t border-slate-100 dark:border-white/5">
+                        <button onclick="closeEditTeamForm()"
+                                class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 text-sm hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer">
+                            ${t('confirm_cancel')}
+                        </button>
+                        <button onclick="submitEditTeam(${teamId})"
+                                class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer disabled:opacity-50">
+                            ${t('confirm_yes')}
+                        </button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            document.getElementById('edit-team-name').focus();
+        })
+        .catch(() => {});
+}
+window.showEditTeamForm = showEditTeamForm;
+
+function closeEditTeamForm() {
+    const overlay = document.getElementById('edit-team-overlay');
+    if (overlay) { overlay.remove(); }
+}
+window.closeEditTeamForm = closeEditTeamForm;
+
+function submitEditTeam(teamId) {
+    const name = document.getElementById('edit-team-name').value.trim();
+    const prompt = document.getElementById('edit-team-prompt').value.trim();
+    const statusEl = document.getElementById('edit-team-status');
+    const btn = document.querySelector('#edit-team-overlay .bg-primary-500');
+
+    if (!name || name.length < 2) {
+        statusEl.textContent = currentLang === 'en' ? 'Team name must be at least 2 characters' : '团队名称至少2个字符';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    btn.disabled = true;
+    statusEl.classList.add('hidden');
+
+    fetch('/api/teams/' + teamId, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: name, prompt: prompt})
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            closeEditTeamForm();
+            // Re-fetch team members view to update header name
+            const container = document.getElementById('view-teams');
+            if (container) {
+                // Re-render the members view with updated info
+                showTeamMembersView(teamId, name);
+            }
+            showStatus('teams-list-status', 'team_updated', false);
+        } else {
+            statusEl.textContent = data.message || (currentLang === 'en' ? 'Failed to update team' : '更新团队失败');
+            statusEl.classList.remove('hidden');
+        }
+        btn.disabled = false;
+    }).catch(() => {
+        statusEl.textContent = currentLang === 'en' ? 'Network error' : '网络错误';
+        statusEl.classList.remove('hidden');
+        btn.disabled = false;
+    });
+}
+window.submitEditTeam = submitEditTeam;
+
 // --- Delete Team ---
 function deleteTeam(teamId, teamName) {
     const msg = (currentLang === 'en' ? 'Are you sure you want to delete team "' : currentLang === 'zh-Hant' ? '確定要刪除團隊「' : '确定要删除团队「') + teamName + '」吗？' + (currentLang === 'en' ? ' This action cannot be undone.' : currentLang === 'zh-Hant' ? '此操作無法撤銷。' : '此操作无法撤销。');
@@ -10507,12 +10608,20 @@ function showTeamMembersView(teamId, teamName) {
                         </div>
                     </div>
                     ${isAdmin ? `
-                    <button onclick="showAddMemberForm(${teamId})"
-                            class="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600
-                                   text-white text-sm font-medium cursor-pointer transition-colors duration-150">
-                        <i class="fas fa-user-plus text-xs"></i>
-                        <span>${t('team_add_member')}</span>
-                    </button>
+                    <div class="flex items-center gap-2">
+                        <button onclick="showEditTeamForm(${teamId})"
+                                class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10
+                                       text-slate-600 dark:text-slate-300 text-sm hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer transition-colors duration-150">
+                            <i class="fas fa-pen text-xs"></i>
+                            <span>${t('team_edit')}</span>
+                        </button>
+                        <button onclick="showAddMemberForm(${teamId})"
+                                class="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600
+                                       text-white text-sm font-medium cursor-pointer transition-colors duration-150">
+                            <i class="fas fa-user-plus text-xs"></i>
+                            <span>${t('team_add_member')}</span>
+                        </button>
+                    </div>
                     ` : ''}
                 </div>
 
