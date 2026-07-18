@@ -647,7 +647,8 @@ class MultiUserDB:
             try:
                 rows = conn.execute(
                     "SELECT t.id, t.name, t.description, t.prompt, t.created_by, t.created_at, "
-                    "m.role AS my_role "
+                    "m.role AS my_role, "
+                    "(SELECT COUNT(*) FROM mu_team_members m2 WHERE m2.team_id = t.id) AS member_count "
                     "FROM mu_teams t "
                     "JOIN mu_team_members m ON m.team_id = t.id "
                     "WHERE m.user_id = ? "
