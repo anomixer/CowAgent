@@ -115,6 +115,16 @@ CREATE TABLE IF NOT EXISTS mu_global_configs (
     config_value    TEXT    NOT NULL DEFAULT '',
     updated_at      INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id        TEXT    PRIMARY KEY,
+    channel_type      TEXT    NOT NULL DEFAULT '',
+    title             TEXT    NOT NULL DEFAULT '',
+    context_start_seq INTEGER NOT NULL DEFAULT 0,
+    created_at        INTEGER NOT NULL,
+    last_active       INTEGER NOT NULL,
+    msg_count         INTEGER NOT NULL DEFAULT 0
+);
 """
 
 _MIGRATION_ADD_USER_ID_TO_SESSIONS = """
