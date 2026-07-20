@@ -172,9 +172,10 @@ class AgentInitializer:
             )
         # ──────────────────────────────────────────────────────────────────
 
-        # Inject prompts WITHOUT touching AGENT.md on disk, so that
-        # _is_onboarding_done() still returns False → BOOTSTRAP.md survives.
-        # Strategy: add a custom ContextFile + write user-specific files.
+        # Inject prompts into BOOTSTRAP.md ContextFile (prepended) so the
+        # LLM sees prompts first, then onboarding flow, in ONE section.
+        # Also write user-specific files to disk for `read` tool discovery.
+        # AGENT.md is NOT touched → _is_onboarding_done() returns False.
         if user_id is not None:
             _prompt_sections = []
             if global_prompt:
@@ -185,7 +186,6 @@ class AgentInitializer:
                 _prompt_sections.append(f"📝 使用者提示詞（最高優先）\n{user_prompt_override}")
 
             if _prompt_sections:
-                # Build prompts text for system prompt & disk files
                 _prompt_content = (
                     "## 🎯 使用者指令\n\n"
                     "以下三層提示詞全部都要遵循。如果不衝突則同時生效，"
@@ -193,13 +193,12 @@ class AgentInitializer:
                     + "\n\n".join(_prompt_sections) +
                     "\n"
                 )
-                # 1. Inject as a custom ContextFile (in system prompt, no disk write)
-                from agent.prompt.builder import ContextFile
-                context_files.append(ContextFile(
-                    path="prompts.md",
-                    content=_prompt_content
-                ))
-                # 2. Also write user-specific files to disk for `read` tool
+                # 1. Prepend prompts to BOOTSTRAP.md ContextFile
+                for _cf in context_files:
+                    if _cf.path.lower().endswith("bootstrap.md"):
+                        _cf.content = _prompt_content + _cf.content
+                        break
+                # 2. Write user-specific files to disk for `read` tool
                 _user_prompt_dir = os.path.join(workspace_root, "prompts", str(user_id))
                 try:
                     os.makedirs(_user_prompt_dir, exist_ok=True)
@@ -220,7 +219,8 @@ class AgentInitializer:
                         f"[AgentInitializer] ⚠️ Failed to write prompt files: {e}"
                     )
                 logger.info(
-                    f"[AgentInitializer] 🧩 Added prompts.md ContextFile ({len(_prompt_content)} chars)"
+                    f"[AgentInitializer] 🧩 Prepended prompts to BOOTSTRAP.md ContextFile "
+                    f"({len(_prompt_content)} chars)"
                 )
             else:
                 logger.info(
