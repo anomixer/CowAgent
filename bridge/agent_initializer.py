@@ -193,7 +193,8 @@ class AgentInitializer:
                     # Build the prompt block to prepend
                     _prompt_block = (
                         "## 🎯 使用者指令\n\n"
-                        "**優先順序：使用者提示詞 > 團隊提示詞 > 全域提示詞**\n\n"
+                        "以下三層提示詞全部都要遵循。如果不衝突則同時生效，"
+                        "若有衝突則以使用者提示詞為準。\n\n"
                         + "\n\n".join(_prompt_sections) +
                         "\n\n請嚴格遵循以上指令。\n\n---\n\n"
                     )
