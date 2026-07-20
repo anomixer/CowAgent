@@ -776,7 +776,17 @@ base system prompt (from workspace files)
 
 每一層都是 **append** 而非覆蓋，越個人化的 prompt 越在後面、權重越高。
 
-### 2026-07-20 — Prompt 注入實測與已知 Bug
+### 2026-07-20 — Prompt 注入實測與 Bug 確認 🐮
+
+#### 今日測試摘要
+
+**目標**: 驗證三層 Prompt (Global → Team → User) 在 multiuser 模式下是否正確注入
+
+**測試環境**:
+- 本地開發機 `~/cowagent-multiuser` branch `feat-multiuser`
+- 測試機 `~/cowagent` branch `feat-multiuser`（從 github pull）
+- 設定 admin user prompt: `personal prompt, append a dog emoji 🐶 to every end of chat`
+- 設定 global prompt: `global prompt, append a cat emoji 🐱 to every end of chat`
 
 #### Prompt 注入實測演化
 
@@ -785,36 +795,70 @@ base system prompt (from workspace files)
 | **A. ContextFile 插入 position 1**（不改 AGENT.md 硬碟） | `d75fb416` ~ `9ebd3d51` | ❌ LLM 完全忽略 prompt，跑 BOOTSTRAP.md onboarding | ContextFile 雖在 system prompt 中，但 LLM 沒 `read` 它就回話 |
 | **B. AGENT.md 硬碟 prepend + `<!--multiuser-->` marker** | `05278d5b` | ✅ **唯一有效**！LLM `read` AGENT.md 看到規則在最上面 | `_is_onboarding_done()` 見 marker 回 False → BOOTSTRAP.md 存活 |
 | **C. Dual Approach**（B + ContextFile 插入） | `ccdb6758` | ⚠️ 部分生效：🐶 有、🐱 無 | 規則寫「衝突以使用者為準」→ LLM 直接 override global prompt |
-| **D. 純 AGENT.md prepend + 規則改「全部同時適用」** | `3013227b` | ⏳ 待測試 | 移除多餘 ContextFile，用語改為「全部同時適用，不是選一個」 |
+| **D. 純 AGENT.md prepend + 規則改「全部同時適用」** | `3013227b` | ⏳ 未測試（被 Bug 攔截） | 移除多餘 ContextFile，用語改為「全部同時適用，不是選一個」 |
 
 **關鍵教訓**：
 1. **寫到硬碟才是王道** — LLM 用 `read` 工具讀檔時最有效，ContextFile 在 system prompt 中容易被忽略
 2. **用語要精準** — 「衝突則以 X 為準」→ LLM 理解為 override；「全部同時適用」才是累加
 3. **不要製造重複** — 同一規則出現在 AGENT.md 和 ContextFile 兩處會讓 LLM 困惑
 
-#### 已知 Bug（playerr 回報）
+#### 🔴 已確認 Bug（playerr 實際測試回報，2026-07-20 17:23）
 
-##### Bug A: Prompt 跨使用者錯亂
-- **描述**：user1 開對話看到 admin 的 user prompt
-- **疑似根因**：`agent_initializer.py` 載入 prompt 時傳錯 `user_id`，或 `db.py` 的 `get_user_config()` 查詢未正確過濾 user_id
-- **檢查點**：
-  - `agent_initializer.py:get_user_config(user_id, "prompt_template")` 的 user_id 是否正確
-  - `db.py` 的 `get_user_config()` SQL 是否真的 WHERE user_id=?
-  - session → user_id 關聯是否一致
+> 以下三個 Bug 已在測試機上**確認重現**，非「疑似」而是「已證實」。
+> 這些是**下一次 debug 的第一優先級**。
 
-##### Bug B: 對話歷史被刪
-- **描述**：既有對話 session 消失
-- **疑似根因**：
-  - `get_user_conversation_sessions()` SQL 的 `WHERE user_id = ?` 沒考慮 legacy `user_id=0` 的 session
-  - 或 `append_messages()` 的 `AND user_id = 0` 寫入條件導致異常（被 try/except 吃掉）
-  - 或 `ws_persist_messages` / `_persist_messages` 中 exception 被靜默處理
+##### Bug #1: Prompt 跨使用者錯亂 (Critical 🔴)
+- **狀態**: ✅ 已確認重現
+- **描述**: user1 開對話後，顯示的是 admin 的 user prompt（而非 user1 自己的 prompt），或其他 user 的 prompt 混入
+- **具體現象**: 
+  - 使用者 A 設定自己的 user prompt → 使用者 B 的對話也看到 A 的 prompt 內容
+  - 或 user1 看到的是 admin 的「個人提示詞」而非 global prompt + 自己的 prompt
+- **優先根因調查方向**:
+  - `agent_initializer.py` 中呼叫 `get_user_config(user_id, "prompt_template")` 的 `user_id` 參數**是否真的來自當前 session 的 user？**
+  - `db.py` 的 `get_user_config()` SQL 查詢是否正確 `WHERE user_id = ?`
+  - session → user_id 的傳遞鏈：`web_channel.py` → `post_message()` → `context["user_id"]` → `agent_initializer.py` → `get_user_config()`
+  - 檢查是否有 static/cached 變數不小心跨請求共用
 
-##### Bug C: 無法新增對話
-- **描述**：點新增對話按鈕後無反應或報錯
-- **疑似根因**：
-  - 前端 `create_new_session()` API 路徑不正確
-  - 後端 create session 時寫入 `user_id` 欄位失敗
-  - `ensure_conversation_user_id_column()` migration 沒正確執行
+##### Bug #2: 既有對話歷史被刪 (Critical 🔴)
+- **狀態**: ✅ 已確認重現
+- **描述**: 已存在的對話 session 消失，重新整理或重開頁面後看不到舊對話
+- **優先根因調查方向**:
+  - `get_user_conversation_sessions()` 的 SQL 條件 `WHERE user_id = ?` 是否把 legacy `user_id=0` 的 session 全部排除了？
+  - `append_messages()` 中 `AND user_id = 0` 的寫入條件是否導致異常（exception 被 try/except 吃掉）？
+  - `ws_persist_messages` / `_persist_messages` 中是否有 exception 被靜默處理？
+  - `ensure_conversation_user_id_column()` migration 是否正確執行？
+
+##### Bug #3: 無法新增對話 (Critical 🔴)
+- **狀態**: ✅ 已確認重現
+- **描述**: 點擊「新增對話」按鈕後無反應，或跳出錯誤訊息
+- **優先根因調查方向**:
+  - 前端 `create_new_session()` 呼叫的 API endpoint 是否正確（路徑比對）？
+  - 後端 create session handler 寫入 `user_id` 時是否報錯？
+  - `ensure_conversation_user_id_column()` 是否已幫 `sessions` 表加上 `user_id` 欄位？
+  - 新增 session 時 `INSERT` SQL 是否缺少預設值導致錯誤？
+
+#### 下次 Debug 優先順序
+
+```
+1. Bug #1: Prompt 跨使用者錯亂
+   → 追 user_id 在 prompt 注入鏈中的傳遞
+
+2. Bug #2: 對話歷史被刪
+   → 查 SQL 過濾條件 + exception handling
+
+3. Bug #3: 無法新增對話
+   → 前後端 API 路徑 + DB migration 狀態
+
+4. 方法 D 測試
+   → 等上面三個 Bug 修完再測 prompt 注入
+```
+
+#### 測試驗證檢查清單（給下次用）
+- [ ] admin 開對話 → 應有 🐶 (user prompt) + 🐱 (global prompt) 同時生效
+- [ ] user2 開對話 → 不該有 🐶（admin 的 prompt），只該有 🐱（global）+ user2 自己的 prompt
+- [ ] 所有對話 session 重開頁面後要還在
+- [ ] 新增對話按鈕要正常運作
+- [ ] 多個 user 切換後 prompt 不混雜
 
 ---
 
