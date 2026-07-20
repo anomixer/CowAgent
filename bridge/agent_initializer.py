@@ -172,10 +172,9 @@ class AgentInitializer:
             )
         # ──────────────────────────────────────────────────────────────────
 
-        # Rewrite AGENT.md on disk to embed the user's prompts inline and
-        # strip onboarding triggers so the LLM doesn't act "first day".
-        # This is the ONLY approach that worked (user confirmed: edit AGENT.md
-        # directly → LLM follows it).
+        # Rewrite AGENT.md on disk to APPEND the user's prompts after the
+        # existing template (keeping onboarding greetings intact).
+        # The LLM reads the file → sees template (welcome ceremony) + prompts.
         if user_id is not None:
             _prompt_sections = []
             if global_prompt:
@@ -188,23 +187,17 @@ class AgentInitializer:
             if _prompt_sections:
                 _agent_path = os.path.join(workspace_root, "AGENT.md")
                 try:
-                    # Read the original template
+                    # Read the original template (keep as-is, including onboarding)
                     with open(_agent_path, "r", encoding="utf-8") as f:
                         _orig = f.read()
-                    # Build new content: template stripped of onboarding hooks
-                    # + inline prompts + priority note
+                    # Build the prompt block to append
                     _prompt_block = (
                         "\n\n## 🎯 使用者指令\n\n"
                         "**優先順序：使用者提示詞 > 團隊提示詞 > 全域提示詞**\n\n"
                         + "\n\n".join(_prompt_sections) +
                         "\n\n請嚴格遵循以上指令。"
                     )
-                    # Strip the onboarding sentence from template
-                    _cleaned = _orig.replace(
-                        "*在首次对话时与用户一起填写这个文件，定义你的身份和性格。*",
-                        ""
-                    ).strip()
-                    _new_content = _cleaned + _prompt_block
+                    _new_content = _orig + _prompt_block
                     # Write to disk (overwrite)
                     with open(_agent_path, "w", encoding="utf-8") as f:
                         f.write(_new_content)
@@ -214,7 +207,7 @@ class AgentInitializer:
                             _cf.content = _new_content
                             break
                     logger.info(
-                        f"[AgentInitializer] ✅ Rewrote AGENT.md with inline prompts "
+                        f"[AgentInitializer] ✅ Rewrote AGENT.md with prompts appended "
                         f"({len(_new_content)} chars)"
                     )
                 except Exception as e:
