@@ -200,6 +200,17 @@ class AgentInitializer:
                 f"[AgentInitializer] ✅ ContextFile: USER_PROMPT.md ({len(user_prompt_override)} chars)"
             )
 
+        if team_context:
+            _extra_files.append(
+                ContextFile(
+                    "TEAM_PROMPT.md",
+                    f"## 👥 團隊資訊\n\n{team_context}\n",
+                )
+            )
+            logger.info(
+                f"[AgentInitializer] ✅ ContextFile: TEAM_PROMPT.md loaded"
+            )
+
         if _extra_files:
             context_files = _extra_files + context_files
             logger.info(
