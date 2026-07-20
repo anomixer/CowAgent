@@ -172,46 +172,54 @@ class AgentInitializer:
             )
         # ──────────────────────────────────────────────────────────────────
 
-        # Inject prompt rules INTO BOOTSTRAP.md ContextFile content, NOT as
-        # a separate block but merged into the onboarding flow instructions.
-        # This is the only approach that works: BOOTSTRAP.md is too dominant
-        # for separate prompt blocks. Making prompts part of the flow.
-        # AGENT.md is untouched → _is_onboarding_done() returns False.
+        # Prepend prompt rules into AGENT.md (on disk + ContextFile).
+        # This is the ONLY approach that made prompts work (see 05278d5b).
+        # BOOTSTRAP.md protection: we prepend <!--multiuser--> marker so
+        # _is_onboarding_done() knows it's NOT real editing → won't delete
+        # BOOTSTRAP.md. The marker is removed once actual onboarding edits
+        # are made by the LLM.
         if user_id is not None:
             _prompt_sections = []
             if global_prompt:
-                _prompt_sections.append(f"🌐 全域提示詞（基礎）\n{global_prompt}")
+                _prompt_sections.append(f"- 🌐 全域提示詞（基礎）\n  {global_prompt}")
             if team_context:
-                _prompt_sections.append(f"👥 團隊提示詞\n{team_context}")
+                _prompt_sections.append(f"- 👥 團隊提示詞\n  {team_context}")
             if user_prompt_override:
-                _prompt_sections.append(f"📝 使用者提示詞（最高優先）\n{user_prompt_override}")
+                _prompt_sections.append(f"- 📝 使用者提示詞（最高優先）\n  {user_prompt_override}")
 
             if _prompt_sections:
-                # Build a compact "rules to follow" block for insertion
-                _prompt_rule = "## 📌 必須遵循的規則\n\n" + (
-                    "以下是你在所有對話中（包括 onboarding 期間）都必須遵循的指令。"
-                    "把它們當成你的核心行為規則：\n\n"
+                _prefix = (
+                    "<!--multiuser-->\n\n"
+                    "## 🎯 使用者專屬規則\n\n"
+                    "以下規則所有對話都必須遵循，包括初次對話（onboarding）。\n"
+                    "如果不衝突則全部同時生效，若有衝突則以使用者提示詞為準：\n\n"
+                    + "\n".join(_prompt_sections) +
+                    "\n\n---\n\n"
                 )
-                for ps in _prompt_sections:
-                    _prompt_rule += f"- {ps}\n"
-                _prompt_rule += "\n---\n\n"
+                _agent_path = os.path.join(workspace_root, "AGENT.md")
+                try:
+                    # Read original template
+                    with open(_agent_path, "r", encoding="utf-8") as f:
+                        _orig = f.read()
+                    # Prepend rules
+                    _new = _prefix + _orig
+                    # Write to disk
+                    with open(_agent_path, "w", encoding="utf-8") as f:
+                        f.write(_new)
+                    # Update ContextFile in memory too
+                    for _cf in context_files:
+                        if _cf.path.lower().endswith("agent.md"):
+                            _cf.content = _new
+                            break
+                    logger.info(
+                        f"[AgentInitializer] ✅ Prepended rules to AGENT.md + BOOTSTRAP.md protected"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[AgentInitializer] ⚠️ Failed to write AGENT.md: {e}"
+                    )
 
-                # 1. Inject into BOOTSTRAP.md ContextFile, right after the title
-                for _cf in context_files:
-                    if _cf.path.lower().endswith("bootstrap.md"):
-                        _old = _cf.content
-                        # Find the first heading or content start after the title
-                        # Insert the rule block between the title and the flow
-                        _lines = _old.split("\n", 3)
-                        # _lines[0] = "# BOOTSTRAP.md - First-run onboarding"
-                        # _lines[1] = ""
-                        # _lines[2] = "_You've just started up..._"
-                        if len(_lines) >= 3:
-                            _cf.content = _lines[0] + "\n\n" + _prompt_rule + "\n".join(_lines[1:])
-                        else:
-                            _cf.content = _prompt_rule + _old
-                        break
-                # 2. Write user-specific files to disk for `read` tool
+                # Write user-specific prompt files to disk for `read` tool
                 _user_prompt_dir = os.path.join(workspace_root, "prompts", str(user_id))
                 try:
                     os.makedirs(_user_prompt_dir, exist_ok=True)
@@ -224,16 +232,10 @@ class AgentInitializer:
                     if user_prompt_override:
                         with open(os.path.join(_user_prompt_dir, "USER_PROMPT.md"), "w", encoding="utf-8") as f:
                             f.write(f"## 📝 使用者提示詞（最高優先）\n\n{user_prompt_override}\n")
-                    logger.info(
-                        f"[AgentInitializer] 💾 Prompt files written to prompts/{user_id}/"
-                    )
                 except Exception as e:
                     logger.warning(
                         f"[AgentInitializer] ⚠️ Failed to write prompt files: {e}"
                     )
-                logger.info(
-                    f"[AgentInitializer] 🧩 Injected prompt rules into BOOTSTRAP.md flow"
-                )
             else:
                 logger.info(
                     f"[AgentInitializer] ⏭️ No prompts set for user_id={user_id}"

@@ -240,7 +240,11 @@ def _is_template_placeholder(content: str) -> bool:
 
 
 def _is_onboarding_done(workspace_dir: str) -> bool:
-    """Check if AGENT.md or USER.md has been modified from the original template"""
+    """Check if AGENT.md or USER.md has been modified from the original template.
+    
+    Skips files that only contain the <!--multiuser--> marker (prompt prepend
+    by agent_initializer.py) — that's not real editing.
+    """
     agent_path = os.path.join(workspace_dir, DEFAULT_AGENT_FILENAME)
     user_path = os.path.join(workspace_dir, DEFAULT_USER_FILENAME)
     
@@ -254,6 +258,9 @@ def _is_onboarding_done(workspace_dir: str) -> bool:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
             if content != template:
+                # Ignore multiuser prompt prepend (only marker + rules before template)
+                if "<!--multiuser-->" in content:
+                    return False
                 return True
         except Exception:
             continue
