@@ -94,6 +94,9 @@ class AgentInitializer:
         user_prompt_override = None   # custom prompt from mu_user_configs
         global_prompt = None          # admin-set global prompt
         if user_id is not None:
+            logger.info(
+                f"[AgentInitializer] 🔍 Loading multi-user context for user_id={user_id}"
+            )
             try:
                 from channel.web.multiuser.db import get_multiuser_db
                 mu_db = get_multiuser_db()
@@ -142,6 +145,10 @@ class AgentInitializer:
                     f"[AgentInitializer] Failed to load multi-user context "
                     f"for user_id={user_id}: {e}"
                 )
+        else:
+            logger.info(
+                f"[AgentInitializer] ⏭️ user_id=None — skipping multi-user context"
+            )
         # ──────────────────────────────────────────────────────────────────
         
         # Build system prompt
