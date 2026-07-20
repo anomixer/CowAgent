@@ -171,29 +171,47 @@ class AgentInitializer:
                 f"[AgentInitializer] ⏭️ user_id=None — skipping multi-user context"
             )
         # ──────────────────────────────────────────────────────────────────
-        
-        # Inject global/user/team prompts into user_identity.notes so they
-        # land in section 6 (# 👤 User identity) of the built system prompt,
-        # NOT at the tail end where the model may truncate or ignore them.
-        _notes_parts = []
+
+        # Write global/user prompt files to workspace so they become
+        # context files alongside AGENT.md in builder section 7.
+        # AGENT.md works → these will work too.
+        from agent.prompt.builder import ContextFile
+        _extra_files = []
+
         if global_prompt:
-            _notes_parts.append(f"🌐 全域提示詞:\n{global_prompt}")
-        if team_context:
-            _notes_parts.append(f"👥 團隊資訊:\n{team_context}")
+            _extra_files.append(
+                ContextFile(
+                    "GLOBAL_PROMPT.md",
+                    f"## 🌐 全域提示詞\n\n{global_prompt}\n",
+                )
+            )
+            logger.info(
+                f"[AgentInitializer] ✅ ContextFile: GLOBAL_PROMPT.md ({len(global_prompt)} chars)"
+            )
+
         if user_prompt_override:
-            _notes_parts.append(f"📝 使用者提示詞:\n{user_prompt_override}")
-        if _notes_parts:
-            notes = "\n\n".join(_notes_parts)
-            if user_identity:
-                user_identity["notes"] = notes
-            else:
-                user_identity = {"notes": notes}
-        
+            _extra_files.append(
+                ContextFile(
+                    "USER_PROMPT.md",
+                    f"## 📝 使用者提示詞\n\n{user_prompt_override}\n",
+                )
+            )
+            logger.info(
+                f"[AgentInitializer] ✅ ContextFile: USER_PROMPT.md ({len(user_prompt_override)} chars)"
+            )
+
+        if _extra_files:
+            context_files = _extra_files + context_files
+            logger.info(
+                f"[AgentInitializer] 📋 Total context files: {len(context_files)} "
+                f"({len(_extra_files)} prompt files + {len(context_files) - len(_extra_files)} standard)"
+            )
+
         # Build system prompt
         prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")
         runtime_info = self._get_runtime_info(workspace_root)
-        
-        # Assemble system prompt (user_identity.notes carries prompt overrides)
+
+        # Assemble system prompt
         system_prompt = prompt_builder.build(
             tools=tools,
             context_files=context_files,
@@ -202,7 +220,7 @@ class AgentInitializer:
             user_identity=user_identity,
             runtime_info=runtime_info,
         )
-        
+
         # Get cost control parameters
         from config import conf
         max_steps = conf().get("agent_max_steps", 20)
