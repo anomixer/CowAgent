@@ -172,11 +172,28 @@ class AgentInitializer:
             )
         # ──────────────────────────────────────────────────────────────────
         
+        # Inject global/user/team prompts into user_identity.notes so they
+        # land in section 6 (# 👤 User identity) of the built system prompt,
+        # NOT at the tail end where the model may truncate or ignore them.
+        _notes_parts = []
+        if global_prompt:
+            _notes_parts.append(f"🌐 全域提示詞:\n{global_prompt}")
+        if team_context:
+            _notes_parts.append(f"👥 團隊資訊:\n{team_context}")
+        if user_prompt_override:
+            _notes_parts.append(f"📝 使用者提示詞:\n{user_prompt_override}")
+        if _notes_parts:
+            notes = "\n\n".join(_notes_parts)
+            if user_identity:
+                user_identity["notes"] = notes
+            else:
+                user_identity = {"notes": notes}
+        
         # Build system prompt
         prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")
         runtime_info = self._get_runtime_info(workspace_root)
         
-        # Assemble system prompt, injecting identity + team context when present
+        # Assemble system prompt (user_identity.notes carries prompt overrides)
         system_prompt = prompt_builder.build(
             tools=tools,
             context_files=context_files,
@@ -185,18 +202,6 @@ class AgentInitializer:
             user_identity=user_identity,
             runtime_info=runtime_info,
         )
-        
-        # Append global prompt (admin-set, applies to all users)
-        if global_prompt:
-            system_prompt += f"\n\n## 🌐 全域提示詞\n\n{global_prompt}\n"
-
-        # Append team context section (team memberships + team prompts)
-        if team_context:
-            system_prompt += f"\n\n## 👥 團隊資訊\n\n{team_context}\n"
-        
-        # Append user-level prompt override (from mu_user_configs)
-        if user_prompt_override:
-            system_prompt += f"\n\n## 📝 使用者提示詞\n\n{user_prompt_override}\n"
         
         # Get cost control parameters
         from config import conf

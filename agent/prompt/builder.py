@@ -537,7 +537,17 @@ def _build_user_identity_section(user_identity: Dict[str, str], language: str) -
     if user_identity.get("timezone"):
         lines.append(f"**{'Timezone' if is_en else '时区'}**: {user_identity['timezone']}")
     if user_identity.get("notes"):
-        lines.append(f"**{'Notes' if is_en else '备注'}**: {user_identity['notes']}")
+        notes_val = user_identity['notes']
+        if "\n" in notes_val:
+            # Multi-line notes → render as a block
+            if is_en:
+                lines.append("**Notes**:")
+            else:
+                lines.append("**备注**:")
+            for note_line in notes_val.split("\n"):
+                lines.append(f"  {note_line.strip()}")
+        else:
+            lines.append(f"**{'Notes' if is_en else '备注'}**: {notes_val}")
 
     lines.append("")
 
