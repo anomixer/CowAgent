@@ -241,7 +241,8 @@ class AgentInitializer:
                 f"[AgentInitializer] ⏭️ user_id=None, skipping prompt injection"
             )
 
-        # Build system prompt        prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")
+        # Build system prompt
+        prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")
         runtime_info = self._get_runtime_info(workspace_root)
 
         # Assemble system prompt
