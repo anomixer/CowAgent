@@ -172,9 +172,9 @@ class AgentInitializer:
             )
         # ──────────────────────────────────────────────────────────────────
 
-        # Rewrite AGENT.md on disk to PREPEND the user's prompts before the
-        # existing template (keeping onboarding greetings intact below).
-        # The LLM reads the file → sees prompts first → onboarding later.
+        # Inject prompts WITHOUT touching AGENT.md on disk, so that
+        # _is_onboarding_done() still returns False → BOOTSTRAP.md survives.
+        # Strategy: add a custom ContextFile + write user-specific files.
         if user_id is not None:
             _prompt_sections = []
             if global_prompt:
@@ -185,36 +185,43 @@ class AgentInitializer:
                 _prompt_sections.append(f"📝 使用者提示詞（最高優先）\n{user_prompt_override}")
 
             if _prompt_sections:
-                _agent_path = os.path.join(workspace_root, "AGENT.md")
+                # Build prompts text for system prompt & disk files
+                _prompt_content = (
+                    "## 🎯 使用者指令\n\n"
+                    "以下三層提示詞全部都要遵循。如果不衝突則同時生效，"
+                    "若有衝突則以使用者提示詞為準。\n\n"
+                    + "\n\n".join(_prompt_sections) +
+                    "\n"
+                )
+                # 1. Inject as a custom ContextFile (in system prompt, no disk write)
+                from agent.prompt.builder import ContextFile
+                context_files.append(ContextFile(
+                    path="prompts.md",
+                    content=_prompt_content
+                ))
+                # 2. Also write user-specific files to disk for `read` tool
+                _user_prompt_dir = os.path.join(workspace_root, "prompts", str(user_id))
                 try:
-                    # Read the original template (keep as-is, including onboarding)
-                    with open(_agent_path, "r", encoding="utf-8") as f:
-                        _orig = f.read()
-                    # Build the prompt block to prepend
-                    _prompt_block = (
-                        "## 🎯 使用者指令\n\n"
-                        "以下三層提示詞全部都要遵循。如果不衝突則同時生效，"
-                        "若有衝突則以使用者提示詞為準。\n\n"
-                        + "\n\n".join(_prompt_sections) +
-                        "\n\n請嚴格遵循以上指令。\n\n---\n\n"
-                    )
-                    _new_content = _prompt_block + _orig
-                    # Write to disk (overwrite)
-                    with open(_agent_path, "w", encoding="utf-8") as f:
-                        f.write(_new_content)
-                    # Also update ContextFile so system prompt is in sync
-                    for _cf in context_files:
-                        if _cf.path.lower().endswith("agent.md"):
-                            _cf.content = _new_content
-                            break
+                    os.makedirs(_user_prompt_dir, exist_ok=True)
+                    if global_prompt:
+                        with open(os.path.join(_user_prompt_dir, "GLOBAL_PROMPT.md"), "w", encoding="utf-8") as f:
+                            f.write(f"## 🌐 全域提示詞（基礎）\n\n{global_prompt}\n")
+                    if team_context:
+                        with open(os.path.join(_user_prompt_dir, "TEAM_PROMPT.md"), "w", encoding="utf-8") as f:
+                            f.write(f"## 👥 團隊提示詞\n\n{team_context}\n")
+                    if user_prompt_override:
+                        with open(os.path.join(_user_prompt_dir, "USER_PROMPT.md"), "w", encoding="utf-8") as f:
+                            f.write(f"## 📝 使用者提示詞（最高優先）\n\n{user_prompt_override}\n")
                     logger.info(
-                        f"[AgentInitializer] ✅ Prepended prompts to AGENT.md "
-                        f"({len(_new_content)} chars)"
+                        f"[AgentInitializer] 💾 Prompt files written to prompts/{user_id}/"
                     )
                 except Exception as e:
                     logger.warning(
-                        f"[AgentInitializer] ⚠️ Failed to rewrite AGENT.md: {e}"
+                        f"[AgentInitializer] ⚠️ Failed to write prompt files: {e}"
                     )
+                logger.info(
+                    f"[AgentInitializer] 🧩 Added prompts.md ContextFile ({len(_prompt_content)} chars)"
+                )
             else:
                 logger.info(
                     f"[AgentInitializer] ⏭️ No prompts set for user_id={user_id}"
