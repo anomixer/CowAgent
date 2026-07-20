@@ -211,6 +211,23 @@ class AgentInitializer:
                 if _cf.path.lower().endswith("agent.md"):
                     _cf.content += f"\n{_prompt_blob}"
                     break
+            # ALSO write to the actual file on disk so the LLM sees the
+            # same content when it uses the `read` tool (see Turn 2 in log).
+            # Use the ContextFile content which already has original template.
+            _agent_path = os.path.join(workspace_root, "AGENT.md")
+            try:
+                for _cf in context_files:
+                    if _cf.path.lower().endswith("agent.md"):
+                        with open(_agent_path, "w", encoding="utf-8") as f:
+                            f.write(_cf.content)
+                        break
+                logger.info(
+                    f"[AgentInitializer] 💾 Synced AGENT.md on disk with ContextFile"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[AgentInitializer] ⚠️ Failed to write AGENT.md to disk: {e}"
+                )
             logger.info(
                 f"[AgentInitializer] 📋 Prompts injected into AGENT.md ({len(_prompt_blob)} chars)"
             )
