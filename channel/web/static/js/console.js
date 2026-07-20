@@ -123,6 +123,8 @@ const I18N = {
         slash_knowledge_off: '关闭知识库',
         slash_config: '查看当前配置',
         slash_cancel: '中止当前正在运行的 Agent 任务',
+        slash_steer: '向当前正在运行的 Agent 任务注入引导指令',
+        steer_active: '引导当前任务',
         slash_logs: '查看最近日志',
         slash_version: '查看版本',
         input_placeholder: '输入消息，或输入 / 使用指令',
@@ -217,6 +219,11 @@ const I18N = {
         task_delete_btn: '删除任务',
         task_delete_confirm_title: '删除定时任务',
         task_delete_confirm_msg: '确定删除该定时任务吗？此操作无法撤销。',
+        task_run_now: '立即执行',
+        task_run_confirm_title: '立即执行任务',
+        task_run_confirm_msg: '该任务会立即向已配置的通道和接收者发送内容。是否继续？',
+        task_run_started: '已开始执行',
+        task_run_failed: '执行失败',
         logs_title: '日志', logs_desc: '实时日志输出 (run.log)',
         logs_live: '实时', logs_coming_msg: '日志流即将在此提供。将连接 run.log 实现类似 tail -f 的实时输出。',
         new_chat: '新对话',
@@ -463,6 +470,8 @@ const I18N = {
         slash_knowledge_off: '關閉知識庫',
         slash_config: '檢視當前設定',
         slash_cancel: '中止當前正在執行的 Agent 任務',
+        slash_steer: '向當前正在執行的 Agent 任務注入引導指令',
+        steer_active: '引導當前任務',
         slash_logs: '檢視最近日誌',
         slash_version: '檢視版本',
         input_placeholder: '輸入訊息，或輸入 / 使用指令',
@@ -557,6 +566,11 @@ const I18N = {
         task_delete_btn: '刪除任務',
         task_delete_confirm_title: '刪除定時任務',
         task_delete_confirm_msg: '確定刪除該定時任務嗎？此操作無法撤銷。',
+        task_run_now: '立即執行',
+        task_run_confirm_title: '立即執行任務',
+        task_run_confirm_msg: '該任務會立即向已設定的通道和接收者傳送內容。是否繼續？',
+        task_run_started: '已開始執行',
+        task_run_failed: '執行失敗',
         logs_title: '日誌', logs_desc: '實時日誌輸出 (run.log)',
         logs_live: '實時', logs_coming_msg: '日誌流即將在此提供。將連線 run.log 實現類似 tail -f 的實時輸出。',
         new_chat: '新對話',
@@ -802,6 +816,8 @@ const I18N = {
         slash_knowledge_off: 'Disable knowledge base',
         slash_config: 'Show current config',
         slash_cancel: 'Abort the running Agent task',
+        slash_steer: 'Inject guidance into the running Agent task',
+        steer_active: 'Steer active task',
         slash_logs: 'Show recent logs',
         slash_version: 'Show version',
         input_placeholder: 'Type a message, or press / for commands',
@@ -896,6 +912,11 @@ const I18N = {
         task_delete_btn: 'Delete Task',
         task_delete_confirm_title: 'Delete Task',
         task_delete_confirm_msg: 'Delete this scheduled task? This action cannot be undone.',
+        task_run_now: 'Run now',
+        task_run_confirm_title: 'Run task now',
+        task_run_confirm_msg: 'This task will immediately send to its configured channel and receiver. Continue?',
+        task_run_started: 'Run started',
+        task_run_failed: 'Run failed',
         logs_title: 'Logs', logs_desc: 'Real-time log output (run.log)',
         logs_live: 'Live', logs_coming_msg: 'Log streaming will be available here. Connects to run.log for real-time output similar to tail -f.',
         new_chat: 'New Chat',
@@ -1079,6 +1100,9 @@ function applyI18n() {
     });
     document.querySelectorAll('[data-i18n-title]').forEach(el => {
         el.title = t(el.dataset['i18nTitle']);
+    });
+    document.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
+        el.setAttribute('aria-label', t(el.dataset['i18nAriaLabel']));
     });
     document.querySelectorAll('[data-tip-key]').forEach(el => {
         el.setAttribute('data-tooltip', t(el.dataset.tipKey));
@@ -1721,6 +1745,7 @@ startPolling();
 
 const chatInput = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
+const steerBtn = document.getElementById('steer-btn');
 const messagesDiv = document.getElementById('chat-messages');
 const fileInput = document.getElementById('file-input');
 const folderInput = document.getElementById('folder-input');
@@ -2055,6 +2080,7 @@ function setSendBtnCancelMode(requestId) {
     sendBtn.classList.add('send-btn-cancel');
     sendBtn.title = (currentLang === 'zh' ? '中止' : 'Cancel');
     sendBtn.innerHTML = '<i class="fas fa-stop text-sm"></i>';
+    updateSteerBtnState();
 }
 
 function resetSendBtnSendMode() {
@@ -2063,8 +2089,63 @@ function resetSendBtnSendMode() {
     sendBtn.classList.remove('send-btn-cancel');
     sendBtn.title = '';
     sendBtn.innerHTML = '<i class="fas fa-paper-plane text-sm"></i>';
+    steerBtn.classList.add('hidden');
+    steerBtn.classList.remove('flex');
+    steerBtn.disabled = true;
     updateSendBtnState();
 }
+
+function updateSteerBtnState() {
+    // Keep the steer button enabled whenever a task is running so users can
+    // fire successive guidance. Empty-input is guarded in steerActiveTask,
+    // avoiding a jarring disabled/not-allowed state right after each steer.
+    const active = sendBtnMode === 'cancel' && !!activeRequestId;
+    steerBtn.classList.toggle('hidden', !active);
+    steerBtn.classList.toggle('flex', active);
+    steerBtn.disabled = !active || uploadingCount > 0;
+}
+
+function steerActiveTask() {
+    const instruction = chatInput.value.trim();
+    if (!instruction || sendBtnMode !== 'cancel' || !activeRequestId) return;
+
+    inputHistory.push(instruction);
+    historyIdx = -1;
+    historySavedDraft = '';
+    addUserMessage(`↪ ${instruction}`, new Date());
+
+    chatInput.value = '';
+    chatInput.style.height = '42px';
+    chatInput.style.overflowY = 'hidden';
+    updateSteerBtnState();
+
+    fetch('/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            session_id: sessionId,
+            message: instruction,
+            steer: true,
+            stream: false,
+            lang: currentLang,
+        }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success' && data.inline_reply) {
+            addBotMessage(data.inline_reply, new Date());
+        } else {
+            addBotMessage(t('error_send'), new Date());
+        }
+    })
+    .catch(err => {
+        console.warn('[steer] request failed', err);
+        addBotMessage(t('error_send'), new Date());
+    })
+    .finally(updateSteerBtnState);
+}
+
+steerBtn.addEventListener('click', steerActiveTask);
 
 function requestCancel() {
     const reqId = activeRequestId;
@@ -2101,10 +2182,12 @@ function updateSendBtnState() {
             resetSendBtnSendMode();
         } else {
             // Don't downgrade a genuinely active Cancel button on input edits.
+            updateSteerBtnState();
             return;
         }
     }
     sendBtn.disabled = uploadingCount > 0 || (!chatInput.value.trim() && pendingAttachments.length === 0);
+    updateSteerBtnState();
 }
 
 function renderAttachmentPreview() {
@@ -2423,6 +2506,7 @@ const SLASH_COMMANDS = [
     { cmd: '/knowledge off',       desc: 'slash_knowledge_off' },
     { cmd: '/config',              desc: 'slash_config' },
     { cmd: '/cancel',              desc: 'slash_cancel' },
+    { cmd: '/steer ',              desc: 'slash_steer' },
     { cmd: '/logs',                desc: 'slash_logs' },
     { cmd: '/version',             desc: 'slash_version' },
 ];
@@ -8291,6 +8375,38 @@ function refreshTasksView() {
         btn.disabled = false;
     }, 500);
 }
+
+function runTaskNow(task, button) {
+    showConfirmDialog({
+        title: t('task_run_confirm_title'),
+        message: `${task.name || task.id}: ${t('task_run_confirm_msg')}`,
+        okText: t('task_run_now'),
+        onConfirm: () => {
+            const originalHtml = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${t('task_run_now')}`;
+            fetch('/api/scheduler/run', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({task_id: task.id})
+            }).then(r => r.json()).then(res => {
+                if (res.status !== 'success') throw new Error(res.message || t('task_run_failed'));
+                button.innerHTML = `<i class="fas fa-check mr-1"></i>${t('task_run_started')}`;
+                setTimeout(() => {
+                    button.innerHTML = originalHtml;
+                    button.disabled = false;
+                }, 1500);
+            }).catch(() => {
+                button.innerHTML = `<i class="fas fa-triangle-exclamation mr-1"></i>${t('task_run_failed')}`;
+                setTimeout(() => {
+                    button.innerHTML = originalHtml;
+                    button.disabled = false;
+                }, 2000);
+            });
+        }
+    });
+}
+
 function loadTasksView() {
     if (tasksLoaded) return;
     fetch('/api/scheduler').then(r => r.json()).then(data => {
@@ -8352,11 +8468,19 @@ function loadTasksView() {
                 <div class="flex items-center gap-4 text-xs text-slate-400 dark:text-slate-500">
                     <span><i class="fas fa-clock mr-1"></i>${currentLang === 'zh' ? '下次执行' : 'Next run'}: ${nextRun}</span>
                     <div class="flex-1"></div>
+                    <button type="button" class="task-run-now px-2 py-1 rounded-md text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-500/10 transition-colors">
+                        <i class="fas fa-play mr-1"></i>${t('task_run_now')}
+                    </button>
                     <label class="relative inline-flex items-center cursor-pointer" for="${toggleId}">
                         <input type="checkbox" id="${toggleId}" class="sr-only peer" ${isEnabled ? 'checked' : ''}>
                         <div class="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary-500 dark:bg-slate-600 dark:peer-checked:bg-primary-500"></div>
                     </label>
                 </div>`;
+            const runButton = card.querySelector('.task-run-now');
+            runButton.addEventListener('click', function(e) {
+                e.stopPropagation();
+                runTaskNow(task, runButton);
+            });
             const checkbox = card.querySelector('#' + toggleId);
             checkbox.addEventListener('change', function() {
                 const newEnabled = this.checked;

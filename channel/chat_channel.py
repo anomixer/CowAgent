@@ -453,6 +453,10 @@ class ChatChannel(Channel):
             if stripped in self._BYPASS_QUEUE_COMMANDS:
                 self._handle_cancel_command(context, session_id)
                 return
+            if re.match(r"^/steer(?:\s|$)", stripped):
+                instruction = context.content.strip()[len("/steer"):].strip()
+                self._handle_steer_command(context, session_id, instruction)
+                return
 
         with self.lock:
             if session_id not in self.sessions:
@@ -488,6 +492,49 @@ class ChatChannel(Channel):
         except Exception as e:
             logger.warning(f"[chat_channel] /cancel fast-path failed: {e}")
 
+    def _handle_steer_command(
+        self,
+        context: Context,
+        session_id: str,
+        instruction: str,
+    ) -> None:
+        """Send explicit guidance to the active run without queueing it."""
+        try:
+            from agent.protocol import SteerStatus
+            from bridge.bridge import Bridge
+
+            result = Bridge().get_agent_bridge().steer_session(session_id, instruction)
+            messages = {
+                SteerStatus.ACCEPTED: _t(
+                    "↪️ 已引导当前任务。", "↪️ Active task redirected."
+                ),
+                SteerStatus.INACTIVE: _t(
+                    "当前没有可引导的任务。", "No active task to steer."
+                ),
+                SteerStatus.CLOSING: _t(
+                    "当前任务已结束，无法再引导。", "The active task is already finishing."
+                ),
+                SteerStatus.AMBIGUOUS: _t(
+                    "当前会话有多个任务在运行，无法确定引导目标。",
+                    "Multiple tasks are active in this session; the steering target is ambiguous.",
+                ),
+                SteerStatus.FULL: _t(
+                    "引导指令过多，请等待当前任务处理后再试。",
+                    "Too many steering updates are pending; try again after the agent processes them.",
+                ),
+                SteerStatus.INVALID: _t(
+                    "用法：/steer <引导指令>", "Usage: /steer <instruction>"
+                ),
+            }
+            text = messages[result.status]
+            logger.info(
+                f"[chat_channel] /steer fast-path: session={session_id}, "
+                f"status={result.status.value}"
+            )
+            self._send_reply(context, Reply(ReplyType.TEXT, text))
+        except Exception as e:
+            logger.warning(f"[chat_channel] /steer fast-path failed: {e}")
+
     # 消费者函数，单独线程，用于从消息队列中取出消息并处理
     def consume(self):
         while True:
@@ -514,6 +561,42 @@ class ChatChannel(Channel):
                     else:
                         semaphore.release()
             time.sleep(0.2)
+
+    def cancel_message(self, session_id: str, message_id: str):
+        """Cancel one channel message without disturbing later queued work.
+
+        Queued contexts are matched by their original channel message ID. An
+        in-flight agent run is cancelled through the per-request token that the
+        channel placed on the context before dispatch.
+        """
+        removed = 0
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if session is not None:
+                context_queue = session[0]
+                kept = []
+                for _ in range(context_queue.qsize()):
+                    context = context_queue.get_nowait()
+                    context_queue.task_done()
+                    message = context.get("msg") if context is not None else None
+                    if getattr(message, "msg_id", None) == message_id:
+                        removed += 1
+                    else:
+                        kept.append(context)
+                for context in kept:
+                    context_queue.put(context)
+
+        from agent.protocol import get_cancel_registry
+
+        active = get_cancel_registry().cancel_request(message_id)
+        logger.info(
+            "[chat_channel] message recall: session=%s, message=%s, queued=%s, active=%s",
+            session_id,
+            message_id,
+            removed,
+            active,
+        )
+        return removed, active
 
     # 取消session_id对应的所有任务，只能取消排队的消息和已提交线程池但未执行的任务
     def cancel_session(self, session_id):

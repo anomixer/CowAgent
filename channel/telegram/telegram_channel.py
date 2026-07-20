@@ -36,11 +36,13 @@ TELEGRAM_BOT_COMMANDS = [
     ("help", "Show command help"),
     ("status", "Show running status"),
     ("context", "View/clear conversation context (sub: clear)"),
+    ("tasks", "List scheduled tasks for this chat"),
     ("skill", "Manage skills (list/search/install/...)"),
     ("memory", "Manage memory (sub: dream)"),
     ("knowledge", "Manage knowledge base (list/on/off)"),
     ("config", "Show current config"),
     ("cancel", "Cancel running agent task"),
+    ("steer", "Guide the running agent task"),
     ("logs", "Show recent logs"),
     ("version", "Show version"),
 ]
