@@ -172,73 +172,62 @@ class AgentInitializer:
             )
         # ──────────────────────────────────────────────────────────────────
 
-        # Inject prompts into AGENT.md ContextFile (system prompt only) AND
-        # write user-specific files to disk so the LLM can discover them.
-        # Two sources, same content, no shared-file race condition.
-        _inject_parts = []
-        _has_any = False
-        _user_prompt_dir = None
+        # Rewrite AGENT.md on disk to embed the user's prompts inline and
+        # strip onboarding triggers so the LLM doesn't act "first day".
+        # This is the ONLY approach that worked (user confirmed: edit AGENT.md
+        # directly → LLM follows it).
+        if user_id is not None:
+            _prompt_sections = []
+            if global_prompt:
+                _prompt_sections.append(f"🌐 全域提示詞（基礎）\n{global_prompt}")
+            if team_context:
+                _prompt_sections.append(f"👥 團隊提示詞\n{team_context}")
+            if user_prompt_override:
+                _prompt_sections.append(f"📝 使用者提示詞（最高優先）\n{user_prompt_override}")
 
-        if global_prompt:
-            _inject_parts.append(f"### 🌐 全域提示詞（基礎）\n{global_prompt}\n")
-            _has_any = True
-            logger.info(
-                f"[AgentInitializer] 🧩 Global prompt: {len(global_prompt)} chars"
-            )
-
-        if team_context:
-            _inject_parts.append(f"### 👥 團隊提示詞\n{team_context}\n")
-            _has_any = True
-            logger.info(
-                f"[AgentInitializer] 🧩 Team prompt loaded"
-            )
-
-        if user_prompt_override:
-            _inject_parts.append(f"### 📝 使用者提示詞（最高優先）\n{user_prompt_override}\n")
-            _has_any = True
-            logger.info(
-                f"[AgentInitializer] 🧩 User prompt: {len(user_prompt_override)} chars"
-            )
-
-        if _has_any and user_id is not None:
-            # Write user-specific prompt files to disk for `read` tool
-            _user_prompt_dir = os.path.join(workspace_root, "prompts", str(user_id))
-            try:
-                os.makedirs(_user_prompt_dir, exist_ok=True)
-                if global_prompt:
-                    with open(os.path.join(_user_prompt_dir, "GLOBAL_PROMPT.md"), "w", encoding="utf-8") as f:
-                        f.write(f"## 🌐 全域提示詞（基礎）\n\n{global_prompt}\n")
-                if team_context:
-                    with open(os.path.join(_user_prompt_dir, "TEAM_PROMPT.md"), "w", encoding="utf-8") as f:
-                        f.write(f"## 👥 團隊提示詞\n\n{team_context}\n")
-                if user_prompt_override:
-                    with open(os.path.join(_user_prompt_dir, "USER_PROMPT.md"), "w", encoding="utf-8") as f:
-                        f.write(f"## 📝 使用者提示詞（最高優先）\n\n{user_prompt_override}\n")
+            if _prompt_sections:
+                _agent_path = os.path.join(workspace_root, "AGENT.md")
+                try:
+                    # Read the original template
+                    with open(_agent_path, "r", encoding="utf-8") as f:
+                        _orig = f.read()
+                    # Build new content: template stripped of onboarding hooks
+                    # + inline prompts + priority note
+                    _prompt_block = (
+                        "\n\n## 🎯 使用者指令\n\n"
+                        "**優先順序：使用者提示詞 > 團隊提示詞 > 全域提示詞**\n\n"
+                        + "\n\n".join(_prompt_sections) +
+                        "\n\n請嚴格遵循以上指令。"
+                    )
+                    # Strip the onboarding sentence from template
+                    _cleaned = _orig.replace(
+                        "*在首次对话时与用户一起填写这个文件，定义你的身份和性格。*",
+                        ""
+                    ).strip()
+                    _new_content = _cleaned + _prompt_block
+                    # Write to disk (overwrite)
+                    with open(_agent_path, "w", encoding="utf-8") as f:
+                        f.write(_new_content)
+                    # Also update ContextFile so system prompt is in sync
+                    for _cf in context_files:
+                        if _cf.path.lower().endswith("agent.md"):
+                            _cf.content = _new_content
+                            break
+                    logger.info(
+                        f"[AgentInitializer] ✅ Rewrote AGENT.md with inline prompts "
+                        f"({len(_new_content)} chars)"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[AgentInitializer] ⚠️ Failed to rewrite AGENT.md: {e}"
+                    )
+            else:
                 logger.info(
-                    f"[AgentInitializer] 💾 Prompt files written to prompts/{user_id}/"
+                    f"[AgentInitializer] ⏭️ No prompts set for user_id={user_id}"
                 )
-            except Exception as e:
-                logger.warning(
-                    f"[AgentInitializer] ⚠️ Failed to write prompt files: {e}"
-                )
-
-            # Build the hint blob for ContextFile injection into AGENT.md
-            _hint = (
-                f"\n📌 **你的專屬指令**\n\n"
-                f"請用 `read` 工具讀取 `prompts/{user_id}/` 目錄中的指令檔案，"
-                f"並嚴格遵循。優先順序：使用者提示詞 > 團隊提示詞 > 全域提示詞。\n"
-            )
-            for _cf in context_files:
-                if _cf.path.lower().endswith("agent.md"):
-                    _cf.content += _hint
-                    break
-
-            logger.info(
-                f"[AgentInitializer] 📋 Prompt hint injected into AGENT.md ContextFile"
-            )
         else:
             logger.info(
-                f"[AgentInitializer] ⏭️ No prompts to inject (user_id={user_id}, has_prompt={_has_any})"
+                f"[AgentInitializer] ⏭️ user_id=None, skipping prompt injection"
             )
 
         # Build system prompt
