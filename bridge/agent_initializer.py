@@ -174,30 +174,39 @@ class AgentInitializer:
 
         # Inject prompts directly into AGENT.md content so the LLM sees them
         # under the "strictly follow this file" directive.
+        # Layered priority: user > team > global (last wins).
         from agent.prompt.builder import ContextFile
         _prompt_blob_parts = []
+        _has_any_prompt = False
 
         if global_prompt:
-            _prompt_blob_parts.append(f"## 🌐 全域提示詞\n\n{global_prompt}\n")
+            _prompt_blob_parts.append(f"### 🌐 全域提示詞（基礎）\n{global_prompt}\n")
+            _has_any_prompt = True
             logger.info(
                 f"[AgentInitializer] 🧩 Injecting GLOBAL_PROMPT into AGENT.md ({len(global_prompt)} chars)"
             )
 
+        if team_context:
+            _prompt_blob_parts.append(f"### 👥 團隊提示詞\n{team_context}\n")
+            _has_any_prompt = True
+            logger.info(
+                f"[AgentInitializer] 🧩 Injecting TEAM_PROMPT into AGENT.md"
+            )
+
         if user_prompt_override:
-            _prompt_blob_parts.append(f"## 📝 使用者提示詞\n\n{user_prompt_override}\n")
+            _prompt_blob_parts.append(f"### 📝 使用者提示詞（最高優先）\n{user_prompt_override}\n")
+            _has_any_prompt = True
             logger.info(
                 f"[AgentInitializer] 🧩 Injecting USER_PROMPT into AGENT.md ({len(user_prompt_override)} chars)"
             )
 
-        if team_context:
-            _prompt_blob_parts.append(f"## 👥 團隊資訊\n\n{team_context}\n")
-            logger.info(
-                f"[AgentInitializer] 🧩 Injecting TEAM_PROMPT into AGENT.md loaded"
-            )
-
-        if _prompt_blob_parts:
-            # Append to the AGENT.md context file in-place
+        if _has_any_prompt:
             _prompt_blob = "\n".join(_prompt_blob_parts)
+            _priority_note = (
+                "\n**提示詞優先順序：使用者提示詞 > 團隊提示詞 > 全域提示詞**\n"
+                "當多層提示詞衝突時，優先級高的覆蓋優先級低的。\n"
+            )
+            _prompt_blob = _priority_note + _prompt_blob
             for _cf in context_files:
                 if _cf.path.lower().endswith("agent.md"):
                     _cf.content += f"\n{_prompt_blob}"
