@@ -109,6 +109,13 @@ class AgentInitializer:
                         "nickname": mu_user.get("username", ""),
                         "timezone": conf().get("timezone", "Asia/Shanghai"),
                     }
+                    logger.info(
+                        f"[AgentInitializer] 👤 User identity: {mu_user.get('username')} (id={user_id})"
+                    )
+                else:
+                    logger.info(
+                        f"[AgentInitializer] ❓ User id={user_id} not found in DB"
+                    )
 
                 # 2. Team memberships + team prompts
                 teams = mu_db.list_user_teams(user_id)
@@ -134,11 +141,25 @@ class AgentInitializer:
                 global_prompt_val = mu_db.get_global_config("global_prompt")
                 if global_prompt_val:
                     global_prompt = global_prompt_val.strip()
+                    logger.info(
+                        f"[AgentInitializer] 🌐 Global prompt LOADED ({len(global_prompt)} chars)"
+                    )
+                else:
+                    logger.info(
+                        f"[AgentInitializer] 🌐 Global prompt: None (not set)"
+                    )
 
                 # 4. User-level prompt override
                 prompt_val = mu_db.get_user_config(user_id, "prompt_template")
                 if prompt_val:
                     user_prompt_override = prompt_val.strip()
+                    logger.info(
+                        f"[AgentInitializer] 📝 User prompt LOADED ({len(user_prompt_override)} chars)"
+                    )
+                else:
+                    logger.info(
+                        f"[AgentInitializer] 📝 User prompt: None (not set for user_id={user_id})"
+                    )
 
             except Exception as e:
                 logger.warning(
