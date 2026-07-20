@@ -173,12 +173,23 @@ class AgentInitializer:
 
         # ──────────────────────────────────────────────────────────────────
 
-        # Prepend rules with <!--multiuser--> marker into AGENT.md on disk
-        # (+ update ContextFile in memory). This is the ONLY approach that
-        # reliably makes prompts visible to the LLM (see test history).
-        # _is_onboarding_done() ignores <!--multiuser--> so BOOTSTRAP.md
-        # survives. No extra ContextFiles at position 1 — that creates
-        # redundant info which confuses the LLM.
+        # ── Multi-user 3-tier Prompt Injection (In-Memory Only) ──────────────
+        # Clean up any legacy disk AGENT.md that accidentally has <!--multiuser--> written to it
+        _agent_path = os.path.join(workspace_root, "AGENT.md")
+        if os.path.exists(_agent_path):
+            try:
+                with open(_agent_path, "r", encoding="utf-8") as f:
+                    _disk_content = f.read()
+                if "<!--multiuser-->" in _disk_content:
+                    import re
+                    _clean_content = re.sub(r"<!--multiuser-->.*?---\n\n?", "", _disk_content, flags=re.DOTALL).lstrip()
+                    with open(_agent_path, "w", encoding="utf-8") as f:
+                        f.write(_clean_content)
+                    logger.info("[AgentInitializer] 🧹 Cleaned legacy <!--multiuser--> from disk AGENT.md")
+            except Exception as e:
+                logger.warning(f"[AgentInitializer] Failed to clean legacy disk AGENT.md: {e}")
+
+        # Inject 3-tier prompt inheritance (Global -> Team -> User) in memory ONLY
         if user_id is not None:
             _prompt_sections = []
             if global_prompt:
@@ -186,32 +197,28 @@ class AgentInitializer:
             if team_context:
                 _prompt_sections.append(f"- 👥 團隊提示詞\n  {team_context}")
             if user_prompt_override:
-                _prompt_sections.append(f"- 📝 使用者提示詞（最高優先）\n  {user_prompt_override}")
+                _prompt_sections.append(f"- 📝 使用者提示詞（最高優先覆蓋）\n  {user_prompt_override}")
 
             if _prompt_sections:
                 _rule_block = (
                     "<!--multiuser-->\n\n"
                     "## 🎯 使用者專屬規則\n\n"
-                    "以下規則**全部同時適用**（不是選一個），包括初次對話（onboarding）：\n\n"
+                    "以下規則**按層級優先權繼承與覆蓋**（個人提示詞 > 團隊提示詞 > 全域提示詞），全部同時適用（包括初次對話 onboarding）：\n\n"
                     + "\n".join(_prompt_sections) +
                     "\n\n---\n\n"
                 )
-                _agent_path = os.path.join(workspace_root, "AGENT.md")
-                try:
-                    with open(_agent_path, "r", encoding="utf-8") as f:
-                        _orig = f.read()
-                    _new = _rule_block + _orig
-                    with open(_agent_path, "w", encoding="utf-8") as f:
-                        f.write(_new)
-                    for _cf in context_files:
-                        if _cf.path.lower().endswith("agent.md"):
-                            _cf.content = _new
-                            break
-                except Exception as e:
-                    logger.warning(f"[AgentInitializer] ⚠️ Failed to write AGENT.md: {e}")
+                updated = False
+                for _cf in context_files:
+                    if _cf.path.lower().endswith("agent.md"):
+                        _cf.content = _rule_block + _cf.content
+                        updated = True
+                        break
+                if not updated:
+                    context_files.insert(0, ContextFile(path=_agent_path, content=_rule_block))
+                logger.info(f"[AgentInitializer] 🎯 Multi-user prompt injected in-memory for user_id={user_id}")
             else:
                 logger.info(
-                    f"[AgentInitializer] ⏭️ No prompts set for user_id={user_id}"
+                    f"[AgentInitializer] ⏭️ No custom prompts set for user_id={user_id}"
                 )
         else:
             logger.info(

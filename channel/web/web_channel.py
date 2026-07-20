@@ -1661,6 +1661,11 @@ class UserConfigHandler:
         db = get_multiuser_db()
         ok = db.set_user_config(user['id'], key, str(value))
         if ok:
+            try:
+                from bridge.bridge import Bridge
+                Bridge().get_agent_bridge().clear_agent_cache()
+            except Exception as cache_err:
+                logger.warning(f"[WebChannel] Failed to clear agent cache on user config update: {cache_err}")
             return json.dumps({"status": "success"})
         return json.dumps({"status": "error", "message": "Failed to save config"})
 
@@ -1696,6 +1701,11 @@ class GlobalConfigHandler:
         db = get_multiuser_db()
         ok = db.set_global_config(key, str(value))
         if ok:
+            try:
+                from bridge.bridge import Bridge
+                Bridge().get_agent_bridge().clear_agent_cache()
+            except Exception as cache_err:
+                logger.warning(f"[WebChannel] Failed to clear agent cache on global config update: {cache_err}")
             return json.dumps({"status": "success"})
         return json.dumps({"status": "error", "message": "Failed to save config"})
 
@@ -1958,6 +1968,11 @@ class TeamDetailHandler:
             prompt = str(prompt).strip()
         if db.update_team(tid, name=name, description=description, prompt=prompt):
             logger.info(f"[WebChannel] Admin '{admin['username']}' updated team id={tid}")
+            try:
+                from bridge.bridge import Bridge
+                Bridge().get_agent_bridge().clear_agent_cache()
+            except Exception as cache_err:
+                logger.warning(f"[WebChannel] Failed to clear agent cache on team update: {cache_err}")
             return json.dumps({"status": "success"})
         return json.dumps({"status": "error", "message": "Team name conflict or update failed"})
 

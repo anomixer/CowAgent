@@ -389,6 +389,17 @@ class AgentBridge:
         agent = self.initializer.initialize_agent(session_id=None)
         self.default_agent = agent
     
+    def clear_agent_cache(self, session_id: Optional[str] = None):
+        """Clear cached agent instance(s) so system prompts are reloaded from DB on next turn."""
+        if session_id:
+            if session_id in self.agents:
+                self.agents.pop(session_id, None)
+                logger.info(f"[AgentBridge] Cleared cached agent for session: {session_id}")
+        else:
+            self.agents.clear()
+            self.default_agent = None
+            logger.info("[AgentBridge] Cleared all cached agents")
+
     def _init_agent_for_session(self, session_id: str, user_id: Optional[int] = None, team_ids: Optional[List[int]] = None):
         """Initialize agent for a specific session"""
         agent = self.initializer.initialize_agent(session_id=session_id, user_id=user_id)

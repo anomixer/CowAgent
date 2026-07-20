@@ -13,3 +13,6 @@ plugins/plugins.json
 __pycache__/
 *.pyc
 .env
+
+config.json
+user_datas.*

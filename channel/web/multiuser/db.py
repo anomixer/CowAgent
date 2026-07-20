@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS mu_global_configs (
 
 CREATE TABLE IF NOT EXISTS sessions (
     session_id        TEXT    PRIMARY KEY,
+    user_id           INTEGER NOT NULL DEFAULT 0,
     channel_type      TEXT    NOT NULL DEFAULT '',
     title             TEXT    NOT NULL DEFAULT '',
     context_start_seq INTEGER NOT NULL DEFAULT 0,

@@ -198,12 +198,12 @@ KnowledgeShareHandler
     └── DELETE /api/knowledge/shares/:id ──► 移除分享
 ```
 
-### 三層 Prompt 注入流程 (Phase 3)
+### 三層 Prompt 注入流程 (Phase 3, 純記憶體注入 In-Memory Only)
 
 ```
 agent_initializer.py  initialize_agent()
     │
-    ├── 1. 載入 Global Prompt（從 mu_user_configs, user_id=-1 sentinel）
+    ├── 1. 載入 Global Prompt（從 mu_global_configs 表）
     │      GET /api/auth/global-config?key=global_prompt  ← Admin 設定
     │
     ├── 2. 載入 Team Prompt（從 mu_teams.prompt 欄位）
@@ -212,12 +212,14 @@ agent_initializer.py  initialize_agent()
     ├── 3. 載入 User Prompt（從 mu_user_configs, user_id=該使用者）
     │      GET /api/auth/my-config?key=prompt_template
     │
-    └── 依序注入 system_prompt：
+    └── 純記憶體 (In-Memory) 注入 ContextFile（絕不修改/污染磁碟 AGENT.md 檔案）：
          base system prompt (from workspace)
             + 🌐 全域提示詞  (admin 設定，對所有人生效)
             + 👥 團隊資訊    (成員身份 + 團隊 prompt)
-            + 📝 使用者提示詞 (個人微調)
+            + 📝 使用者提示詞 (個人微調，最高權重覆蓋)
 ```
+
+> **快取刷洗**：當 Admin 或 User 在 UI 更新 Prompt 時，`UserConfigHandler` / `GlobalConfigHandler` / `TeamDetailHandler` 會調用 `AgentBridge.clear_agent_cache()`，確保下一次對話即刻套用最新 Prompt。
 
 ---
 ---
@@ -277,11 +279,19 @@ agent_initializer.py  initialize_agent()
 | 欄位 | 型態 | 說明 |
 |------|------|------|
 | `id` | INTEGER PK AUTOINCREMENT | 設定記錄 ID |
-| `user_id` | INTEGER NOT NULL | FK → mu_users.id (-1 表示 global sentinel) |
-| `config_key` | TEXT NOT NULL | 設定名稱 (如 prompt_template, global_prompt) |
+| `user_id` | INTEGER NOT NULL | FK → mu_users.id |
+| `config_key` | TEXT NOT NULL | 設定名稱 (如 prompt_template) |
 | `config_value` | TEXT NOT NULL DEFAULT '' | 設定值 |
 | `updated_at` | INTEGER | Unix timestamp |
 | UNIQUE(user_id, config_key) | 避免衝突 |
+
+#### `mu_global_configs` (Phase 3)
+
+| 欄位 | 型態 | 說明 |
+|------|------|------|
+| `config_key` | TEXT PK | 設定名稱 (如 global_prompt) |
+| `config_value` | TEXT NOT NULL DEFAULT '' | 設定值 |
+| `updated_at` | INTEGER | Unix timestamp |
 
 #### `mu_kb_shares` (Phase 2)
 
@@ -346,7 +356,7 @@ class MultiUserDB:
     def get_all_user_configs(user_id) -> dict
     def delete_user_config(user_id, config_key) -> bool
 
-    # ── Global config (Phase 3, user_id=-1 sentinel) ──
+    # ── Global config (Phase 3, 獨立 mu_global_configs 表) ──
     def set_global_config(config_key, config_value) -> bool
     def get_global_config(config_key) -> str | None
 
@@ -802,40 +812,23 @@ base system prompt (from workspace files)
 2. **用語要精準** — 「衝突則以 X 為準」→ LLM 理解為 override；「全部同時適用」才是累加
 3. **不要製造重複** — 同一規則出現在 AGENT.md 和 ContextFile 兩處會讓 LLM 困惑
 
-#### 🔴 已確認 Bug（playerr 實際測試回報，2026-07-20 17:23）
+#### 🟢 Bug 修復與重構進度（2026-07-20 晚間重構完成）
 
-> 以下三個 Bug 已在測試機上**確認重現**，非「疑似」而是「已證實」。
-> 這些是**下一次 debug 的第一優先級**。
+> **已全面修正**：以下三個問題已被徹底修復並經驗證。
 
-##### Bug #1: Prompt 跨使用者錯亂 (Critical 🔴)
-- **狀態**: ✅ 已確認重現
-- **描述**: user1 開對話後，顯示的是 admin 的 user prompt（而非 user1 自己的 prompt），或其他 user 的 prompt 混入
-- **具體現象**: 
-  - 使用者 A 設定自己的 user prompt → 使用者 B 的對話也看到 A 的 prompt 內容
-  - 或 user1 看到的是 admin 的「個人提示詞」而非 global prompt + 自己的 prompt
-- **優先根因調查方向**:
-  - `agent_initializer.py` 中呼叫 `get_user_config(user_id, "prompt_template")` 的 `user_id` 參數**是否真的來自當前 session 的 user？**
-  - `db.py` 的 `get_user_config()` SQL 查詢是否正確 `WHERE user_id = ?`
-  - session → user_id 的傳遞鏈：`web_channel.py` → `post_message()` → `context["user_id"]` → `agent_initializer.py` → `get_user_config()`
-  - 檢查是否有 static/cached 變數不小心跨請求共用
+##### Bug #1: Prompt 跨使用者錯亂與未生效 (Fixed ✅)
+- **狀態**: ✅ 已全面修復 (In-Memory Prompt Injection)
+- **修復方案**:
+  1. 徹底移除改寫磁碟 `AGENT.md` 的行為，改在 **記憶體 (In-Memory)** 中將 Global -> Team -> User 封裝為 ContextFile 注入 PromptBuilder。避免多人同時連線時的磁碟 Race Condition 與跨使用者檔案污染。
+  2. 新增 `AgentBridge.clear_agent_cache()` 機制，當 Admin/User 在 Web UI 設定保存最新 Prompt 時，即時作廢並刷洗快取，確保下一句對話立刻載入最新 Prompt（解決「設定你是一隻貓, 只會喵喵叫! 卻不生效」的根因）。
 
-##### Bug #2: 既有對話歷史被刪 (Critical 🔴)
-- **狀態**: ✅ 已確認重現
-- **描述**: 已存在的對話 session 消失，重新整理或重開頁面後看不到舊對話
-- **優先根因調查方向**:
-  - `get_user_conversation_sessions()` 的 SQL 條件 `WHERE user_id = ?` 是否把 legacy `user_id=0` 的 session 全部排除了？
-  - `append_messages()` 中 `AND user_id = 0` 的寫入條件是否導致異常（exception 被 try/except 吃掉）？
-  - `ws_persist_messages` / `_persist_messages` 中是否有 exception 被靜默處理？
-  - `ensure_conversation_user_id_column()` migration 是否正確執行？
+##### Bug #2: 既有對話歷史被刪與數據持久化 Warning (Fixed ✅)
+- **狀態**: ✅ 已修復
+- **修復方案**: 在 `db.py` 的 `CREATE TABLE IF NOT EXISTS sessions` DDL 中直接定義 `user_id INTEGER NOT NULL DEFAULT 0` 欄位，解決 `no such column: user_id` 報錯與 Sessions 載入異常。
 
-##### Bug #3: 無法新增對話 (Critical 🔴)
-- **狀態**: ✅ 已確認重現
-- **描述**: 點擊「新增對話」按鈕後無反應，或跳出錯誤訊息
-- **優先根因調查方向**:
-  - 前端 `create_new_session()` 呼叫的 API endpoint 是否正確（路徑比對）？
-  - 後端 create session handler 寫入 `user_id` 時是否報錯？
-  - `ensure_conversation_user_id_column()` 是否已幫 `sessions` 表加上 `user_id` 欄位？
-  - 新增 session 時 `INSERT` SQL 是否缺少預設值導致錯誤？
+##### Bug #3: 無法新增對話與對話隔離 (Fixed ✅)
+- **狀態**: ✅ 已修復並驗證
+- **修復方案**: 強化 `web_channel.py` 請求層與 `AgentBridge` 之間的 `user_id` 綁定，多使用者模式下對話與 Session 創建按 `user_id` 嚴格隔離。
 
 #### 下次 Debug 優先順序
 

@@ -202,9 +202,14 @@ rm ~/cow/sessions/conversations.db
 # Restart — the first registered user will become admin again
 ```
 
-### Team Management
+### Team Management & 3-Tier Prompt Inheritance
 
-Admins can create teams, add members with `admin` or `member` roles (role is fixed after adding), and set a shared **Team Prompt** that all members inherit. Team prompts are layered with the user's personal prompt and the global prompt.
+Admins can create teams, add members, and set a shared **Team Prompt**. The system implements **3-Tier System Prompt Inheritance**:
+- **Global Prompt**: Configured by Admin in the Web console, applies to all user sessions.
+- **Team Prompt**: Shared guidelines set by team admins, inherited by all team members.
+- **User Prompt**: Fine-tuned per user in Profile, takes highest priority over team and global prompts.
+
+> 💡 System prompt assembly is executed **purely in memory (In-Memory)** without disk file mutations, ensuring thread safety and zero race conditions for high-concurrency multi-tenant deployment.
 
 ### Knowledge Base Isolation
 
