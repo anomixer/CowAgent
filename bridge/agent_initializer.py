@@ -172,50 +172,38 @@ class AgentInitializer:
             )
         # ──────────────────────────────────────────────────────────────────
 
-        # Write global/user prompt files to workspace so they become
-        # context files alongside AGENT.md in builder section 7.
-        # AGENT.md works → these will work too.
+        # Inject prompts directly into AGENT.md content so the LLM sees them
+        # under the "strictly follow this file" directive.
         from agent.prompt.builder import ContextFile
-        _extra_files = []
+        _prompt_blob_parts = []
 
         if global_prompt:
-            _extra_files.append(
-                ContextFile(
-                    "GLOBAL_PROMPT.md",
-                    f"## 🌐 全域提示詞\n\n{global_prompt}\n",
-                )
-            )
+            _prompt_blob_parts.append(f"## 🌐 全域提示詞\n\n{global_prompt}\n")
             logger.info(
-                f"[AgentInitializer] ✅ ContextFile: GLOBAL_PROMPT.md ({len(global_prompt)} chars)"
+                f"[AgentInitializer] 🧩 Injecting GLOBAL_PROMPT into AGENT.md ({len(global_prompt)} chars)"
             )
 
         if user_prompt_override:
-            _extra_files.append(
-                ContextFile(
-                    "USER_PROMPT.md",
-                    f"## 📝 使用者提示詞\n\n{user_prompt_override}\n",
-                )
-            )
+            _prompt_blob_parts.append(f"## 📝 使用者提示詞\n\n{user_prompt_override}\n")
             logger.info(
-                f"[AgentInitializer] ✅ ContextFile: USER_PROMPT.md ({len(user_prompt_override)} chars)"
+                f"[AgentInitializer] 🧩 Injecting USER_PROMPT into AGENT.md ({len(user_prompt_override)} chars)"
             )
 
         if team_context:
-            _extra_files.append(
-                ContextFile(
-                    "TEAM_PROMPT.md",
-                    f"## 👥 團隊資訊\n\n{team_context}\n",
-                )
-            )
+            _prompt_blob_parts.append(f"## 👥 團隊資訊\n\n{team_context}\n")
             logger.info(
-                f"[AgentInitializer] ✅ ContextFile: TEAM_PROMPT.md loaded"
+                f"[AgentInitializer] 🧩 Injecting TEAM_PROMPT into AGENT.md loaded"
             )
 
-        if _extra_files:
-            context_files = _extra_files + context_files
+        if _prompt_blob_parts:
+            # Append to the AGENT.md context file in-place
+            _prompt_blob = "\n".join(_prompt_blob_parts)
+            for _cf in context_files:
+                if _cf.path.lower().endswith("agent.md"):
+                    _cf.content += f"\n{_prompt_blob}"
+                    break
             logger.info(
-                f"[AgentInitializer] 📋 Total context files: {len(context_files)} "
-                f"({len(_extra_files)} prompt files + {len(context_files) - len(_extra_files)} standard)"
+                f"[AgentInitializer] 📋 Prompts injected into AGENT.md ({len(_prompt_blob)} chars)"
             )
 
         # Build system prompt
