@@ -67,7 +67,7 @@ class AgentInitializer:
         self._load_env_file()
         
         # Initialize workspace
-        from agent.prompt import ensure_workspace, load_context_files, PromptBuilder
+        from agent.prompt import ensure_workspace, load_context_files, PromptBuilder, ContextFile
         workspace_files = ensure_workspace(workspace_root, create_templates=True)
         
         if session_id is None:
