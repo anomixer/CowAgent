@@ -776,6 +776,46 @@ base system prompt (from workspace files)
 
 每一層都是 **append** 而非覆蓋，越個人化的 prompt 越在後面、權重越高。
 
+### 2026-07-20 — Prompt 注入實測與已知 Bug
+
+#### Prompt 注入實測演化
+
+| 方法 | commit | 結果 | 原因 |
+|:-----|:-------|:-----|:------|
+| **A. ContextFile 插入 position 1**（不改 AGENT.md 硬碟） | `d75fb416` ~ `9ebd3d51` | ❌ LLM 完全忽略 prompt，跑 BOOTSTRAP.md onboarding | ContextFile 雖在 system prompt 中，但 LLM 沒 `read` 它就回話 |
+| **B. AGENT.md 硬碟 prepend + `<!--multiuser-->` marker** | `05278d5b` | ✅ **唯一有效**！LLM `read` AGENT.md 看到規則在最上面 | `_is_onboarding_done()` 見 marker 回 False → BOOTSTRAP.md 存活 |
+| **C. Dual Approach**（B + ContextFile 插入） | `ccdb6758` | ⚠️ 部分生效：🐶 有、🐱 無 | 規則寫「衝突以使用者為準」→ LLM 直接 override global prompt |
+| **D. 純 AGENT.md prepend + 規則改「全部同時適用」** | `3013227b` | ⏳ 待測試 | 移除多餘 ContextFile，用語改為「全部同時適用，不是選一個」 |
+
+**關鍵教訓**：
+1. **寫到硬碟才是王道** — LLM 用 `read` 工具讀檔時最有效，ContextFile 在 system prompt 中容易被忽略
+2. **用語要精準** — 「衝突則以 X 為準」→ LLM 理解為 override；「全部同時適用」才是累加
+3. **不要製造重複** — 同一規則出現在 AGENT.md 和 ContextFile 兩處會讓 LLM 困惑
+
+#### 已知 Bug（playerr 回報）
+
+##### Bug A: Prompt 跨使用者錯亂
+- **描述**：user1 開對話看到 admin 的 user prompt
+- **疑似根因**：`agent_initializer.py` 載入 prompt 時傳錯 `user_id`，或 `db.py` 的 `get_user_config()` 查詢未正確過濾 user_id
+- **檢查點**：
+  - `agent_initializer.py:get_user_config(user_id, "prompt_template")` 的 user_id 是否正確
+  - `db.py` 的 `get_user_config()` SQL 是否真的 WHERE user_id=?
+  - session → user_id 關聯是否一致
+
+##### Bug B: 對話歷史被刪
+- **描述**：既有對話 session 消失
+- **疑似根因**：
+  - `get_user_conversation_sessions()` SQL 的 `WHERE user_id = ?` 沒考慮 legacy `user_id=0` 的 session
+  - 或 `append_messages()` 的 `AND user_id = 0` 寫入條件導致異常（被 try/except 吃掉）
+  - 或 `ws_persist_messages` / `_persist_messages` 中 exception 被靜默處理
+
+##### Bug C: 無法新增對話
+- **描述**：點新增對話按鈕後無反應或報錯
+- **疑似根因**：
+  - 前端 `create_new_session()` API 路徑不正確
+  - 後端 create session 時寫入 `user_id` 欄位失敗
+  - `ensure_conversation_user_id_column()` migration 沒正確執行
+
 ---
 
 ## 路線圖
