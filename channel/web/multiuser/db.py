@@ -70,9 +70,6 @@ CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_owner
 CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_target
     ON mu_kb_shares (shared_with_id);
 
-CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_team
-    ON mu_kb_shares (team_id);
-
 CREATE TABLE IF NOT EXISTS mu_teams (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT    NOT NULL UNIQUE,
@@ -1028,6 +1025,11 @@ class MultiUserDB:
                 logger.debug("[MultiUserDB] Migration: added team_id column to mu_kb_shares")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_team ON mu_kb_shares (team_id)")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
             # Migrate: copy legacy global configs from mu_user_configs (user_id=-1) to mu_global_configs
             try:
                 legacy = conn.execute(
