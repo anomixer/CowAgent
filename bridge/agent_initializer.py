@@ -254,7 +254,8 @@ class AgentInitializer:
             skill_manager=skill_manager,
             enable_skills=True,
             max_context_tokens=max_context_tokens,
-            runtime_info=runtime_info  # Pass runtime_info for dynamic time updates
+            runtime_info=runtime_info,  # Pass runtime_info for dynamic time updates
+            user_id=user_id,
         )
         
         # Attach memory manager and share LLM model for summarization

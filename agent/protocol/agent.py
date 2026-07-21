@@ -3,6 +3,7 @@ import os
 import time
 import threading
 
+from typing import Optional, List, Dict, Any
 from common.log import logger
 from agent.protocol.models import LLMRequest, LLMModel
 from agent.protocol.agent_stream import AgentStreamExecutor
@@ -15,7 +16,7 @@ class Agent:
                  tools=None, output_mode="print", max_steps=100, max_context_tokens=None, 
                  context_reserve_tokens=None, memory_manager=None, name: str = None,
                  workspace_dir: str = None, skill_manager=None, enable_skills: bool = True,
-                 runtime_info: dict = None):
+                 runtime_info: dict = None, user_id: Optional[int] = None):
         """
         Initialize the Agent with system prompt, model, description.
 
@@ -34,6 +35,7 @@ class Agent:
         :param skill_manager: Optional SkillManager instance (will be created if None and enable_skills=True)
         :param enable_skills: Whether to enable skills support (default: True)
         :param runtime_info: Optional runtime info dict (with _get_current_time callable for dynamic time)
+        :param user_id: Optional user ID for multi-user prompt scoping
         """
         self.name = name or "Agent"
         self.system_prompt = system_prompt
@@ -52,6 +54,7 @@ class Agent:
         self.workspace_dir = workspace_dir  # Workspace directory
         self.enable_skills = enable_skills  # Skills enabled flag
         self.runtime_info = runtime_info  # Runtime info for dynamic time update
+        self.user_id = user_id  # Multi-user user_id
         # Optional extra instructions appended AFTER the rebuilt full system
         # prompt. Used by the self-evolution review agent to add its task brief
         # on top of the full context (tools, workspace, user preferences, time)
@@ -112,12 +115,69 @@ class Agent:
         Falls back to the cached self.system_prompt on error.
         """
         try:
-            from agent.prompt import load_context_files, PromptBuilder
+            from agent.prompt import load_context_files, PromptBuilder, ContextFile
 
             if self.skill_manager:
                 self.skill_manager.refresh_skills()
 
             context_files = load_context_files(self.workspace_dir) if self.workspace_dir else None
+
+            # Re-inject 3-tier multi-user prompt if user_id is set
+            if getattr(self, "user_id", None) is not None and context_files is not None:
+                user_id = self.user_id
+                try:
+                    from channel.web.multiuser.db import get_multiuser_db
+                    mu_db = get_multiuser_db()
+                    global_prompt = mu_db.get_global_config("global_prompt")
+                    user_prompt_override = mu_db.get_user_config(user_id, "prompt_template")
+                    
+                    teams = mu_db.list_user_teams(user_id)
+                    team_context = None
+                    if teams:
+                        team_parts = []
+                        team_prompts = []
+                        for t in teams:
+                            role_label = "(admin)" if t.get("my_role") == "admin" else ""
+                            team_parts.append(
+                                f"  - {t['name']} #{t['id']} {role_label}"
+                                f"{': ' + t['description'] if t.get('description') else ''}"
+                            )
+                            if t.get("prompt", "").strip():
+                                team_prompts.append(
+                                    f"--- {t['name']} 團隊提示詞 ---\n{t['prompt'].strip()}"
+                                )
+                        team_context = "You are a member of the following teams:\n" + \
+                                       "\n".join(team_parts)
+                        if team_prompts:
+                            team_context += "\n\n以下是你所屬團隊的提示詞：\n" + "\n\n".join(team_prompts)
+
+                    _prompt_sections = []
+                    if global_prompt and global_prompt.strip():
+                        _prompt_sections.append(f"### 🌐 全域指令 (Global Directive)\n{global_prompt.strip()}\n")
+                    if team_context and team_context.strip():
+                        _prompt_sections.append(f"### 👥 團隊指令 (Team Directive)\n{team_context.strip()}\n")
+                    if user_prompt_override and user_prompt_override.strip():
+                        _prompt_sections.append(f"### 📝 個人指令 (User Directive)\n{user_prompt_override.strip()}\n")
+
+                    if _prompt_sections:
+                        _rule_block = (
+                            "<!--multiuser-->\n\n"
+                            "## 🎯 核心行為準則與指令 (System & User Directives)\n\n"
+                            "你必須在每一輪對話中**嚴格執行**以下系統與使用者指令：\n\n"
+                            + "\n".join(_prompt_sections) +
+                            "\n---\n\n"
+                        )
+                        updated = False
+                        for _cf in context_files:
+                            if _cf.path.lower().endswith("agent.md"):
+                                _cf.content = _rule_block + _cf.content
+                                updated = True
+                                break
+                        if not updated:
+                            _agent_path = os.path.join(self.workspace_dir or "", "AGENT.md")
+                            context_files.insert(0, ContextFile(path=_agent_path, content=_rule_block))
+                except Exception as mu_err:
+                    logger.warning(f"Failed to re-inject multi-user prompt in get_full_system_prompt: {mu_err}")
 
             try:
                 from common import i18n

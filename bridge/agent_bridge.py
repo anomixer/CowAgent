@@ -358,6 +358,7 @@ class AgentBridge:
             max_context_tokens=kwargs.get("max_context_tokens"),
             context_reserve_tokens=kwargs.get("context_reserve_tokens"),
             runtime_info=kwargs.get("runtime_info"),
+            user_id=kwargs.get("user_id"),
         )
 
         # Log skill loading details
