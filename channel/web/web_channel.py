@@ -978,12 +978,11 @@ class WebChannel(ChatChannel):
             json_data = json.loads(data)
             session_id = json_data.get('session_id', f'session_{int(time.time())}')
             is_team_session = session_id.startswith("team_session_") or session_id.startswith("team_")
-            if is_multiuser_enabled() and not is_team_session:
-                mu_user = get_current_user()
-                if mu_user:
-                    db = get_multiuser_db()
-                    owner_id = db.get_session_owner(session_id)
-                    if owner_id is not None and owner_id != 0 and owner_id != mu_user["id"]:
+            mu_user = get_current_user() if is_multiuser_enabled() else None
+            if is_multiuser_enabled() and not is_team_session and mu_user:
+                db = get_multiuser_db()
+                owner_id = db.get_session_owner(session_id)
+                if owner_id is not None and owner_id != 0 and owner_id != mu_user["id"]:
                         logger.warning(
                             f"[WebChannel] Session {session_id} belongs to user {owner_id}, "
                             f"user {mu_user['id']} attempted access. Reassigning to new session."
