@@ -971,7 +971,8 @@ class WebChannel(ChatChannel):
             data = web.data()
             json_data = json.loads(data)
             session_id = json_data.get('session_id', f'session_{int(time.time())}')
-            if is_multiuser_enabled():
+            is_team_session = session_id.startswith("team_session_") or session_id.startswith("team_")
+            if is_multiuser_enabled() and not is_team_session:
                 mu_user = get_current_user()
                 if mu_user:
                     db = get_multiuser_db()

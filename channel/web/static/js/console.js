@@ -3715,7 +3715,7 @@ function _syncTeamHistory() {
         .then(data => {
             if (data.status !== 'success' || !data.messages) return;
             const currentElCount = messagesDiv.querySelectorAll('.user-message-group, .team-member-message-group, .bot-message-group').length;
-            if (data.messages.length > currentElCount) {
+            if (data.messages.length !== currentElCount) {
                 const wasAtBottom = (messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight) < 100;
                 historyPage = 0;
                 messagesDiv.innerHTML = '';
