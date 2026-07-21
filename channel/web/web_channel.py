@@ -174,6 +174,7 @@ def _check_session_owner(session_id: str) -> bool:
                 return db.is_team_member(team_id, user["id"])
         except Exception:
             pass
+        return True
     owner_id = db.get_session_owner(session_id)
     if owner_id is not None and owner_id != 0 and owner_id != user["id"]:
         return False

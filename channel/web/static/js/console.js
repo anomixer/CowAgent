@@ -1412,6 +1412,26 @@ function navigateTo(viewId) {
         if (panel && panel.classList.contains('hidden')) {
             toggleSessionPanel();
         }
+        if (sessionId && sessionId.startsWith('team_')) {
+            historyPage = 0;
+            historyHasMore = false;
+            historyLoading = false;
+            const ws = document.getElementById('welcome-screen');
+            if (ws) ws.remove();
+            messagesDiv.innerHTML = '';
+            loadHistory(1);
+        }
+    } else if (viewId === 'chat') {
+        if (sessionId && sessionId.startsWith('team_')) {
+            _saveSessionId(generateSessionId());
+        }
+        historyPage = 0;
+        historyHasMore = false;
+        historyLoading = false;
+        const ws = document.getElementById('welcome-screen');
+        if (ws) ws.remove();
+        messagesDiv.innerHTML = '';
+        loadHistory(1);
     }
     loadSessionList();
 
@@ -3647,9 +3667,14 @@ function startPolling() {
     function poll() {
         if (gen !== pollGeneration) return;
         if (pollInFlight) return;
-        if (document.hidden) { setTimeout(poll, 10000); return; }
+        if (document.hidden) { setTimeout(poll, 3000); return; }
 
         pollInFlight = true;
+
+        if (sessionId && sessionId.startsWith('team_')) {
+            _syncTeamHistory();
+        }
+
         fetch('/poll', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3665,10 +3690,6 @@ function startPolling() {
                     loadingContainers[rid].remove();
                     delete loadingContainers[rid];
                 }
-                // Skip if this reply is already on screen. Happens when a reply
-                // arrives via both the SSE stream and the poll queue (e.g. the
-                // user switched away mid-run, leaving the queued reply to be
-                // re-fetched on return) — render it only once.
                 const already = rid && messagesDiv.querySelector(
                     `[data-request-id="${rid}"]`
                 );
@@ -3679,12 +3700,31 @@ function startPolling() {
                     scrollChatToBottom();
                 }
             }
-            const delay = (data.status === 'success' && data.has_content) ? 5000 : 10000;
+            const delay = (sessionId && sessionId.startsWith('team_')) ? 2500 : ((data.status === 'success' && data.has_content) ? 5000 : 10000);
             setTimeout(poll, delay);
         })
-        .catch(() => { pollInFlight = false; setTimeout(poll, 10000); });
+        .catch(() => { pollInFlight = false; setTimeout(poll, 5000); });
     }
     poll();
+}
+
+function _syncTeamHistory() {
+    if (!sessionId || !sessionId.startsWith('team_') || historyLoading) return;
+    fetch(`/api/history?session_id=${sessionId}&page=1&page_size=30`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.status !== 'success' || !data.messages) return;
+            const currentElCount = messagesDiv.querySelectorAll('.user-message-group, .team-member-message-group, .bot-message-group').length;
+            if (data.messages.length > currentElCount) {
+                const wasAtBottom = (messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight) < 100;
+                historyPage = 0;
+                messagesDiv.innerHTML = '';
+                loadHistory(1, () => {
+                    if (wasAtBottom) scrollChatToBottom();
+                });
+            }
+        })
+        .catch(() => {});
 }
 
 function createUserMessageEl(content, timestamp, attachments) {
@@ -4720,6 +4760,11 @@ window._renderTeamChatSection = _renderTeamChatSection;
 function switchTeamSession(teamId, teamName) {
     const teamSessionId = `team_session_${teamId}`;
     _saveSessionId(teamSessionId);
+
+    document.querySelectorAll('#team-sessions-section .session-item').forEach(el => {
+        const isThis = el.dataset.teamSession === teamSessionId;
+        el.classList.toggle('active', isThis);
+    });
 
     const headerTitle = document.getElementById('chat-header-title') || document.querySelector('.chat-title');
     if (headerTitle) {
