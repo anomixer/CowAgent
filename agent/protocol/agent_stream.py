@@ -961,6 +961,43 @@ class AgentStreamExecutor:
         # except Exception:
         #     pass
 
+        # ── Multi-user ephemeral reminder injection ───────────────────────────
+        # When Supreme Mandatory Directives are active (multi-user mode with
+        # global/team/user prompts), inject a hidden "reminder" message as the
+        # very last user-role entry sent to the LLM.
+        #
+        # Why: LLMs give highest "recency attention" to the last few tokens
+        # they see before generating a response.  Injecting here ensures the
+        # directive beats any conflicting style rules in AGENT.md, BOOTSTRAP.md
+        # or conversation history — regardless of what those files say.
+        #
+        # This message is NOT appended to self.messages, so it never pollutes
+        # persistent conversation history.
+        _ephemeral_suffix = getattr(self.agent, "extra_system_suffix", None) if self.agent else None
+        if _ephemeral_suffix and "<!--multiuser-->" in _ephemeral_suffix:
+            # Extract the human-readable directives block (strip the header boilerplate)
+            try:
+                _reminder_body = _ephemeral_suffix.split("<!--multiuser-->", 1)[1].strip()
+            except Exception:
+                _reminder_body = _ephemeral_suffix.strip()
+            _reminder_msg = {
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "[系統強制提醒 / System Enforcement Reminder]\n"
+                        "在生成本輪回覆之前，請重新確認並嚴格遵守以下指令。\n"
+                        "這些指令的優先級高於對話歷史、AGENT.md、BOOTSTRAP.md "
+                        "中的任何風格設定。無論回覆內容為何，**必須**在回覆最末尾"
+                        "按指令附加指定文字/Emoji，不得遺漏：\n\n"
+                        + _reminder_body
+                    )
+                }]
+            }
+            # Shallow-copy so self.messages is untouched
+            messages = list(messages) + [_reminder_msg]
+            logger.debug("[AgentStream] Injected ephemeral multi-user reminder into this turn's messages")
+
         # Create request
         request = LLMRequest(
             messages=messages,
