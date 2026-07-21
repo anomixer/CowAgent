@@ -122,8 +122,10 @@ class Agent:
 
             context_files = load_context_files(self.workspace_dir) if self.workspace_dir else None
 
-            # Re-inject 3-tier multi-user prompt if user_id is set
-            if getattr(self, "user_id", None) is not None and context_files is not None:
+            # Re-inject 3-tier multi-user prompt if user_id is set.
+            # This is UNCONDITIONAL w.r.t. context_files — the prompt hierarchy
+            # (global → team → user) must fire regardless of workspace state.
+            if getattr(self, "user_id", None) is not None:
                 user_id = self.user_id
                 try:
                     from channel.web.multiuser.db import get_multiuser_db

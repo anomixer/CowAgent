@@ -996,7 +996,10 @@ class AgentStreamExecutor:
             }
             # Shallow-copy so self.messages is untouched
             messages = list(messages) + [_reminder_msg]
-            logger.debug("[AgentStream] Injected ephemeral multi-user reminder into this turn's messages")
+            logger.info(
+                f"[AgentStream] 📌 Ephemeral multi-user reminder injected "
+                f"(suffix len={len(_ephemeral_suffix)}, body len={len(_reminder_body)})"
+            )
 
         # Create request
         request = LLMRequest(
