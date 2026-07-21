@@ -3667,7 +3667,7 @@ function startPolling() {
     function poll() {
         if (gen !== pollGeneration) return;
         if (pollInFlight) return;
-        if (document.hidden) { setTimeout(poll, 3000); return; }
+        if (document.hidden && (!sessionId || !sessionId.startsWith('team_'))) { setTimeout(poll, 3000); return; }
 
         pollInFlight = true;
 
@@ -3700,7 +3700,7 @@ function startPolling() {
                     scrollChatToBottom();
                 }
             }
-            const delay = (sessionId && sessionId.startsWith('team_')) ? 2500 : ((data.status === 'success' && data.has_content) ? 5000 : 10000);
+            const delay = (sessionId && sessionId.startsWith('team_')) ? 1000 : ((data.status === 'success' && data.has_content) ? 5000 : 10000);
             setTimeout(poll, delay);
         })
         .catch(() => { pollInFlight = false; setTimeout(poll, 5000); });
