@@ -1710,6 +1710,7 @@ let isPolling = false;
 let pollGeneration = 0;   // incremented on each restart to cancel stale poll loops
 let loadingContainers = {};
 let activeStreams = {};   // request_id -> EventSource
+const _teamRenderedSeqs = new Set();  // seqs already rendered in team chat
 let sessionActiveRequest = {};   // session_id -> request_id (in-flight stream per session)
 
 function isCurrentSessionConversationActive() {
@@ -3094,6 +3095,11 @@ function sendMessage() {
     const isTeamSession = sessionId.startsWith('team_');
     const isAiTagged = /@(AI|cowbay|cow|bot|agent|\u673a\u5668\u4eba)/i.test(text);
 
+    // Tag the optimistic user message element with a sentinel so _syncTeamHistory
+    // can skip it when the same message arrives from the DB with a real _seq.
+    // We mark it with data-optimistic and later reconcile when the DB seq is known.
+    const optimisticEl = messagesDiv.lastElementChild;
+
     let loadingEl = null;
     if (!isTeamSession || isAiTagged) {
         loadingEl = addLoadingIndicator();
@@ -3128,6 +3134,13 @@ function sendMessage() {
         .then(r => r.json())
         .then(data => {
             if (data.status === 'success') {
+                // Reconcile the optimistic user message with the DB seq
+                if (isTeamSession && data.session_id) {
+                    // Mark optimistic element so _syncTeamHistory can match it
+                    if (optimisticEl && optimisticEl.parentElement === messagesDiv) {
+                        optimisticEl.dataset.optimistic = '1';
+                    }
+                }
                 if (data.inline_reply) {
                     if (loadingEl) loadingEl.remove();
                     addBotMessage(data.inline_reply, new Date());
@@ -3736,8 +3749,7 @@ function _syncTeamHistory() {
             }
 
             // 2. Incremental append of new team messages (Zero Screen Flashing)
-            const maxSeq = _getMaxRenderedSeq();
-            const newMsgs = data.messages.filter(m => m._seq !== undefined && m._seq > maxSeq);
+            const newMsgs = data.messages.filter(m => m._seq !== undefined && !_teamRenderedSeqs.has(m._seq));
 
             if (newMsgs.length > 0) {
                 const wasAtBottom = (messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight) < 100;
@@ -3745,6 +3757,7 @@ function _syncTeamHistory() {
                 if (welcomeScreen) welcomeScreen.remove();
 
                 newMsgs.forEach(msg => {
+                    _teamRenderedSeqs.add(msg._seq);
                     const ts = new Date(msg.created_at * 1000);
                     let el;
                     if (msg.role === 'user') {
@@ -3755,23 +3768,25 @@ function _syncTeamHistory() {
                             senderName = match[1];
                             cleanText = match[2];
                         }
+                        // If an optimistic element exists for this content, tag it and skip new render
+                        const optimistic = messagesDiv.querySelector('[data-optimistic="1"]');
+                        if (optimistic) {
+                            optimistic.dataset.seq = msg._seq;
+                            delete optimistic.dataset.optimistic;
+                            return;
+                        }
                         if (currentUser && senderName === currentUser.username) {
-                            const exists = messagesDiv.querySelector(`[data-seq="${msg._seq}"]`);
-                            if (exists) return;
                             el = createUserMessageEl(cleanText, ts);
                         } else {
-                            const exists = messagesDiv.querySelector(`[data-seq="${msg._seq}"]`);
-                            if (exists) return;
                             el = createTeamMemberMessageEl(senderName, cleanText, ts);
                         }
                     } else {
-                        const exists = messagesDiv.querySelector(`[data-seq="${msg._seq}"]`);
-                        if (exists) return;
+                        // Bot message: if SSE is rendering it live, skip DB append
+                        if (data.active_request_id && activeStreams[data.active_request_id]) return;
                         el = createBotMessageEl(msg.content || '', ts, null, msg);
                     }
-                    if (msg._seq !== undefined) {
-                        el.dataset.seq = msg._seq;
-                    }
+                    if (!el) return;
+                    el.dataset.seq = msg._seq;
                     messagesDiv.appendChild(el);
                 });
 
@@ -4347,12 +4362,9 @@ function loadHistory(page) {
             const insertBefore = sentinel ? sentinel.nextSibling : messagesDiv.firstChild;
             messagesDiv.insertBefore(fragment, insertBefore);
             updateEditButtonsState();
-
-            // Sync active @AI streaming request across all watching team members
-            if (data.active_request_id && !activeStreams[data.active_request_id] && !loadingContainers[data.active_request_id]) {
-                const loadingEl = addLoadingIndicator();
-                loadingContainers[data.active_request_id] = loadingEl;
-                startSSE(data.active_request_id, loadingEl, new Date());
+            // Mark all loaded seqs as rendered so _syncTeamHistory doesn't duplicate them
+            if (sessionId && sessionId.startsWith('team_')) {
+                data.messages.forEach(m => { if (m._seq !== undefined) _teamRenderedSeqs.add(m._seq); });
             }
 
             // Manage the "load more" sentinel at the very top
@@ -4839,6 +4851,7 @@ function switchTeamSession(teamId, teamName) {
     const ws = document.getElementById('welcome-screen');
     if (ws) ws.remove();
     messagesDiv.innerHTML = '';
+    _teamRenderedSeqs.clear();  // reset rendered seqs on team switch
     loadHistory(1);
     startPolling();  // restart poll loop so _syncTeamHistory fires every 1s for this team
 
