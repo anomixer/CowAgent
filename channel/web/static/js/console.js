@@ -3708,24 +3708,74 @@ function startPolling() {
     poll();
 }
 
+function _getMaxRenderedSeq() {
+    const els = messagesDiv.querySelectorAll('[data-seq]');
+    if (els.length === 0) return -1;
+    let maxSeq = -1;
+    els.forEach(el => {
+        const s = parseInt(el.dataset.seq, 10);
+        if (!isNaN(s) && s > maxSeq) maxSeq = s;
+    });
+    return maxSeq;
+}
+
 function _syncTeamHistory() {
     if (!sessionId || !sessionId.startsWith('team_') || historyLoading) return;
-    fetch(`/api/history?session_id=${sessionId}&page=1&page_size=30`)
+    fetch(`/api/history?session_id=${sessionId}&page=1&page_size=50`)
         .then(r => r.json())
         .then(data => {
             if (data.status !== 'success' || !data.messages) return;
 
-            const currentElCount = messagesDiv.querySelectorAll('.user-message-group, .team-member-message-group, .bot-message-group').length;
-            const hasNewActiveStream = data.active_request_id && !activeStreams[data.active_request_id] && !loadingContainers[data.active_request_id];
+            // 1. Sync active @AI streaming response across all watching team members
+            if (data.active_request_id && !activeStreams[data.active_request_id] && !loadingContainers[data.active_request_id]) {
+                const welcomeScreen = document.getElementById('welcome-screen');
+                if (welcomeScreen) welcomeScreen.remove();
+                const loadingEl = addLoadingIndicator();
+                loadingContainers[data.active_request_id] = loadingEl;
+                startSSE(data.active_request_id, loadingEl, new Date());
+            }
 
-            if (data.messages.length !== currentElCount || hasNewActiveStream) {
+            // 2. Incremental append of new team messages (Zero Screen Flashing)
+            const maxSeq = _getMaxRenderedSeq();
+            const newMsgs = data.messages.filter(m => m._seq !== undefined && m._seq > maxSeq);
+
+            if (newMsgs.length > 0) {
                 const wasAtBottom = (messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight) < 100;
-                historyPage = 0;
-                historyHasMore = false;
-                messagesDiv.innerHTML = '';
-                loadHistory(1, () => {
-                    if (wasAtBottom) scrollChatToBottom();
+                const welcomeScreen = document.getElementById('welcome-screen');
+                if (welcomeScreen) welcomeScreen.remove();
+
+                newMsgs.forEach(msg => {
+                    const ts = new Date(msg.created_at * 1000);
+                    let el;
+                    if (msg.role === 'user') {
+                        let senderName = currentUser ? currentUser.username : '';
+                        let cleanText = msg.content || '';
+                        const match = (msg.content || '').match(/^\[([^\]]+)\]:\s*([\s\S]*)/);
+                        if (match) {
+                            senderName = match[1];
+                            cleanText = match[2];
+                        }
+                        if (currentUser && senderName === currentUser.username) {
+                            const exists = messagesDiv.querySelector(`[data-seq="${msg._seq}"]`);
+                            if (exists) return;
+                            el = createUserMessageEl(cleanText, ts);
+                        } else {
+                            const exists = messagesDiv.querySelector(`[data-seq="${msg._seq}"]`);
+                            if (exists) return;
+                            el = createTeamMemberMessageEl(senderName, cleanText, ts);
+                        }
+                    } else {
+                        const exists = messagesDiv.querySelector(`[data-seq="${msg._seq}"]`);
+                        if (exists) return;
+                        el = createBotMessageEl(msg.content || '', ts, null, msg);
+                    }
+                    if (msg._seq !== undefined) {
+                        el.dataset.seq = msg._seq;
+                    }
+                    messagesDiv.appendChild(el);
                 });
+
+                if (wasAtBottom) scrollChatToBottom();
             }
         })
         .catch(() => {});
