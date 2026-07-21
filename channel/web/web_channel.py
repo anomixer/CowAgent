@@ -6013,7 +6013,23 @@ class KnowledgeShareHandler:
             body = json.loads(web.data() or b"{}")
             shared_with_id = body.get("shared_with_id")
             shared_with_username = body.get("shared_with_username")
+            team_id = body.get("team_id")
+            team_name = body.get("team_name")
             permission = body.get("permission", "read")
+
+            # Support sharing to a Team
+            if team_id or team_name:
+                if team_id:
+                    t = db.get_team(int(team_id))
+                else:
+                    teams = db.list_teams()
+                    t = next((x for x in teams if x["name"] == str(team_name).strip()), None)
+                if not t:
+                    return json.dumps({"status": "error", "message": "Target team not found"})
+                result = db.create_share(user["id"], shared_with_id=None, permission=permission, team_id=t["id"])
+                if result is None:
+                    return json.dumps({"status": "error", "message": "Share to team already exists or database error"})
+                return json.dumps({"status": "success", "share": result}, ensure_ascii=False)
 
             # Resolve target user: either by shared_with_id or shared_with_username
             target = None
@@ -6024,7 +6040,7 @@ class KnowledgeShareHandler:
                 target = db.get_user_by_username(str(shared_with_username).strip())
 
             if not target:
-                return json.dumps({"status": "error", "message": "Target user not found"})
+                return json.dumps({"status": "error", "message": "Target user or team not found"})
 
             shared_with_id = target["id"]
             if shared_with_id == user["id"]:

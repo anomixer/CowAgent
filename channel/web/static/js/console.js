@@ -11729,14 +11729,18 @@ function renderShareLists(data) {
     if (owned.length === 0) {
         ownedList.innerHTML = '<div class="text-center py-8 text-slate-400 text-sm">' + t('shares_no_shares') + '</div>';
     } else {
-        ownedList.innerHTML = owned.map(s => `
+        ownedList.innerHTML = owned.map(s => {
+            const isTeam = !!s.team_name;
+            const displayName = isTeam ? `👥 ${s.team_name} (團隊)` : (s.shared_with_username || '');
+            const initial = isTeam ? '👥' : (s.shared_with_username || '?')[0];
+            return `
             <div class="flex items-center justify-between p-3 bg-white dark:bg-[#1A1A1A] rounded-lg border border-slate-200 dark:border-white/10">
                 <div class="flex items-center gap-3">
                     <div class="w-8 h-8 rounded-full bg-primary-50 dark:bg-primary-900/20 flex items-center justify-center">
-                        <span class="text-xs font-bold text-primary-500">${escapeHtml((s.shared_with_username || '?')[0])}</span>
+                        <span class="text-xs font-bold text-primary-500">${escapeHtml(initial)}</span>
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-slate-700 dark:text-slate-200">${escapeHtml(s.shared_with_username || '')}</p>
+                        <p class="text-sm font-medium text-slate-700 dark:text-slate-200">${escapeHtml(displayName)}</p>
                         <p class="text-xs text-slate-400">${t('share_delete')} · ${new Date(s.created_at * 1000).toLocaleDateString()}</p>
                     </div>
                 </div>
@@ -11745,7 +11749,8 @@ function renderShareLists(data) {
                     ${t('share_delete')}
                 </button>
             </div>
-        `).join('');
+        `;
+        }).join('');
     }
 
     // Received shares
@@ -11753,26 +11758,43 @@ function renderShareLists(data) {
     if (received.length === 0) {
         receivedList.innerHTML = '<div class="text-center py-8 text-slate-400 text-sm">' + t('shares_no_shares') + '</div>';
     } else {
-        receivedList.innerHTML = received.map(s => `
+        receivedList.innerHTML = received.map(s => {
+            const isTeam = !!s.team_name;
+            const displayName = isTeam ? `${s.owner_username} (分享至 ${s.team_name})` : (s.owner_username || '');
+            return `
             <div class="flex items-center justify-between p-3 bg-white dark:bg-[#1A1A1A] rounded-lg border border-slate-200 dark:border-white/10">
                 <div class="flex items-center gap-3">
                     <div class="w-8 h-8 rounded-full bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center">
                         <span class="text-xs font-bold text-amber-500">${escapeHtml((s.owner_username || '?')[0])}</span>
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-slate-700 dark:text-slate-200">${escapeHtml(s.owner_username || '')}</p>
+                        <p class="text-sm font-medium text-slate-700 dark:text-slate-200">${escapeHtml(displayName)}</p>
                         <p class="text-xs text-slate-400">${new Date(s.created_at * 1000).toLocaleDateString()}</p>
                     </div>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
     }
 }
+
+function toggleShareTargetType(type) {
+    const userGrp = document.getElementById('share-user-group');
+    const teamGrp = document.getElementById('share-team-group');
+    if (!userGrp || !teamGrp) return;
+    if (type === 'team') {
+        userGrp.classList.add('hidden');
+        teamGrp.classList.remove('hidden');
+    } else {
+        userGrp.classList.remove('hidden');
+        teamGrp.classList.add('hidden');
+    }
+}
+window.toggleShareTargetType = toggleShareTargetType;
 
 function showAddShareDialog() {
     const container = document.getElementById('knowledge-panel-shares');
     if (!container) return;
-    // Create overlay dialog
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 bg-black/50 z-[200] flex items-center justify-center';
     overlay.id = 'share-add-overlay';
@@ -11782,10 +11804,23 @@ function showAddShareDialog() {
             <p class="text-xs text-slate-500 dark:text-slate-400 mb-5">${t('shares_desc')}</p>
             <div class="space-y-4">
                 <div>
+                    <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">分享類型</label>
+                    <select id="share-target-type" onchange="toggleShareTargetType(this.value)" class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-200">
+                        <option value="user">👤 分享給個人 (User)</option>
+                        <option value="team">👥 分享給團隊 (Team)</option>
+                    </select>
+                </div>
+                <div id="share-user-group">
                     <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">${t('share_select_user')}</label>
                     <input id="share-username-input" type="text" placeholder="${t('share_select_user_placeholder')}"
                            class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm
                                   text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-400/50">
+                </div>
+                <div id="share-team-group" class="hidden">
+                    <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">選擇團隊</label>
+                    <select id="share-team-select" class="w-full px-4 py-2.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-200">
+                        <option value="">載入中...</option>
+                    </select>
                 </div>
                 <p id="share-add-status" class="text-sm opacity-0 transition-opacity duration-300"></p>
                 <div class="flex justify-end gap-2">
@@ -11803,11 +11838,20 @@ function showAddShareDialog() {
         </div>
     `;
     document.body.appendChild(overlay);
-    // Focus input
-    setTimeout(() => {
-        const input = document.getElementById('share-username-input');
-        if (input) input.focus();
-    }, 100);
+
+    fetch('/api/teams')
+        .then(r => r.json())
+        .then(data => {
+            const select = document.getElementById('share-team-select');
+            if (!select) return;
+            const teams = data.teams || [];
+            if (teams.length === 0) {
+                select.innerHTML = '<option value="">無可用團隊</option>';
+            } else {
+                select.innerHTML = teams.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+            }
+        })
+        .catch(() => {});
 }
 
 function closeAddShareDialog() {
@@ -11817,20 +11861,39 @@ function closeAddShareDialog() {
 window.closeAddShareDialog = closeAddShareDialog;
 
 function submitAddShare() {
-    const input = document.getElementById('share-username-input');
+    const targetType = document.getElementById('share-target-type')?.value || 'user';
     const statusEl = document.getElementById('share-add-status');
-    if (!input || !statusEl) return;
-    const username = input.value.trim();
-    if (!username) {
-        statusEl.textContent = currentLang === 'en' ? 'Please enter a username' : '请输入用户名';
-        statusEl.className = 'text-sm text-red-500 opacity-100';
-        setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
-        return;
+
+    let bodyData = { permission: 'read' };
+
+    if (targetType === 'team') {
+        const teamSelect = document.getElementById('share-team-select');
+        const teamId = teamSelect ? teamSelect.value : '';
+        if (!teamId) {
+            if (statusEl) {
+                statusEl.textContent = '請選擇團隊';
+                statusEl.className = 'text-sm text-red-500 opacity-100';
+            }
+            return;
+        }
+        bodyData.team_id = teamId;
+    } else {
+        const input = document.getElementById('share-username-input');
+        const username = input ? input.value.trim() : '';
+        if (!username) {
+            if (statusEl) {
+                statusEl.textContent = currentLang === 'en' ? 'Please enter a username' : '請輸入使用者名稱';
+                statusEl.className = 'text-sm text-red-500 opacity-100';
+            }
+            return;
+        }
+        bodyData.shared_with_username = username;
     }
+
     fetch('/api/knowledge/shares', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({shared_with_username: username, permission: 'read'})
+        body: JSON.stringify(bodyData)
     })
     .then(r => r.json())
     .then(data => {
@@ -11838,15 +11901,17 @@ function submitAddShare() {
             closeAddShareDialog();
             fetchKnowledgeShares();
         } else {
-            statusEl.textContent = data.message || t('share_add_error');
-            statusEl.className = 'text-sm text-red-500 opacity-100';
-            setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+            if (statusEl) {
+                statusEl.textContent = data.message || t('share_add_error');
+                statusEl.className = 'text-sm text-red-500 opacity-100';
+            }
         }
     })
     .catch(() => {
-        statusEl.textContent = t('share_add_error');
-        statusEl.className = 'text-sm text-red-500 opacity-100';
-        setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+        if (statusEl) {
+            statusEl.textContent = t('share_add_error');
+            statusEl.className = 'text-sm text-red-500 opacity-100';
+        }
     });
 }
 window.submitAddShare = submitAddShare;

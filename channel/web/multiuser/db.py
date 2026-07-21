@@ -55,12 +55,13 @@ CREATE INDEX IF NOT EXISTS idx_mu_sessions_expires
 CREATE TABLE IF NOT EXISTS mu_kb_shares (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_id        INTEGER NOT NULL,
-    shared_with_id  INTEGER NOT NULL,
+    shared_with_id  INTEGER NULL,
+    team_id         INTEGER NULL,
     permission      TEXT    NOT NULL DEFAULT 'read',
     created_at      INTEGER NOT NULL,
     FOREIGN KEY (owner_id) REFERENCES mu_users(id) ON DELETE CASCADE,
     FOREIGN KEY (shared_with_id) REFERENCES mu_users(id) ON DELETE CASCADE,
-    UNIQUE(owner_id, shared_with_id)
+    FOREIGN KEY (team_id) REFERENCES mu_teams(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_owner
@@ -68,6 +69,9 @@ CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_owner
 
 CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_target
     ON mu_kb_shares (shared_with_id);
+
+CREATE INDEX IF NOT EXISTS idx_mu_kb_shares_team
+    ON mu_kb_shares (team_id);
 
 CREATE TABLE IF NOT EXISTS mu_teams (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -511,24 +515,31 @@ class MultiUserDB:
 
     # -- knowledge share management ---------------------------------------
 
-    def create_share(self, owner_id: int, shared_with_id: int,
-                     permission: str = "read") -> Optional[Dict]:
-        """Share knowledge base with another user. Returns share dict or None."""
+    def create_share(self, owner_id: int, shared_with_id: Optional[int] = None,
+                     permission: str = "read", team_id: Optional[int] = None) -> Optional[Dict]:
+        """Share knowledge base with another user or a team. Returns share dict or None."""
         with self._lock:
             conn = self._get_conn()
             try:
                 now = int(time.time())
                 conn.execute(
-                    "INSERT INTO mu_kb_shares (owner_id, shared_with_id, permission, created_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (owner_id, shared_with_id, permission, now),
+                    "INSERT INTO mu_kb_shares (owner_id, shared_with_id, team_id, permission, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (owner_id, shared_with_id, team_id, permission, now),
                 )
                 conn.commit()
-                row = conn.execute(
-                    "SELECT id, owner_id, shared_with_id, permission, created_at "
-                    "FROM mu_kb_shares WHERE owner_id = ? AND shared_with_id = ?",
-                    (owner_id, shared_with_id),
-                ).fetchone()
+                if team_id:
+                    row = conn.execute(
+                        "SELECT id, owner_id, shared_with_id, team_id, permission, created_at "
+                        "FROM mu_kb_shares WHERE owner_id = ? AND team_id = ?",
+                        (owner_id, team_id),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT id, owner_id, shared_with_id, team_id, permission, created_at "
+                        "FROM mu_kb_shares WHERE owner_id = ? AND shared_with_id = ?",
+                        (owner_id, shared_with_id),
+                    ).fetchone()
                 return dict(row) if row else None
             except sqlite3.IntegrityError:
                 return None
@@ -550,15 +561,16 @@ class MultiUserDB:
                 conn.close()
 
     def list_shares_by_owner(self, owner_id: int) -> List[Dict]:
-        """List all shares created by a user (who they shared with)."""
+        """List all shares created by a user (who or which team they shared with)."""
         with self._lock:
             conn = self._get_conn()
             try:
                 rows = conn.execute(
-                    "SELECT s.id, s.owner_id, s.shared_with_id, s.permission, "
-                    "s.created_at, u.username AS shared_with_username "
+                    "SELECT s.id, s.owner_id, s.shared_with_id, s.team_id, s.permission, "
+                    "s.created_at, u.username AS shared_with_username, t.name AS team_name "
                     "FROM mu_kb_shares s "
-                    "JOIN mu_users u ON u.id = s.shared_with_id "
+                    "LEFT JOIN mu_users u ON u.id = s.shared_with_id "
+                    "LEFT JOIN mu_teams t ON t.id = s.team_id "
                     "WHERE s.owner_id = ? "
                     "ORDER BY s.created_at DESC",
                     (owner_id,),
@@ -568,33 +580,37 @@ class MultiUserDB:
                 conn.close()
 
     def list_shares_for_user(self, user_id: int) -> List[Dict]:
-        """List all shares targeting a user (knowledge shared with them)."""
+        """List all shares targeting a user or their teams (knowledge shared with them)."""
         with self._lock:
             conn = self._get_conn()
             try:
                 rows = conn.execute(
-                    "SELECT s.id, s.owner_id, s.shared_with_id, s.permission, "
-                    "s.created_at, u.username AS owner_username "
+                    "SELECT DISTINCT s.id, s.owner_id, s.shared_with_id, s.team_id, s.permission, "
+                    "s.created_at, u.username AS owner_username, t.name AS team_name "
                     "FROM mu_kb_shares s "
                     "JOIN mu_users u ON u.id = s.owner_id "
-                    "WHERE s.shared_with_id = ? "
+                    "LEFT JOIN mu_teams t ON t.id = s.team_id "
+                    "LEFT JOIN mu_team_members m ON m.team_id = s.team_id "
+                    "WHERE s.shared_with_id = ? OR m.user_id = ? "
                     "ORDER BY s.created_at DESC",
-                    (user_id,),
+                    (user_id, user_id),
                 ).fetchall()
                 return [dict(r) for r in rows]
             finally:
                 conn.close()
 
     def get_shared_user_ids(self, user_id: int) -> List[int]:
-        """Return list of user IDs whose knowledge is shared with this user."""
+        """Return list of user IDs whose knowledge is shared with this user (direct user or via team)."""
         with self._lock:
             conn = self._get_conn()
             try:
                 rows = conn.execute(
-                    "SELECT owner_id FROM mu_kb_shares WHERE shared_with_id = ?",
-                    (user_id,),
+                    "SELECT DISTINCT s.owner_id FROM mu_kb_shares s "
+                    "LEFT JOIN mu_team_members m ON m.team_id = s.team_id "
+                    "WHERE s.shared_with_id = ? OR m.user_id = ?",
+                    (user_id, user_id),
                 ).fetchall()
-                return [r[0] for r in rows]
+                return [r[0] for r in rows if r[0] is not None]
             finally:
                 conn.close()
 
@@ -1003,6 +1019,13 @@ class MultiUserDB:
                 conn.execute("ALTER TABLE mu_teams ADD COLUMN prompt TEXT NOT NULL DEFAULT ''")
                 conn.commit()
                 logger.debug("[MultiUserDB] Migration: added prompt column to mu_teams")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            # Migrate: add team_id column to mu_kb_shares if missing
+            try:
+                conn.execute("ALTER TABLE mu_kb_shares ADD COLUMN team_id INTEGER DEFAULT NULL")
+                conn.commit()
+                logger.debug("[MultiUserDB] Migration: added team_id column to mu_kb_shares")
             except sqlite3.OperationalError:
                 pass  # Column already exists
             # Migrate: copy legacy global configs from mu_user_configs (user_id=-1) to mu_global_configs

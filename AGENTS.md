@@ -875,6 +875,14 @@ base system prompt (from workspace files)
   2. 點擊團隊可進入該團隊對話空間 (`team_session_{team_id}`)，同團隊成員共用團隊歷史對話與 Message 紀錄。
   3. 支援團員之間自由交流；當訊息中含有 **`@AI`** (或點擊輸入框 `@AI` 按鈕) 時，AI Agent 讀取該 Team 之 Prompt 模板與團隊 Context 生成回覆。
 
+##### Feature #7: 團隊對話記憶自動累積 & 個人知識庫分享至 Team (Completed ✅)
+- **狀態**: ✅ 已完成並驗證
+- **功能簡介**:
+  1. 團隊對話空間自動建立並關聯 `knowledge/teams/{team_id}/` 團隊記憶/知識檔案目錄，避免寫入個人私有記憶。
+  2. 擴充 `mu_kb_shares` 資料表（新增 `team_id` 欄位），支援個人知識庫選擇「分享給個人」或「分享給團隊 (Team)」。
+  3. 被分享團隊的所有成員可即時共享檢索該個人知識庫檔案，並在 UI 中清楚標示團隊分享狀態。
+
+
 
 #### 測試驗證檢查清單（已通過 ✅）
 - [x] admin 開對話 → 🐶 (user prompt) + 🐱 (global prompt) 同時生效
