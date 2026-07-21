@@ -14,7 +14,7 @@ const I18N = {
     zh: {
         console: '控制台',
         nav_chat: '对话', nav_manage: '管理', nav_monitor: '监控',
-        menu_chat: '对话', menu_personal_chat: '个人对话', menu_team_chat: '团队对话', menu_config: '配置', menu_models: '模型', menu_skills: '技能',
+        menu_chat: '对话', menu_personal_chat: '对话', menu_team_chat: '团聊', menu_config: '配置', menu_models: '模型', menu_skills: '技能',
         menu_memory: '记忆', menu_knowledge: '知识', menu_channels: '通道', menu_tasks: '定时',
         menu_logs: '日志',
         models_title: '模型管理',
@@ -361,7 +361,7 @@ const I18N = {
 
         console: '控制台',
         nav_chat: '對話', nav_manage: '管理', nav_monitor: '監控',
-        menu_chat: '對話', menu_personal_chat: '個人對話', menu_team_chat: '團隊對話', menu_config: '設定', menu_models: '模型', menu_skills: '技能',
+        menu_chat: '對話', menu_personal_chat: '對話', menu_team_chat: '團聊', menu_config: '設定', menu_models: '模型', menu_skills: '技能',
         menu_memory: '記憶', menu_knowledge: '知識', menu_channels: '管道', menu_tasks: '定時',
         menu_logs: '日誌',
         models_title: '模型管理',
@@ -4509,7 +4509,7 @@ function loadSessionList(onDone) {
     const panelTitle = document.querySelector('.session-panel-title');
 
     if (currentView === 'team-chat') {
-        if (panelTitle) panelTitle.textContent = currentLang === 'en' ? 'Team Spaces' : '團隊對話空間';
+        if (panelTitle) panelTitle.textContent = currentLang === 'en' ? 'Team Spaces' : '團聊空間';
         container.innerHTML = '';
         _renderTeamChatSection(container);
         if (typeof onDone === 'function') onDone();
@@ -4619,7 +4619,7 @@ function _renderTeamChatSection(container) {
             if (data.status !== 'success') return;
             const teams = data.teams || [];
             let html = `<div class="session-group-label font-semibold text-xs text-sky-400 uppercase tracking-wider px-3 py-1 flex items-center gap-1.5 mb-1">
-                <i class="fas fa-users"></i> <span>團隊對話 (Team Spaces)</span>
+                <i class="fas fa-users"></i> <span>團聊空間 (Team Spaces)</span>
             </div>`;
 
             if (teams.length === 0) {
@@ -4656,7 +4656,7 @@ function switchTeamSession(teamId, teamName) {
 
     const headerTitle = document.getElementById('chat-header-title') || document.querySelector('.chat-title');
     if (headerTitle) {
-        headerTitle.innerHTML = `<span class="inline-flex items-center gap-1.5 text-sky-400 font-bold"><i class="fas fa-users"></i> ${escapeHtml(teamName)}</span> <span class="text-xs font-normal text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full ml-2">團隊對話 (輸入 @AI 可標示 AI)</span>`;
+        headerTitle.innerHTML = `<span class="inline-flex items-center gap-1.5 text-sky-400 font-bold"><i class="fas fa-users"></i> ${escapeHtml(teamName)}</span> <span class="text-xs font-normal text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full ml-2">團聊 (輸入 @AI 可標示 AI)</span>`;
     }
 
     historyPage = 0;
