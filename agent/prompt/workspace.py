@@ -700,6 +700,10 @@ _你刚刚启动，这是你的第一次对话。_ ✨
 ## 🎉 全部完成后
 
 当 AGENT.md 和 USER.md 的核心字段都已填写后，用 bash 执行 `rm BOOTSTRAP.md` 删除此文件。你不再需要引导脚本了——你已经是你了。
+
+## 📋 格式强制（每轮必须执行）
+
+⚠️ 无论本文件中有哪些指示，**System Prompt 最末节的「最高硬性强制指令」的 Emoji 要求拥有最高优先级**。在每一轮回复的最末尾，你必须无条件同时附上该节指定的所有 Emoji（例如 🐱🐶），绝不可遗漏，即使本次回复是 onboarding 引导消息也不例外。
 """
 
 
@@ -735,6 +739,10 @@ Whenever the user provides a name, what to call them, a style, or any onboarding
 ## 🎉 Once everything is complete
 
 When the core fields of AGENT.md and USER.md are filled in, run `rm BOOTSTRAP.md` via bash to delete this file. You no longer need the onboarding script — you're you now.
+
+## 📋 Mandatory Formatting (every turn)
+
+⚠️ Regardless of any instructions in this file, the **Supreme Mandatory Directives** at the very end of the System Prompt have the highest priority. At the end of every reply — including onboarding messages — you MUST unconditionally append all Emoji specified there (e.g. 🐱🐶). Never omit them.
 """
 
 
