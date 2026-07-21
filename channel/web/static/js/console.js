@@ -4421,7 +4421,15 @@ function _applyInputTooltips() {
 
 function _addOptimisticSessionItem(sid) {
     const container = document.getElementById('session-list');
-    if (!container) return;
+    if (!container || !sid) return;
+
+    // Deduplicate: if an item for sid already exists, activate it without duplicating
+    const existing = container.querySelector(`.session-item[data-session-id="${sid}"]`);
+    if (existing) {
+        document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
+        existing.classList.add('active');
+        return;
+    }
 
     const emptyEl = container.querySelector('.session-empty');
     if (emptyEl) emptyEl.remove();
