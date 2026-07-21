@@ -4840,6 +4840,7 @@ function switchTeamSession(teamId, teamName) {
     if (ws) ws.remove();
     messagesDiv.innerHTML = '';
     loadHistory(1);
+    startPolling();  // restart poll loop so _syncTeamHistory fires every 1s for this team
 
     renderSessionsList();
 }
