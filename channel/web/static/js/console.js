@@ -14,7 +14,7 @@ const I18N = {
     zh: {
         console: '控制台',
         nav_chat: '对话', nav_manage: '管理', nav_monitor: '监控',
-        menu_chat: '对话', menu_config: '配置', menu_models: '模型', menu_skills: '技能',
+        menu_chat: '对话', menu_personal_chat: '个人对话', menu_team_chat: '团队对话', menu_config: '配置', menu_models: '模型', menu_skills: '技能',
         menu_memory: '记忆', menu_knowledge: '知识', menu_channels: '通道', menu_tasks: '定时',
         menu_logs: '日志',
         models_title: '模型管理',
@@ -361,7 +361,7 @@ const I18N = {
 
         console: '控制台',
         nav_chat: '對話', nav_manage: '管理', nav_monitor: '監控',
-        menu_chat: '對話', menu_config: '設定', menu_models: '模型', menu_skills: '技能',
+        menu_chat: '對話', menu_personal_chat: '個人對話', menu_team_chat: '團隊對話', menu_config: '設定', menu_models: '模型', menu_skills: '技能',
         menu_memory: '記憶', menu_knowledge: '知識', menu_channels: '管道', menu_tasks: '定時',
         menu_logs: '日誌',
         models_title: '模型管理',
@@ -707,7 +707,7 @@ const I18N = {
     en: {
         console: 'Console',
         nav_chat: 'Chat', nav_manage: 'Management', nav_monitor: 'Monitor',
-        menu_chat: 'Chat', menu_config: 'Config', menu_models: 'Models', menu_skills: 'Skills',
+        menu_chat: 'Chat', menu_personal_chat: 'Personal Chat', menu_team_chat: 'Team Chat', menu_config: 'Config', menu_models: 'Models', menu_skills: 'Skills',
         menu_memory: 'Memory', menu_knowledge: 'Knowledge', menu_channels: 'Channels', menu_tasks: 'Tasks',
         menu_logs: 'Logs',
         models_title: 'Models',
@@ -1369,18 +1369,19 @@ function toggleTheme() {
 // Sidebar & Navigation
 // =====================================================================
 const VIEW_META = {
-    chat:     { group: 'nav_chat',    page: 'menu_chat' },
-    config:   { group: 'nav_manage',  page: 'menu_config' },
-    models:   { group: 'nav_manage',  page: 'menu_models' },
-    skills:   { group: 'nav_manage',  page: 'menu_skills' },
-    memory:   { group: 'nav_manage',  page: 'menu_memory' },
-    knowledge:{ group: 'nav_manage',  page: 'menu_knowledge' },
-    channels: { group: 'nav_manage',  page: 'menu_channels' },
-    tasks:    { group: 'nav_manage',  page: 'menu_tasks' },
-    users:    { group: 'nav_manage',  page: 'menu_users' },
-    teams:    { group: 'nav_manage',  page: 'menu_teams' },
-    profile:  { group: 'nav_manage',  page: 'menu_profile' },
-    logs:     { group: 'nav_monitor', page: 'menu_logs' },
+    chat:        { group: 'nav_chat',    page: 'menu_personal_chat' },
+    'team-chat': { group: 'nav_chat',    page: 'menu_team_chat' },
+    config:      { group: 'nav_manage',  page: 'menu_config' },
+    models:      { group: 'nav_manage',  page: 'menu_models' },
+    skills:      { group: 'nav_manage',  page: 'menu_skills' },
+    memory:      { group: 'nav_manage',  page: 'menu_memory' },
+    knowledge:   { group: 'nav_manage',  page: 'menu_knowledge' },
+    channels:    { group: 'nav_manage',  page: 'menu_channels' },
+    tasks:       { group: 'nav_manage',  page: 'menu_tasks' },
+    users:       { group: 'nav_manage',  page: 'menu_users' },
+    teams:       { group: 'nav_manage',  page: 'menu_teams' },
+    profile:     { group: 'nav_manage',  page: 'menu_profile' },
+    logs:        { group: 'nav_monitor', page: 'menu_logs' },
 };
 
 // Global auth state
@@ -1392,8 +1393,9 @@ let currentView = 'chat';
 
 function navigateTo(viewId) {
     if (!VIEW_META[viewId]) return;
+    const actualView = viewId === 'team-chat' ? 'chat' : viewId;
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    const target = document.getElementById('view-' + viewId);
+    const target = document.getElementById('view-' + actualView);
     if (target) target.classList.add('active');
     document.querySelectorAll('.sidebar-item').forEach(item => {
         item.classList.toggle('active', item.dataset.view === viewId);
@@ -1405,6 +1407,14 @@ function navigateTo(viewId) {
     document.getElementById('breadcrumb-page').dataset.i18n = meta.page;
     currentView = viewId;
     
+    if (viewId === 'team-chat') {
+        const panel = document.getElementById('session-panel');
+        if (panel && panel.classList.contains('hidden')) {
+            toggleSessionPanel();
+        }
+        _renderTeamChatSection(document.getElementById('session-list'));
+    }
+
     // Clear status messages when navigating away
     document.querySelectorAll('[id$="-status"]').forEach(el => {
         el.classList.add('opacity-0');
@@ -4575,6 +4585,75 @@ function _fetchSessionPage(page, clear, onDone) {
         })
         .catch(() => { _sessionLoading = false; });
 }
+
+function _renderTeamChatSection(container) {
+    if (!container) return;
+    let teamSection = document.getElementById('team-sessions-section');
+    if (!teamSection) {
+        teamSection = document.createElement('div');
+        teamSection.id = 'team-sessions-section';
+        teamSection.className = 'mt-4 pt-3 border-t border-slate-700/50';
+        container.appendChild(teamSection);
+    }
+
+    fetch('/api/teams')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status !== 'success') return;
+            const teams = data.teams || [];
+            let html = `<div class="session-group-label font-semibold text-xs text-sky-400 uppercase tracking-wider px-3 py-1 flex items-center gap-1.5 mb-1">
+                <i class="fas fa-users"></i> <span>團隊對話 (Team Spaces)</span>
+            </div>`;
+
+            if (teams.length === 0) {
+                html += `
+                <div class="px-3 py-3 rounded-lg bg-slate-800/40 border border-slate-700/50 text-center text-xs text-slate-400 my-1">
+                    <p class="mb-2">尚未加入任何團隊</p>
+                    <button onclick="navigateTo('teams')" class="px-3 py-1.5 rounded bg-sky-600 hover:bg-sky-500 text-white font-medium cursor-pointer transition-colors">
+                        <i class="fas fa-plus text-[10px]"></i> 建立或加入團隊
+                    </button>
+                </div>`;
+            } else {
+                teams.forEach(t => {
+                    const teamSessionId = `team_session_${t.id}`;
+                    const isActive = sessionId === teamSessionId;
+                    html += `
+                    <div class="session-item ${isActive ? 'active' : ''} flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-slate-800/60 text-slate-300 transition-all mb-1" data-team-session="${teamSessionId}" onclick="switchTeamSession(${t.id}, '${escapeHtml(t.name)}')">
+                        <div class="flex items-center gap-2 overflow-hidden">
+                            <i class="fas fa-users-gear text-sky-400"></i>
+                            <span class="session-title text-sm truncate font-medium">${escapeHtml(t.name)}</span>
+                        </div>
+                        <span class="text-xs px-1.5 py-0.5 rounded bg-sky-950/80 text-sky-300 border border-sky-800/50">${t.member_count || 1} 人</span>
+                    </div>`;
+                });
+            }
+            teamSection.innerHTML = html;
+        })
+        .catch(() => {});
+}
+window._renderTeamChatSection = _renderTeamChatSection;
+
+function switchTeamSession(teamId, teamName) {
+    const teamSessionId = `team_session_${teamId}`;
+    _saveSessionId(teamSessionId);
+
+    const headerTitle = document.getElementById('chat-header-title') || document.querySelector('.chat-title');
+    if (headerTitle) {
+        headerTitle.innerHTML = `<span class="inline-flex items-center gap-1.5 text-sky-400 font-bold"><i class="fas fa-users"></i> ${escapeHtml(teamName)}</span> <span class="text-xs font-normal text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full ml-2">團隊對話 (輸入 @AI 可標示 AI)</span>`;
+    }
+
+    historyPage = 0;
+    historyHasMore = false;
+    historyLoading = false;
+
+    const ws = document.getElementById('welcome-screen');
+    if (ws) ws.remove();
+    messagesDiv.innerHTML = '';
+    loadHistory(1);
+
+    renderSessionsList();
+}
+window.switchTeamSession = switchTeamSession;
 
 function _onSessionListScroll() {
     if (!_sessionHasMore || _sessionLoading) return;
