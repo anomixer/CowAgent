@@ -4546,6 +4546,11 @@ function _fetchSessionPage(page, clear, onDone) {
                 container.appendChild(item);
             });
 
+            const hasActiveInList = sessions.some(s => s.session_id === sessionId);
+            if (!hasActiveInList && sessionId && page === 1) {
+                _addOptimisticSessionItem(sessionId);
+            }
+
             if (typeof onDone === 'function') onDone();
         })
         .catch(() => { _sessionLoading = false; });

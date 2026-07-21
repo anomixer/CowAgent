@@ -1044,6 +1044,7 @@ class WebChannel(ChatChannel):
             context["session_id"] = session_id
             context["receiver"] = session_id
             context["request_id"] = request_id
+            context["channel_type"] = "web"
             # Attach the logged-in user_id so the persistence layer can
             # stamp new conversation sessions with the correct owner.
             if is_multiuser_enabled():
