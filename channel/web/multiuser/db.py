@@ -708,6 +708,20 @@ class MultiUserDB:
             finally:
                 conn.close()
 
+    def is_team_member(self, team_id: int, user_id: int) -> bool:
+        """Check if user_id is a member of team_id."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM mu_team_members WHERE team_id = ? AND user_id = ?",
+                    (team_id, user_id),
+                ).fetchone()
+                return row is not None
+            finally:
+                conn.close()
+
+
     def update_team(self, team_id: int, name: str = None, description: str = None, prompt: str = None) -> bool:
         """Update team name/description/prompt. Returns True if found."""
         with self._lock:

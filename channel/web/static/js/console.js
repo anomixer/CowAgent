@@ -4565,9 +4565,11 @@ function _fetchSessionPage(page, clear, onDone) {
             });
 
             const hasActiveInList = sessions.some(s => s.session_id === sessionId);
-            if (!hasActiveInList && sessionId && page === 1) {
+            if (!hasActiveInList && sessionId && page === 1 && !sessionId.startsWith('team_')) {
                 _addOptimisticSessionItem(sessionId);
             }
+
+            _renderTeamChatSection(container);
 
             if (typeof onDone === 'function') onDone();
         })

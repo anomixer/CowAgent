@@ -152,17 +152,33 @@ def _require_auth():
 
 
 def _check_session_owner(session_id: str) -> bool:
-    """Return True if session_id is owned by current user (or unowned), False if owned by another user."""
+    """Return True if session_id is owned by current user (or team member for team sessions), False otherwise."""
     if not is_multiuser_enabled():
         return True
     user = get_current_user()
     if not user:
         return False
     db = get_multiuser_db()
+    # Team sessions: check if user belongs to team or is admin
+    if session_id.startswith("team_session_") or session_id.startswith("team_"):
+        try:
+            parts = session_id.split("_")
+            team_id = None
+            if len(parts) >= 3 and parts[0] == "team" and parts[2].isdigit():
+                team_id = int(parts[2])
+            elif len(parts) >= 2 and parts[1].isdigit():
+                team_id = int(parts[1])
+            if team_id is not None:
+                if user.get("role") == "admin":
+                    return True
+                return db.is_team_member(team_id, user["id"])
+        except Exception:
+            pass
     owner_id = db.get_session_owner(session_id)
     if owner_id is not None and owner_id != 0 and owner_id != user["id"]:
         return False
     return True
+
 
 
 # Localized text for /cancel system replies. Web is the only channel that
@@ -1043,6 +1059,28 @@ class WebChannel(ChatChannel):
                 if file_refs:
                     prompt = prompt + "\n" + "\n".join(file_refs)
                     logger.info(f"[WebChannel] Attached {len(file_refs)} file(s) to message")
+
+            is_team_session = session_id.startswith("team_session_") or session_id.startswith("team_")
+            is_ai_tagged = bool(re.search(r'@(?:ai|cowbay|cow|bot|agent|\u673a\u5668\u4eba)', prompt, re.IGNORECASE)) or json_data.get("tag_ai", False)
+
+            if is_team_session and not is_ai_tagged:
+                # Team member to member message without tagging AI: persist history only
+                from agent.memory import get_conversation_store
+                store = get_conversation_store()
+                sender = mu_user["username"] if (is_multiuser_enabled() and mu_user) else "Member"
+                formatted_prompt = f"[{sender}]: {prompt}"
+                store.append_messages(session_id, [{"role": "user", "content": formatted_prompt}], channel_type="web", user_id=mu_user["id"] if (is_multiuser_enabled() and mu_user) else 0)
+                return json.dumps({
+                    "status": "success",
+                    "request_id": "",
+                    "stream": False,
+                    "inline_reply": None,
+                    "session_id": session_id
+                }, ensure_ascii=False)
+
+            if is_team_session and is_ai_tagged:
+                sender = mu_user["username"] if (is_multiuser_enabled() and mu_user) else "Member"
+                prompt = f"[{sender}]: {prompt}"
 
             request_id = self._generate_request_id()
             self.request_to_session[request_id] = session_id

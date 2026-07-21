@@ -868,6 +868,14 @@ base system prompt (from workspace files)
 - **狀態**: ✅ 已修復
 - **修復方案**: 在多使用者模式下，將使用者的工作空間目錄隔離於 `~/cow/users/{user_id}/`。每個使用者擁有獨立的 `AGENT.md`、`USER.md`、`MEMORY.md` 與 `BOOTSTRAP.md`，使新使用者登入時能正常啟動獨立 Onboarding 流程，避免寫入與記憶衝突。
 
+##### Feature #6: 團隊對話 (Team Spaces) & @AI 標記對話 (Completed ✅)
+- **狀態**: ✅ 已完成並驗證
+- **功能簡介**:
+  1. 側邊欄 Session 面板下方新增 **👥 團隊對話 (Team Spaces)** 區塊，列出使用者加入的所有團隊（如 `team1`, `team2`）。
+  2. 點擊團隊可進入該團隊對話空間 (`team_session_{team_id}`)，同團隊成員共用團隊歷史對話與 Message 紀錄。
+  3. 支援團員之間自由交流；當訊息中含有 **`@AI`** (或點擊輸入框 `@AI` 按鈕) 時，AI Agent 讀取該 Team 之 Prompt 模板與團隊 Context 生成回覆。
+
+
 #### 測試驗證檢查清單（已通過 ✅）
 - [x] admin 開對話 → 🐶 (user prompt) + 🐱 (global prompt) 同時生效
 - [x] user2 開對話 → 不該有 🐶（admin 的 prompt），只該有 🐱（global）+ user2 自己的 prompt
