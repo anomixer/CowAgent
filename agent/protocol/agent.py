@@ -162,20 +162,12 @@ class Agent:
                     if _prompt_sections:
                         _rule_block = (
                             "<!--multiuser-->\n\n"
-                            "## 🎯 核心行為準則與指令 (System & User Directives)\n\n"
-                            "你必須在每一輪對話中**嚴格執行**以下系統與使用者指令：\n\n"
+                            "## 🛑 最高硬性強制指令 (Supreme Mandatory Directives)\n\n"
+                            "你在每一輪回覆中，必須**同時無條件嚴格執行與遵守**以下所有系統與個人指令（例如 Emoji 或格式指示，全部指令必須同時生效）：\n\n"
                             + "\n".join(_prompt_sections) +
                             "\n---\n\n"
                         )
-                        updated = False
-                        for _cf in context_files:
-                            if _cf.path.lower().endswith("agent.md"):
-                                _cf.content = _rule_block + _cf.content
-                                updated = True
-                                break
-                        if not updated:
-                            _agent_path = os.path.join(self.workspace_dir or "", "AGENT.md")
-                            context_files.insert(0, ContextFile(path=_agent_path, content=_rule_block))
+                        self.extra_system_suffix = _rule_block
                 except Exception as mu_err:
                     logger.warning(f"Failed to re-inject multi-user prompt in get_full_system_prompt: {mu_err}")
 

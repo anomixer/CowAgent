@@ -189,32 +189,25 @@ class AgentInitializer:
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to clean legacy disk AGENT.md: {e}")
 
-        # Inject 3-tier prompt inheritance (Global -> Team -> User) in memory ONLY
+        # Inject 3-tier prompt inheritance (Global -> Team -> User) at very end of system prompt
+        _rule_block = None
         if user_id is not None:
             _prompt_sections = []
-            if global_prompt:
-                _prompt_sections.append(f"### 🌐 全域指令 (Global Directive)\n{global_prompt}\n")
-            if team_context:
-                _prompt_sections.append(f"### 👥 團隊指令 (Team Directive)\n{team_context}\n")
-            if user_prompt_override:
-                _prompt_sections.append(f"### 📝 個人指令 (User Directive)\n{user_prompt_override}\n")
+            if global_prompt and global_prompt.strip():
+                _prompt_sections.append(f"### 🌐 全域指令 (Global Directive)\n{global_prompt.strip()}\n")
+            if team_context and team_context.strip():
+                _prompt_sections.append(f"### 👥 團隊指令 (Team Directive)\n{team_context.strip()}\n")
+            if user_prompt_override and user_prompt_override.strip():
+                _prompt_sections.append(f"### 📝 個人指令 (User Directive)\n{user_prompt_override.strip()}\n")
 
             if _prompt_sections:
                 _rule_block = (
                     "<!--multiuser-->\n\n"
-                    "## 🎯 核心行為準則與指令 (System & User Directives)\n\n"
-                    "你必須在每一輪對話中**嚴格執行**以下系統與使用者指令：\n\n"
+                    "## 🛑 最高硬性強制指令 (Supreme Mandatory Directives)\n\n"
+                    "你在每一輪回覆中，必須**同時無條件嚴格執行與遵守**以下所有系統與個人指令（例如 Emoji 或格式指示，全部指令必須同時生效）：\n\n"
                     + "\n".join(_prompt_sections) +
                     "\n---\n\n"
                 )
-                updated = False
-                for _cf in context_files:
-                    if _cf.path.lower().endswith("agent.md"):
-                        _cf.content = _rule_block + _cf.content
-                        updated = True
-                        break
-                if not updated:
-                    context_files.insert(0, ContextFile(path=_agent_path, content=_rule_block))
                 logger.info(f"[AgentInitializer] 🎯 Multi-user prompt injected in-memory for user_id={user_id}")
             else:
                 logger.info(
@@ -257,6 +250,9 @@ class AgentInitializer:
             runtime_info=runtime_info,  # Pass runtime_info for dynamic time updates
             user_id=user_id,
         )
+        
+        if _rule_block:
+            agent.extra_system_suffix = _rule_block
         
         # Attach memory manager and share LLM model for summarization
         if memory_manager:
