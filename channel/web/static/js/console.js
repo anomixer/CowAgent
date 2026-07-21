@@ -1412,8 +1412,8 @@ function navigateTo(viewId) {
         if (panel && panel.classList.contains('hidden')) {
             toggleSessionPanel();
         }
-        _renderTeamChatSection(document.getElementById('session-list'));
     }
+    loadSessionList();
 
     // Clear status messages when navigating away
     document.querySelectorAll('[id$="-status"]').forEach(el => {
@@ -4506,6 +4506,17 @@ function loadSessionList(onDone) {
     _sessionPage = 1;
     _sessionHasMore = false;
 
+    const panelTitle = document.querySelector('.session-panel-title');
+
+    if (currentView === 'team-chat') {
+        if (panelTitle) panelTitle.textContent = currentLang === 'en' ? 'Team Spaces' : '團隊對話空間';
+        container.innerHTML = '';
+        _renderTeamChatSection(container);
+        if (typeof onDone === 'function') onDone();
+        return;
+    }
+
+    if (panelTitle) panelTitle.textContent = t('session_history');
     _fetchSessionPage(1, true, onDone);
 }
 
@@ -4515,6 +4526,14 @@ function _fetchSessionPage(page, clear, onDone) {
 
     const container = document.getElementById('session-list');
     if (!container) { _sessionLoading = false; return; }
+
+    if (currentView === 'team-chat') {
+        _sessionLoading = false;
+        container.innerHTML = '';
+        _renderTeamChatSection(container);
+        if (typeof onDone === 'function') onDone();
+        return;
+    }
 
     // Remove existing "load more" sentinel before fetching
     const oldSentinel = container.querySelector('.session-load-more');
@@ -4578,8 +4597,6 @@ function _fetchSessionPage(page, clear, onDone) {
             if (!hasActiveInList && sessionId && page === 1 && !sessionId.startsWith('team_')) {
                 _addOptimisticSessionItem(sessionId);
             }
-
-            _renderTeamChatSection(container);
 
             if (typeof onDone === 'function') onDone();
         })
