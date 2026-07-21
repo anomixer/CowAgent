@@ -3714,6 +3714,16 @@ function _syncTeamHistory() {
         .then(r => r.json())
         .then(data => {
             if (data.status !== 'success' || !data.messages) return;
+
+            // Sync active @AI streaming response across all watching team members
+            if (data.active_request_id && !activeStreams[data.active_request_id] && !loadingContainers[data.active_request_id]) {
+                const welcomeScreen = document.getElementById('welcome-screen');
+                if (welcomeScreen) welcomeScreen.remove();
+                const loadingEl = addLoadingIndicator();
+                loadingContainers[data.active_request_id] = loadingEl;
+                startSSE(data.active_request_id, loadingEl, new Date());
+            }
+
             const currentElCount = messagesDiv.querySelectorAll('.user-message-group, .team-member-message-group, .bot-message-group').length;
             if (data.messages.length !== currentElCount) {
                 const wasAtBottom = (messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight) < 100;
