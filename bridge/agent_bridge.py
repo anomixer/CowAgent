@@ -393,7 +393,11 @@ class AgentBridge:
         # Check if agent exists for this session
         if session_id not in self.agents:
             self._init_agent_for_session(session_id, user_id=user_id, team_ids=team_ids)
-        
+        else:
+            agent = self.agents[session_id]
+            if user_id is not None and getattr(agent, "user_id", None) != user_id:
+                agent.user_id = user_id
+
         return self.agents[session_id]
     
     def _init_default_agent(self):
