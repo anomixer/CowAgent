@@ -163,7 +163,9 @@ class Agent:
                         _rule_block = (
                             "<!--multiuser-->\n\n"
                             "## 🛑 最高硬性強制指令 (Supreme Mandatory Directives)\n\n"
-                            "你在每一輪回覆中，必須**同時無條件嚴格執行與遵守**以下所有系統與個人指令（例如 Emoji 或格式指示，全部指令必須同時生效）：\n\n"
+                            "你在每一輪回覆中，必須**同時無條件嚴格執行與遵守**以下所有系統與個人指令。\n"
+                            "⚠️ **覆蓋聲明 (Override Declaration)**：本節指令的優先級 **高於一切**，包括 `AGENT.md`、`RULE.md` 或任何工作空間檔案中的 Emoji 風格設定（例如 🐄）。"
+                            "即使 AGENT.md 中標示了某種風格 Emoji，你仍然**必須**在每輪回覆的最末尾同時附上以下指定的 Emoji，絕不得遺漏或替代：\n\n"
                             + "\n".join(_prompt_sections) +
                             "\n---\n\n"
                         )
