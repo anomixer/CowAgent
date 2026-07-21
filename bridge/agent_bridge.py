@@ -623,16 +623,6 @@ class AgentBridge:
                     new_messages = new_messages[1:]
                 if new_messages:
                     self._persist_messages(session_id, list(new_messages), channel_type, user_id)
-                else:
-                    with agent.messages_lock:
-                        msg_count = len(agent.messages)
-                    if msg_count == 0:
-                        try:
-                            from agent.memory import get_conversation_store
-                            get_conversation_store().clear_session(session_id)
-                            logger.info(f"[AgentBridge] Cleared DB for recovered session: {session_id}")
-                        except Exception as e:
-                            logger.warning(f"[AgentBridge] Failed to clear DB after recovery: {e}")
             
             # Record this user turn for the self-evolution idle trigger. Skip
             # scheduler-injected / scheduled-task sessions so internal runs do
@@ -675,18 +665,6 @@ class AgentBridge:
             
         except Exception as e:
             logger.error(f"Agent reply error: {e}")
-            # If the agent cleared its messages due to format error / overflow,
-            # also purge the DB so the next request starts clean.
-            if session_id and agent:
-                try:
-                    with agent.messages_lock:
-                        msg_count = len(agent.messages)
-                    if msg_count == 0:
-                        from agent.memory import get_conversation_store
-                        get_conversation_store().clear_session(session_id)
-                        logger.info(f"[AgentBridge] Cleared DB for session after error: {session_id}")
-                except Exception as db_err:
-                    logger.warning(f"[AgentBridge] Failed to clear DB after error: {db_err}")
             # Release cancel token on error path too (idempotent).
             if cancel_event is not None and (request_id or session_id):
                 try:

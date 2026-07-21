@@ -1162,10 +1162,9 @@ class AgentStreamExecutor:
                         )
 
                 # Aggressive trim didn't help or this is a message format error
-                # -> clear everything and also purge DB to prevent reload of dirty data
-                logger.warning("🔄 Clearing conversation history to recover")
+                # -> clear in-memory history to recover without purging persisted DB
+                logger.warning("🔄 Clearing conversation history in memory to recover")
                 self.messages.clear()
-                self._clear_session_db()
                 if is_context_overflow:
                     raise Exception(_t(
                         "抱歉，对话历史过长导致上下文溢出。我已清空历史记录，请重新描述你的需求。",

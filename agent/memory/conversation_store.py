@@ -349,8 +349,8 @@ class ConversationStore:
         msgs = store.load_messages("user_123", max_turns=30)
     """
 
-    def __init__(self, db_path: Path):
-        self._db_path = db_path
+    def __init__(self, db_path: Path | str):
+        self._db_path = Path(db_path) if isinstance(db_path, str) else db_path
         self._lock = threading.RLock()  # Use RLock to allow reentrant locking
         self._init_db()
 
@@ -469,20 +469,20 @@ class ConversationStore:
                     conn.execute(
                         """
                         INSERT OR IGNORE INTO sessions
-                            (session_id, channel_type, created_at, last_active, msg_count)
-                        VALUES (?, ?, ?, ?, 0)
+                            (session_id, user_id, channel_type, created_at, last_active, msg_count)
+                        VALUES (?, ?, ?, ?, ?, 0)
                         """,
-                        (session_id, channel_type, now, now),
+                        (session_id, user_id, channel_type, now, now),
                     )
                     conn.execute(
                         "UPDATE sessions SET last_active = ? WHERE session_id = ?",
                         (now, session_id),
                     )
 
-                    # Set user_id on first creation (only when > 0)
+                    # Set user_id on first creation or if user_id was 0
                     if user_id > 0:
                         conn.execute(
-                            "UPDATE sessions SET user_id = ? WHERE session_id = ? AND user_id = 0",
+                            "UPDATE sessions SET user_id = ? WHERE session_id = ? AND (user_id = 0 OR user_id IS NULL)",
                             (user_id, session_id),
                         )
 
