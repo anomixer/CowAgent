@@ -1100,14 +1100,14 @@ class ConversationStore:
             try:
                 if channel_type:
                     total = conn.execute(
-                        "SELECT COUNT(*) FROM sessions WHERE channel_type = ?",
+                        "SELECT COUNT(*) FROM sessions WHERE channel_type = ? AND session_id NOT LIKE 'team_%'",
                         (channel_type,),
                     ).fetchone()[0]
                     rows = conn.execute(
                         """
                         SELECT session_id, title, created_at, last_active, msg_count
                         FROM sessions
-                        WHERE channel_type = ?
+                        WHERE channel_type = ? AND session_id NOT LIKE 'team_%'
                         ORDER BY last_active DESC
                         LIMIT ? OFFSET ?
                         """,
@@ -1115,12 +1115,13 @@ class ConversationStore:
                     ).fetchall()
                 else:
                     total = conn.execute(
-                        "SELECT COUNT(*) FROM sessions",
+                        "SELECT COUNT(*) FROM sessions WHERE session_id NOT LIKE 'team_%'",
                     ).fetchone()[0]
                     rows = conn.execute(
                         """
                         SELECT session_id, title, created_at, last_active, msg_count
                         FROM sessions
+                        WHERE session_id NOT LIKE 'team_%'
                         ORDER BY last_active DESC
                         LIMIT ? OFFSET ?
                         """,

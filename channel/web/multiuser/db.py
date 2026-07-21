@@ -490,13 +490,18 @@ class MultiUserDB:
                     "SELECT session_id, channel_type, title, context_start_seq, "
                     "created_at, last_active, msg_count "
                     "FROM sessions "
-                    "WHERE (channel_type = ? OR channel_type = '' OR channel_type IS NULL) AND user_id = ? "
+                    "WHERE (channel_type = ? OR channel_type = '' OR channel_type IS NULL) "
+                    "  AND user_id = ? "
+                    "  AND session_id NOT LIKE 'team_%' "
                     "ORDER BY last_active DESC "
                     "LIMIT ? OFFSET ?",
                     (channel_type, user_id, page_size, offset),
                 ).fetchall()
                 total = conn.execute(
-                    "SELECT COUNT(*) FROM sessions WHERE (channel_type = ? OR channel_type = '' OR channel_type IS NULL) AND user_id = ?",
+                    "SELECT COUNT(*) FROM sessions "
+                    "WHERE (channel_type = ? OR channel_type = '' OR channel_type IS NULL) "
+                    "  AND user_id = ? "
+                    "  AND session_id NOT LIKE 'team_%'",
                     (channel_type, user_id),
                 ).fetchone()[0]
                 sessions = [dict(r) for r in rows]

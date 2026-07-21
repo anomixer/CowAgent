@@ -4654,7 +4654,7 @@ function _fetchSessionPage(page, clear, onDone) {
 
             if (clear) container.innerHTML = '';
 
-            const sessions = data.sessions || [];
+            const sessions = (data.sessions || []).filter(s => !s.session_id.startsWith('team_'));
             _sessionPage = page;
             _sessionHasMore = !!data.has_more;
 
