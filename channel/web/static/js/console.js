@@ -9983,11 +9983,12 @@ navigateTo = function(viewId) {
 // =====================================================================
 // Profile View
 // =====================================================================
-function renderProfileView() {
+function renderProfileView(force) {
     const container = document.getElementById('view-profile');
     if (!container) return;
-    if (container.dataset.rendered) return;
-    container.dataset.rendered = '1';
+    const userKey = (currentUser ? currentUser.username : '') + '_' + (isAdmin ? 'admin' : 'user');
+    if (!force && container.dataset.renderedUser === userKey) return;
+    container.dataset.renderedUser = userKey;
 
     const user = currentUser || {};
     container.innerHTML = `
@@ -11536,17 +11537,17 @@ function savePromptTemplate() {
     .then(data => {
         if (data.status === 'success') {
             statusEl.textContent = t('prompt_saved');
-            statusEl.className = 'text-sm text-green-500 opacity-100';
+            statusEl.className = 'text-sm text-green-500 opacity-100 transition-opacity duration-300';
         } else {
             statusEl.textContent = data.message || t('prompt_save_error');
-            statusEl.className = 'text-sm text-red-500 opacity-100';
+            statusEl.className = 'text-sm text-red-500 opacity-100 transition-opacity duration-300';
         }
     })
     .catch(() => {
         statusEl.textContent = t('prompt_save_error');
-        statusEl.className = 'text-sm text-red-500 opacity-100';
+        statusEl.className = 'text-sm text-red-500 opacity-100 transition-opacity duration-300';
     });
-    setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+    setTimeout(() => { statusEl.className = 'text-sm opacity-0 transition-opacity duration-300'; }, 3000);
 }
 window.savePromptTemplate = savePromptTemplate;
 
@@ -11564,17 +11565,17 @@ function clearPromptTemplate() {
     .then(data => {
         if (data.status === 'success') {
             statusEl.textContent = t('prompt_cleared');
-            statusEl.className = 'text-sm text-green-500 opacity-100';
+            statusEl.className = 'text-sm text-green-500 opacity-100 transition-opacity duration-300';
         } else {
             statusEl.textContent = data.message || t('prompt_save_error');
-            statusEl.className = 'text-sm text-red-500 opacity-100';
+            statusEl.className = 'text-sm text-red-500 opacity-100 transition-opacity duration-300';
         }
     })
     .catch(() => {
         statusEl.textContent = t('prompt_save_error');
-        statusEl.className = 'text-sm text-red-500 opacity-100';
+        statusEl.className = 'text-sm text-red-500 opacity-100 transition-opacity duration-300';
     });
-    setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+    setTimeout(() => { statusEl.className = 'text-sm opacity-0 transition-opacity duration-300'; }, 3000);
 }
 window.clearPromptTemplate = clearPromptTemplate;
 
@@ -11607,17 +11608,17 @@ function saveGlobalPrompt() {
     .then(data => {
         if (data.status === 'success') {
             statusEl.textContent = t('global_prompt_saved');
-            statusEl.className = 'text-sm text-green-500 opacity-100';
+            statusEl.className = 'text-sm text-green-500 opacity-100 transition-opacity duration-300';
         } else {
             statusEl.textContent = data.message || t('global_prompt_save_error');
-            statusEl.className = 'text-sm text-red-500 opacity-100';
+            statusEl.className = 'text-sm text-red-500 opacity-100 transition-opacity duration-300';
         }
     })
     .catch(() => {
         statusEl.textContent = t('global_prompt_save_error');
-        statusEl.className = 'text-sm text-red-500 opacity-100';
+        statusEl.className = 'text-sm text-red-500 opacity-100 transition-opacity duration-300';
     });
-    setTimeout(() => { statusEl.style.opacity = '0'; }, 3000);
+    setTimeout(() => { statusEl.className = 'text-sm opacity-0 transition-opacity duration-300'; }, 3000);
 }
 window.saveGlobalPrompt = saveGlobalPrompt;
 
