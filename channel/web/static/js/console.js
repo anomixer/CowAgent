@@ -3071,7 +3071,13 @@ function sendMessage() {
     const attachments = [...pendingAttachments];
     addUserMessage(text, timestamp, attachments);
 
-    const loadingEl = addLoadingIndicator();
+    const isTeamSession = sessionId.startsWith('team_');
+    const isAiTagged = /@(AI|cowbay|cow|bot|agent|\u673a\u5668\u4eba)/i.test(text);
+
+    let loadingEl = null;
+    if (!isTeamSession || isAiTagged) {
+        loadingEl = addLoadingIndicator();
+    }
 
     chatInput.value = '';
     chatInput.style.height = '42px';
@@ -3103,25 +3109,25 @@ function sendMessage() {
         .then(data => {
             if (data.status === 'success') {
                 if (data.inline_reply) {
-                    // Channel handled synchronously (e.g. /cancel fast-path);
-                    // render as a bot bubble and skip SSE entirely.
-                    loadingEl.remove();
+                    if (loadingEl) loadingEl.remove();
                     addBotMessage(data.inline_reply, new Date());
-                } else if (data.stream) {
+                    resetSendBtnSendMode();
+                } else if (data.stream && loadingEl) {
                     setSendBtnCancelMode(data.request_id);
                     startSSE(data.request_id, loadingEl, timestamp, titleInfo);
                 } else {
-                    loadingContainers[data.request_id] = loadingEl;
+                    if (loadingEl) loadingEl.remove();
+                    resetSendBtnSendMode();
                 }
             } else {
-                loadingEl.remove();
+                if (loadingEl) loadingEl.remove();
                 addBotMessage(t('error_send'), new Date());
                 resetSendBtnSendMode();
             }
         })
         .catch(err => {
             if (err.name === 'AbortError') {
-                loadingEl.remove();
+                if (loadingEl) loadingEl.remove();
                 addBotMessage(t('error_timeout'), new Date());
                 resetSendBtnSendMode();
                 return;
@@ -3131,7 +3137,7 @@ function sendMessage() {
                 setTimeout(() => postWithRetry(attempt + 1), RETRY_DELAY_MS * (attempt + 1));
                 return;
             }
-            loadingEl.remove();
+            if (loadingEl) loadingEl.remove();
             addBotMessage(t('error_send'), new Date());
             resetSendBtnSendMode();
         });
@@ -3724,6 +3730,49 @@ function createUserMessageEl(content, timestamp, attachments) {
     return el;
 }
 
+function createTeamMemberMessageEl(sender, content, timestamp, attachments) {
+    const el = document.createElement('div');
+    el.className = 'flex gap-3 px-4 sm:px-6 py-3 team-member-message-group';
+
+    let attachHtml = '';
+    if (attachments && attachments.length > 0) {
+        const items = attachments.map(a => {
+            if (a.file_type === 'image') {
+                return `<img src="${a.preview_url}" alt="${escapeHtml(a.file_name)}" class="user-msg-image">`;
+            }
+            const icon = a.file_type === 'video'
+                ? 'fa-film'
+                : (a.file_type === 'directory' ? 'fa-folder-tree' : 'fa-file-alt');
+            const suffix = a.file_type === 'directory' && a.file_count
+                ? ` (${a.file_count})`
+                : '';
+            return `<div class="user-msg-file"><i class="fas ${icon}"></i> ${escapeHtml(a.file_name)}${suffix}</div>`;
+        }).join('');
+        attachHtml = `<div class="user-msg-attachments mb-2">${items}</div>`;
+    }
+
+    const textHtml = content ? renderMarkdown(content) : '';
+    const initial = (sender || '?')[0].toUpperCase();
+    const timeStr = timestamp ? formatTime(new Date(timestamp)) : '';
+
+    el.innerHTML = `
+        <div class="w-8 h-8 rounded-full bg-sky-900/80 border border-sky-600/50 flex items-center justify-center text-sky-200 font-bold text-xs flex-shrink-0 mt-0.5 shadow-sm">
+            ${escapeHtml(initial)}
+        </div>
+        <div class="max-w-[75%] sm:max-w-[60%] min-w-0">
+            <div class="text-xs font-semibold text-sky-400 mb-1 flex items-center gap-1.5">
+                <span>${escapeHtml(sender)}</span>
+                <span class="text-[10px] text-slate-500 font-normal">${escapeHtml(timeStr)}</span>
+            </div>
+            <div class="bg-slate-800/90 text-slate-100 border border-slate-700/70 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm leading-relaxed msg-content shadow-sm">
+                ${attachHtml}${textHtml}
+            </div>
+        </div>
+    `;
+    el.dataset.rawContent = content || '';
+    return el;
+}
+
 function renderToolCallsHtml(toolCalls) {
     if (!toolCalls || toolCalls.length === 0) return '';
     return toolCalls.map(tc => {
@@ -4163,9 +4212,27 @@ function loadHistory(page) {
                 }
 
                 const ts = new Date(msg.created_at * 1000);
-                const el = msg.role === 'user'
-                    ? createUserMessageEl(msg.content, ts)
-                    : createBotMessageEl(msg.content || '', ts, null, msg);
+                let el;
+                if (msg.role === 'user') {
+                    if (sessionId.startsWith('team_')) {
+                        let senderName = currentUser ? currentUser.username : '';
+                        let cleanText = msg.content || '';
+                        const match = (msg.content || '').match(/^\[([^\]]+)\]:\s*([\s\S]*)/);
+                        if (match) {
+                            senderName = match[1];
+                            cleanText = match[2];
+                        }
+                        if (currentUser && senderName === currentUser.username) {
+                            el = createUserMessageEl(cleanText, ts);
+                        } else {
+                            el = createTeamMemberMessageEl(senderName, cleanText, ts);
+                        }
+                    } else {
+                        el = createUserMessageEl(msg.content, ts);
+                    }
+                } else {
+                    el = createBotMessageEl(msg.content || '', ts, null, msg);
+                }
                 // Store seq for delete functionality
                 if (msg._seq !== undefined) {
                     el.dataset.seq = msg._seq;
