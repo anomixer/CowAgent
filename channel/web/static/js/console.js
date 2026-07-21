@@ -3715,19 +3715,13 @@ function _syncTeamHistory() {
         .then(data => {
             if (data.status !== 'success' || !data.messages) return;
 
-            // Sync active @AI streaming response across all watching team members
-            if (data.active_request_id && !activeStreams[data.active_request_id] && !loadingContainers[data.active_request_id]) {
-                const welcomeScreen = document.getElementById('welcome-screen');
-                if (welcomeScreen) welcomeScreen.remove();
-                const loadingEl = addLoadingIndicator();
-                loadingContainers[data.active_request_id] = loadingEl;
-                startSSE(data.active_request_id, loadingEl, new Date());
-            }
-
             const currentElCount = messagesDiv.querySelectorAll('.user-message-group, .team-member-message-group, .bot-message-group').length;
-            if (data.messages.length !== currentElCount) {
+            const hasNewActiveStream = data.active_request_id && !activeStreams[data.active_request_id] && !loadingContainers[data.active_request_id];
+
+            if (data.messages.length !== currentElCount || hasNewActiveStream) {
                 const wasAtBottom = (messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight) < 100;
                 historyPage = 0;
+                historyHasMore = false;
                 messagesDiv.innerHTML = '';
                 loadHistory(1, () => {
                     if (wasAtBottom) scrollChatToBottom();
@@ -4303,6 +4297,13 @@ function loadHistory(page) {
             const insertBefore = sentinel ? sentinel.nextSibling : messagesDiv.firstChild;
             messagesDiv.insertBefore(fragment, insertBefore);
             updateEditButtonsState();
+
+            // Sync active @AI streaming request across all watching team members
+            if (data.active_request_id && !activeStreams[data.active_request_id] && !loadingContainers[data.active_request_id]) {
+                const loadingEl = addLoadingIndicator();
+                loadingContainers[data.active_request_id] = loadingEl;
+                startSSE(data.active_request_id, loadingEl, new Date());
+            }
 
             // Manage the "load more" sentinel at the very top
             if (data.has_more) {
