@@ -860,6 +860,14 @@ base system prompt (from workspace files)
 - **狀態**: ✅ 已修復並驗證
 - **修復方案**: 強化 `web_channel.py` 請求層與 `AgentBridge` 之間的 `user_id` 綁定，多使用者模式下對話與 Session 創建按 `user_id` 嚴格隔離。
 
+##### Bug #4: 登出後存取權限越權 Bypass (Fixed ✅)
+- **狀態**: ✅ 已修復
+- **修復方案**: 修復 `web_channel.py` 中的 `_require_auth()`，在多使用者模式下嚴格呼叫 `require_login()`，阻斷未登入或登出後對 `/api/sessions` 等保護 Handler 的越權存取。
+
+##### Bug #5: 多使用者工作空間 (Workspace) 檔案衝突與 Onboarding 跳過 (Fixed ✅)
+- **狀態**: ✅ 已修復
+- **修復方案**: 在多使用者模式下，將使用者的工作空間目錄隔離於 `~/cow/users/{user_id}/`。每個使用者擁有獨立的 `AGENT.md`、`USER.md`、`MEMORY.md` 與 `BOOTSTRAP.md`，使新使用者登入時能正常啟動獨立 Onboarding 流程，避免寫入與記憶衝突。
+
 #### 測試驗證檢查清單（已通過 ✅）
 - [x] admin 開對話 → 🐶 (user prompt) + 🐱 (global prompt) 同時生效
 - [x] user2 開對話 → 不該有 🐶（admin 的 prompt），只該有 🐱（global）+ user2 自己的 prompt

@@ -141,10 +141,14 @@ def _check_auth():
 
 def _require_auth():
     """Raise 401 if not authenticated. Call at the top of protected handlers."""
+    if is_multiuser_enabled():
+        from channel.web.multiuser.auth import require_login
+        require_login()
+        return
     if not _check_auth():
         raise web.HTTPError("401 Unauthorized",
-                            {"Content-Type": "application/json; charset=utf-8"},
-                            json.dumps({"status": "error", "message": "Unauthorized"}))
+                             {"Content-Type": "application/json; charset=utf-8"},
+                             json.dumps({"status": "error", "message": "Unauthorized"}))
 
 
 # Localized text for /cancel system replies. Web is the only channel that
@@ -187,8 +191,7 @@ def _steer_reply_text(status, lang: str) -> str:
 
 
 def _get_upload_dir() -> str:
-    from common.utils import expand_path
-    ws_root = expand_path(conf().get("agent_workspace", "~/cow"))
+    ws_root = _get_workspace_root()
     tmp_dir = os.path.join(ws_root, "tmp")
     os.makedirs(tmp_dir, exist_ok=True)
     return tmp_dir
@@ -2366,7 +2369,7 @@ class FileServeHandler:
             serve_root = conf().get("web_file_serve_root", "~") or "~"
             allowed_roots = [
                 os.path.realpath(os.path.expanduser(serve_root)),
-                os.path.realpath(os.path.expanduser(conf().get("agent_workspace", "~/cow"))),
+                os.path.realpath(_get_workspace_root()),
             ]
             if os.sep not in allowed_roots and not any(
                 os.path.commonpath([file_path, root]) == root for root in allowed_roots
@@ -5135,7 +5138,13 @@ class FeishuRegisterHandler:
 def _get_workspace_root():
     """Resolve the agent workspace directory."""
     from common.utils import expand_path
-    return expand_path(conf().get("agent_workspace", "~/cow"))
+    root = expand_path(conf().get("agent_workspace", "~/cow"))
+    if is_multiuser_enabled():
+        from channel.web.multiuser.auth import get_current_user
+        user = get_current_user()
+        if user:
+            return os.path.join(root, "users", str(user["id"]))
+    return root
 
 
 class ToolsHandler:

@@ -59,7 +59,10 @@ class AgentInitializer:
         
         # Get workspace from config
         workspace_root = expand_path(conf().get("agent_workspace", "~/cow"))
-        
+        from channel.web.multiuser.auth import is_multiuser_enabled
+        if is_multiuser_enabled() and user_id is not None:
+            workspace_root = os.path.join(workspace_root, "users", str(user_id))
+
         # Migrate API keys
         self._migrate_config_to_env(workspace_root)
         
