@@ -457,6 +457,25 @@ class MultiUserDB:
             finally:
                 conn.close()
 
+    def get_session_owner(self, session_id: str) -> Optional[int]:
+        """Return the user_id owner of a conversation session, or None if session doesn't exist."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cur = conn.execute(
+                    "SELECT user_id FROM sessions WHERE session_id = ?",
+                    (session_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return row["user_id"]
+                return None
+            except sqlite3.OperationalError:
+                return None
+            finally:
+                conn.close()
+
+
     def get_user_conversation_sessions(self, user_id: int,
                                        channel_type: str = "web",
                                        page: int = 1,

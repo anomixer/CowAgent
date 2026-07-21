@@ -1707,6 +1707,10 @@ let appConfig = { use_agent: false, title: 'CowAgent', subtitle: '', providers: 
 
 const SESSION_ID_KEY = 'cow_session_id';
 
+function _getSessionIdKey() {
+    return (typeof currentUser !== 'undefined' && currentUser && currentUser.id) ? `cow_session_id_${currentUser.id}` : SESSION_ID_KEY;
+}
+
 function generateSessionId() {
     return 'session_' + ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
         (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
@@ -1716,11 +1720,18 @@ function generateSessionId() {
 // Restore session_id from localStorage so conversation history survives page refresh.
 // A new id is only generated when the user explicitly starts a new chat.
 function loadOrCreateSessionId() {
-    const stored = localStorage.getItem(SESSION_ID_KEY);
+    const key = _getSessionIdKey();
+    const stored = localStorage.getItem(key);
     if (stored) return stored;
     const fresh = generateSessionId();
-    localStorage.setItem(SESSION_ID_KEY, fresh);
+    localStorage.setItem(key, fresh);
     return fresh;
+}
+
+function _saveSessionId(id) {
+    sessionId = id;
+    const key = _getSessionIdKey();
+    localStorage.setItem(key, id);
 }
 
 let sessionId = loadOrCreateSessionId();
@@ -4223,8 +4234,7 @@ function newChat(optimistic = true) {
     // replies still complete and persist.
 
     // Generate a fresh session and persist it so the next page load also starts clean
-    sessionId = generateSessionId();
-    localStorage.setItem(SESSION_ID_KEY, sessionId);
+    _saveSessionId(generateSessionId());
     resetSendBtnSendMode();  // fresh session has no in-flight reply
     startPolling();  // bump generation so old loop self-cancels, new loop uses fresh sessionId
     messagesDiv.innerHTML = '';
@@ -4638,9 +4648,8 @@ function switchSession(newSessionId) {
     // background (it self-guards against rendering into the foreign view).
     // Switching back re-attaches and resumes live streaming.
 
-    sessionId = newSessionId;
+    _saveSessionId(newSessionId);
     updateEditButtonsState();
-    localStorage.setItem(SESSION_ID_KEY, sessionId);
 
     historyPage = 0;
     historyHasMore = false;
@@ -9942,6 +9951,7 @@ window.fetch = function(...args) {
 
 // --- initApp (extended for multiuser) ---
 function initApp() {
+    sessionId = loadOrCreateSessionId();
     applyI18n();
     _applyInputTooltips();
     _restoreSessionPanel();

@@ -151,6 +151,20 @@ def _require_auth():
                              json.dumps({"status": "error", "message": "Unauthorized"}))
 
 
+def _check_session_owner(session_id: str) -> bool:
+    """Return True if session_id is owned by current user (or unowned), False if owned by another user."""
+    if not is_multiuser_enabled():
+        return True
+    user = get_current_user()
+    if not user:
+        return False
+    db = get_multiuser_db()
+    owner_id = db.get_session_owner(session_id)
+    if owner_id is not None and owner_id != 0 and owner_id != user["id"]:
+        return False
+    return True
+
+
 # Localized text for /cancel system replies. Web is the only channel that
 # honors a per-request `lang`; other channels reply in Chinese by default.
 def _cancel_reply_text(cancelled: int, lang: str) -> str:
@@ -940,6 +954,18 @@ class WebChannel(ChatChannel):
             data = web.data()
             json_data = json.loads(data)
             session_id = json_data.get('session_id', f'session_{int(time.time())}')
+            if is_multiuser_enabled():
+                mu_user = get_current_user()
+                if mu_user:
+                    db = get_multiuser_db()
+                    owner_id = db.get_session_owner(session_id)
+                    if owner_id is not None and owner_id != 0 and owner_id != mu_user["id"]:
+                        logger.warning(
+                            f"[WebChannel] Session {session_id} belongs to user {owner_id}, "
+                            f"user {mu_user['id']} attempted access. Reassigning to new session."
+                        )
+                        session_id = f"session_{uuid.uuid4()}"
+
             prompt = json_data.get('message', '')
             use_sse = json_data.get('stream', True)
             attachments = json_data.get('attachments', [])
@@ -5516,6 +5542,8 @@ class SessionDetailHandler:
         try:
             if not session_id:
                 return json.dumps({"status": "error", "message": "session_id required"})
+            if not _check_session_owner(session_id):
+                return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
 
             from agent.memory import get_conversation_store
             store = get_conversation_store()
@@ -5546,6 +5574,8 @@ class SessionDetailHandler:
         try:
             if not session_id:
                 return json.dumps({"status": "error", "message": "session_id required"})
+            if not _check_session_owner(session_id):
+                return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
             body = json.loads(web.data())
             title = body.get("title", "").strip()
             if not title:
@@ -5569,6 +5599,8 @@ class SessionTitleHandler:
         try:
             if not session_id:
                 return json.dumps({"status": "error", "message": "session_id required"})
+            if not _check_session_owner(session_id):
+                return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
 
             body = json.loads(web.data())
             user_message = body.get("user_message", "")
@@ -5596,6 +5628,8 @@ class SessionClearContextHandler:
         try:
             if not session_id:
                 return json.dumps({"status": "error", "message": "session_id required"})
+            if not _check_session_owner(session_id):
+                return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
 
             from agent.memory import get_conversation_store
             store = get_conversation_store()
@@ -5628,6 +5662,8 @@ class HistoryHandler:
             session_id = params.session_id.strip()
             if not session_id:
                 return json.dumps({"status": "error", "message": "session_id required"})
+            if not _check_session_owner(session_id):
+                return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
 
             from agent.memory import get_conversation_store
             store = get_conversation_store()
@@ -5656,6 +5692,8 @@ class MessageDeleteHandler:
             
             if not session_id or user_seq is None:
                 return json.dumps({"status": "error", "message": "session_id and user_seq required"})
+            if not _check_session_owner(session_id):
+                return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
             
             # 1. Delete from database
             from agent.memory import get_conversation_store

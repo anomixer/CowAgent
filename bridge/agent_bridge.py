@@ -396,7 +396,8 @@ class AgentBridge:
         else:
             agent = self.agents[session_id]
             if user_id is not None and getattr(agent, "user_id", None) != user_id:
-                agent.user_id = user_id
+                logger.info(f"[AgentBridge] Session {session_id} owner changed ({getattr(agent, 'user_id', None)} -> {user_id}), re-initializing agent")
+                self._init_agent_for_session(session_id, user_id=user_id, team_ids=team_ids)
 
         return self.agents[session_id]
     
