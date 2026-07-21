@@ -193,19 +193,19 @@ class AgentInitializer:
         if user_id is not None:
             _prompt_sections = []
             if global_prompt:
-                _prompt_sections.append(f"- 🌐 全域提示詞（基礎）\n  {global_prompt}")
+                _prompt_sections.append(f"### 🌐 全域指令 (Global Directive)\n{global_prompt}\n")
             if team_context:
-                _prompt_sections.append(f"- 👥 團隊提示詞\n  {team_context}")
+                _prompt_sections.append(f"### 👥 團隊指令 (Team Directive)\n{team_context}\n")
             if user_prompt_override:
-                _prompt_sections.append(f"- 📝 使用者提示詞（最高優先覆蓋）\n  {user_prompt_override}")
+                _prompt_sections.append(f"### 📝 個人指令 (User Directive)\n{user_prompt_override}\n")
 
             if _prompt_sections:
                 _rule_block = (
                     "<!--multiuser-->\n\n"
-                    "## 🎯 使用者專屬規則\n\n"
-                    "以下規則**按層級優先權繼承與覆蓋**（個人提示詞 > 團隊提示詞 > 全域提示詞），全部同時適用（包括初次對話 onboarding）：\n\n"
+                    "## 🎯 核心行為準則與指令 (System & User Directives)\n\n"
+                    "你必須在每一輪對話中**嚴格執行**以下系統與使用者指令：\n\n"
                     + "\n".join(_prompt_sections) +
-                    "\n\n---\n\n"
+                    "\n---\n\n"
                 )
                 updated = False
                 for _cf in context_files:
