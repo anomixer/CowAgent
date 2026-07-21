@@ -1261,10 +1261,7 @@ def get_conversation_store() -> ConversationStore:
     """
     Return the process-wide ConversationStore singleton.
 
-    Reuses the long-term memory database so the project stays with a single
-    SQLite file: ~/cow/memory/long-term/index.db
-    The conversation tables (sessions / messages) are separate from the
-    memory tables (memory_chunks / file_metadata) — no conflicts.
+    Uses the shared conversations database: ~/cow/sessions/conversations.db
     """
     global _store_instance
     if _store_instance is not None:
@@ -1275,13 +1272,14 @@ def get_conversation_store() -> ConversationStore:
             return _store_instance
 
         try:
-            from agent.memory.config import get_default_memory_config
-            db_path = get_default_memory_config().get_db_path()
+            from channel.web.multiuser.db import MultiUserDB
+            db_path = Path(MultiUserDB.get_default_db_path())
         except Exception:
-            from common.utils import expand_path
-            db_path = Path(expand_path("~/cow")) / "memory" / "long-term" / "index.db"
+            from config import conf
+            workspace = Path(os.path.expanduser(conf().get("agent_workspace", "~/cow")))
+            db_path = workspace / "sessions" / "conversations.db"
 
         _store_instance = ConversationStore(db_path)
-        logger.debug(f"[ConversationStore] Using shared DB at: {db_path}")
+        logger.debug(f"[ConversationStore] Using DB at: {db_path}")
         return _store_instance
 
