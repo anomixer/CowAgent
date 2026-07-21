@@ -198,28 +198,56 @@ KnowledgeShareHandler
     └── DELETE /api/knowledge/shares/:id ──► 移除分享
 ```
 
-### 三層 Prompt 注入流程 (Phase 3, 純記憶體注入 In-Memory Only)
+### 三層 Prompt 注入流程 (Phase 3, 雙層保障機制)
+
+**第一層：System Prompt 末端注入 (Section 9 — `extra_system_suffix`)**
 
 ```
 agent_initializer.py  initialize_agent()
     │
     ├── 1. 載入 Global Prompt（從 mu_global_configs 表）
-    │      GET /api/auth/global-config?key=global_prompt  ← Admin 設定
     │
     ├── 2. 載入 Team Prompt（從 mu_teams.prompt 欄位）
-    │      列出使用者所屬團隊，收集各團隊的 prompt
     │
     ├── 3. 載入 User Prompt（從 mu_user_configs, user_id=該使用者）
-    │      GET /api/auth/my-config?key=prompt_template
     │
-    └── 純記憶體 (In-Memory) 注入 ContextFile（絕不修改/污染磁碟 AGENT.md 檔案）：
+    └── 設定 agent.extra_system_suffix = <!--multiuser--> 區塊
          base system prompt (from workspace)
             + 🌐 全域提示詞  (admin 設定，對所有人生效)
             + 👥 團隊資訊    (成員身份 + 團隊 prompt)
-            + 📝 使用者提示詞 (個人微調，最高權重覆蓋)
+            + 📝 使用者提示詞 (個人微調)
+            + [Section 9] 🛑 最高硬性強制指令 (Override Declaration)
 ```
 
+**第二層：Ephemeral Reminder Injection（每次 API Call 前注入）**
+
+> **核心突破**：LLM 對「最後幾個 token」給予最高的 recency attention。
+> 即使 AGENT.md / BOOTSTRAP.md 裡有衝突的風格設定，最後看到的指令才是 LLM 真正遵從的。
+
+```
+AgentStreamExecutor._call_llm_stream()  (agent_stream.py)
+    │
+    ├── messages = self._prepare_messages()   ← 真實對話歷史
+    │
+    ├── 若 agent.extra_system_suffix 含 <!--multiuser-->：
+    │      messages = messages + [EPHEMERAL {role:user, content: 強制提醒}]
+    │      （不寫入 self.messages，不污染對話歷史）
+    │
+    └── LLMRequest(messages=messages, system=self.system_prompt)
+              ↑ LLM 最後看到的就是強制提醒
+```
+
+**保障範圍**：
+
+| 情境 | 保障狀態 |
+|------|----------|
+| onboarding 第 1 輪（BOOTSTRAP.md 在線） | ✅ Ephemeral 蓋過 BOOTSTRAP.md 劇本 |
+| onboarding 中間（tool call 寫入 AGENT.md） | ✅ 每個 LLM turn 都注入 |
+| onboarding 後一般對話 | ✅ AGENT.md emoji 設定不影響 |
+| Single User（無 extra_system_suffix） | ✅ 完全跳過，AGENT.md 自然行為保留 |
+
 > **快取刷洗**：當 Admin 或 User 在 UI 更新 Prompt 時，`UserConfigHandler` / `GlobalConfigHandler` / `TeamDetailHandler` 會調用 `AgentBridge.clear_agent_cache()`，確保下一次對話即刻套用最新 Prompt。
+
 
 ---
 ---
