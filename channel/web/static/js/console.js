@@ -3743,18 +3743,8 @@ function _syncTeamHistory() {
         .then(data => {
             if (data.status !== 'success' || !data.messages) return;
 
-            // 1. AI streaming indicator: show spinner to observers, reload when done.
-            //    Observers = team members who did NOT send the @AI request (no activeStream).
-            if (data.active_request_id && !activeStreams[data.active_request_id]) {
-                if (!_teamAiLoadingEl) {
-                    // AI just started — show loading spinner for this observer
-                    const welcomeScreen = document.getElementById('welcome-screen');
-                    if (welcomeScreen) welcomeScreen.remove();
-                    _teamAiLoadingEl = addLoadingIndicator();
-                    _teamAiLoadingReqId = data.active_request_id;
-                }
-            } else if (!data.active_request_id && _teamAiLoadingEl) {
-                // AI finished — remove spinner and reload full history for complete response
+            // 1. If AI just finished, remove spinner and reload full history for complete response
+            if (!data.active_request_id && _teamAiLoadingEl) {
                 _teamAiLoadingEl.remove();
                 _teamAiLoadingEl = null;
                 _teamAiLoadingReqId = null;
@@ -3766,6 +3756,7 @@ function _syncTeamHistory() {
             }
 
             // 2. Incremental append of new team messages (Zero Screen Flashing)
+            //    Must happen BEFORE showing spinner so user messages appear above AI indicator.
             const newMsgs = data.messages.filter(m => m._seq !== undefined && !_teamRenderedSeqs.has(m._seq));
 
             if (newMsgs.length > 0) {
@@ -3801,13 +3792,32 @@ function _syncTeamHistory() {
                     }
                     if (!el) return;
                     el.dataset.seq = msg._seq;
-                    messagesDiv.appendChild(el);
+                    // Insert before the AI spinner so user messages stay above it
+                    if (_teamAiLoadingEl && _teamAiLoadingEl.parentElement === messagesDiv) {
+                        messagesDiv.insertBefore(el, _teamAiLoadingEl);
+                    } else {
+                        messagesDiv.appendChild(el);
+                    }
                 });
 
                 if (wasAtBottom) scrollChatToBottom();
             }
+
+            // 3. AI streaming indicator: show spinner to observers AFTER messages are appended.
+            //    Observers = team members who did NOT send the @AI request (no activeStream).
+            if (data.active_request_id && !activeStreams[data.active_request_id]) {
+                if (!_teamAiLoadingEl) {
+                    // AI just started — show loading spinner at the bottom for this observer
+                    const welcomeScreen = document.getElementById('welcome-screen');
+                    if (welcomeScreen) welcomeScreen.remove();
+                    _teamAiLoadingEl = addLoadingIndicator();
+                    _teamAiLoadingReqId = data.active_request_id;
+                    scrollChatToBottom();
+                }
+            }
         })
         .catch(() => {});
+
 }
 
 function createUserMessageEl(content, timestamp, attachments) {
