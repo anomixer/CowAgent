@@ -3779,10 +3779,14 @@ function _syncTeamHistory() {
                             el = createTeamMemberMessageEl(senderName, cleanText, ts);
                         }
                     } else {
-                        // Bot message: if AI is still active (generating), observers should NOT render
-                        // partial/empty bot messages yet nor lock its _seq in _teamRenderedSeqs.
-                        // Wait until AI finishes (activeReq becomes null) to render full content cleanly.
-                        if (activeReq) return;
+                        // Bot message:
+                        // 1. Skip if this browser window itself is actively streaming it live via SSE
+                        if (activeReq && activeStreams[activeReq]) return;
+
+                        // 2. Skip empty/uninitialised bot messages (wait until text content or steps exist)
+                        const hasContent = msg.content && msg.content.trim();
+                        const hasSteps = msg.steps && msg.steps.length > 0;
+                        if (!hasContent && !hasSteps) return;
 
                         _teamRenderedSeqs.add(msg._seq);
                         el = createBotMessageEl(msg.content || '', ts, null, msg);
