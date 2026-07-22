@@ -3757,10 +3757,10 @@ function _syncTeamHistory() {
                 if (welcomeScreen) welcomeScreen.remove();
 
                 newMsgs.forEach(msg => {
-                    _teamRenderedSeqs.add(msg._seq);
                     const ts = new Date(msg.created_at * 1000);
                     let el;
                     if (msg.role === 'user') {
+                        _teamRenderedSeqs.add(msg._seq);
                         let senderName = currentUser ? currentUser.username : '';
                         let cleanText = msg.content || '';
                         const match = (msg.content || '').match(/^\[([^\]]+)\]:\s*([\s\S]*)/);
@@ -3779,8 +3779,12 @@ function _syncTeamHistory() {
                             el = createTeamMemberMessageEl(senderName, cleanText, ts);
                         }
                     } else {
-                        // Bot message: skip if the sender's own SSE is rendering it live
-                        if (activeReq && activeStreams[activeReq]) return;
+                        // Bot message: if AI is still active (generating), observers should NOT render
+                        // partial/empty bot messages yet nor lock its _seq in _teamRenderedSeqs.
+                        // Wait until AI finishes (activeReq becomes null) to render full content cleanly.
+                        if (activeReq) return;
+
+                        _teamRenderedSeqs.add(msg._seq);
                         el = createBotMessageEl(msg.content || '', ts, null, msg);
                     }
                     if (!el) return;
