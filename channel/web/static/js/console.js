@@ -3743,21 +3743,13 @@ function _syncTeamHistory() {
         .then(data => {
             if (data.status !== 'success' || !data.messages) return;
 
-            // 1. If AI just finished, remove spinner and reload full history for complete response
-            if (!data.active_request_id && _teamAiLoadingEl) {
-                _teamAiLoadingEl.remove();
-                _teamAiLoadingEl = null;
-                _teamAiLoadingReqId = null;
-                historyPage = 0;
-                historyLoading = false;
-                _teamRenderedSeqs.clear();
-                loadHistory(1);
-                return;
-            }
+            const activeReq = data.active_request_id;
+            const msgs = data.messages;
+            const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+            const isLastMsgBot = lastMsg && lastMsg.role === 'assistant';
 
-            // 2. Incremental append of new team messages (Zero Screen Flashing)
-            //    Must happen BEFORE showing spinner so user messages appear above AI indicator.
-            const newMsgs = data.messages.filter(m => m._seq !== undefined && !_teamRenderedSeqs.has(m._seq));
+            // 1. Incremental append of new team messages (Zero Screen Flashing)
+            const newMsgs = msgs.filter(m => m._seq !== undefined && !_teamRenderedSeqs.has(m._seq));
 
             if (newMsgs.length > 0) {
                 const wasAtBottom = (messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight) < 100;
@@ -3773,6 +3765,7 @@ function _syncTeamHistory() {
                         let cleanText = msg.content || '';
                         const match = (msg.content || '').match(/^\[([^\]]+)\]:\s*([\s\S]*)/);
                         if (match) { senderName = match[1]; cleanText = match[2]; }
+
                         // Reconcile with the optimistic element rendered by sendMessage()
                         const optimistic = messagesDiv.querySelector('[data-optimistic="1"]');
                         if (optimistic) {
@@ -3787,12 +3780,12 @@ function _syncTeamHistory() {
                         }
                     } else {
                         // Bot message: skip if the sender's own SSE is rendering it live
-                        if (data.active_request_id && activeStreams[data.active_request_id]) return;
+                        if (activeReq && activeStreams[activeReq]) return;
                         el = createBotMessageEl(msg.content || '', ts, null, msg);
                     }
                     if (!el) return;
                     el.dataset.seq = msg._seq;
-                    // Insert before the AI spinner so user messages stay above it
+                    // Insert before the AI spinner if it exists so user/bot messages stay above it
                     if (_teamAiLoadingEl && _teamAiLoadingEl.parentElement === messagesDiv) {
                         messagesDiv.insertBefore(el, _teamAiLoadingEl);
                     } else {
@@ -3803,21 +3796,26 @@ function _syncTeamHistory() {
                 if (wasAtBottom) scrollChatToBottom();
             }
 
-            // 3. AI streaming indicator: show spinner to observers AFTER messages are appended.
-            //    Observers = team members who did NOT send the @AI request (no activeStream).
-            if (data.active_request_id && !activeStreams[data.active_request_id]) {
+            // 2. AI Spinner Lifecycle Management
+            const shouldShowSpinner = activeReq && !activeStreams[activeReq] && !isLastMsgBot;
+
+            if (shouldShowSpinner) {
                 if (!_teamAiLoadingEl) {
-                    // AI just started — show loading spinner at the bottom for this observer
                     const welcomeScreen = document.getElementById('welcome-screen');
                     if (welcomeScreen) welcomeScreen.remove();
                     _teamAiLoadingEl = addLoadingIndicator();
-                    _teamAiLoadingReqId = data.active_request_id;
+                    _teamAiLoadingReqId = activeReq;
                     scrollChatToBottom();
+                }
+            } else {
+                if (_teamAiLoadingEl) {
+                    _teamAiLoadingEl.remove();
+                    _teamAiLoadingEl = null;
+                    _teamAiLoadingReqId = null;
                 }
             }
         })
         .catch(() => {});
-
 }
 
 function createUserMessageEl(content, timestamp, attachments) {
