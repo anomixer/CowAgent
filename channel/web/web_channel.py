@@ -468,7 +468,6 @@ class WebChannel(ChatChannel):
                             "user_seq": seqs.get("user_seq"),
                             "bot_seq": seqs.get("bot_seq"),
                         })
-                        self._clear_active_session_request(request_id)
                     logger.debug(f"SSE skipped duplicate file for request {request_id}")
                     return
 
@@ -488,8 +487,8 @@ class WebChannel(ChatChannel):
                     "user_seq": seqs.get("user_seq"),
                     "bot_seq": seqs.get("bot_seq"),
                 })
-                self._clear_active_session_request(request_id)
                 logger.debug(f"SSE done sent for request {request_id}")
+                self._clear_active_session_request(request_id)
                 # Auto-trigger TTS once the bot finishes its text reply. The
                 # synthesis runs in the background so the chat stream is never
                 # blocked; the resulting audio URL is pushed via a follow-up
@@ -529,7 +528,14 @@ class WebChannel(ChatChannel):
                     "request_id": request_id
                 }
                 self.session_queues[session_id].put(response_data)
-                logger.debug(f"Response sent to poll queue for session {session_id}, requ    def _clear_active_session_request(self, request_id: str):
+                logger.debug(f"Response sent to poll queue for session {session_id}, request {request_id}")
+            else:
+                logger.warning(f"No response queue found for session {session_id}, response dropped")
+
+        except Exception as e:
+            logger.error(f"Error in send method: {e}")
+
+    def _clear_active_session_request(self, request_id: str):
         sid = self.request_to_session.get(request_id)
         if sid and self.active_session_requests.get(sid) == request_id:
             self.active_session_requests.pop(sid, None)
@@ -636,7 +642,6 @@ class WebChannel(ChatChannel):
                     "request_id": request_id,
                     "timestamp": time.time(),
                 })
-                self._clear_active_session_request(request_id)
 
             elif event_type == "agent_cancelled":
                 # Push an explicit cancelled SSE event so the frontend
@@ -649,7 +654,6 @@ class WebChannel(ChatChannel):
                     "request_id": request_id,
                     "timestamp": time.time(),
                 })
-                self._clear_active_session_request(request_id)
 
             elif event_type == "agent_end":
                 # Safety net: if the agent finishes with an empty final_response,
@@ -671,13 +675,7 @@ class WebChannel(ChatChannel):
                         q.put({
                             "type": "done",
                             "content": i18n.t(
-                                "(模型未返回任何内容，请重试或换一種方式描述你的需求)",
-                                "(The model returned no content. Please retry or rephrase your request.)",
-                            ),
-                            "request_id": request_id,
-                            "timestamp": time.time(),
-                        })
-                self._clear_active_session_request(request_id)�方式描述你的需求)",
+                                "(模型未返回任何内容，请重试或换一种方式描述你的需求)",
                                 "(The model returned no content. Please retry or rephrase your request.)",
                             ),
                             "request_id": request_id,
