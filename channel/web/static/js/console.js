@@ -3736,6 +3736,35 @@ function _getMaxRenderedSeq() {
     return maxSeq;
 }
 
+function _insertMessageInOrder(el, seq) {
+    if (seq !== undefined && seq !== null) {
+        el.dataset.seq = seq;
+    }
+    const targetSeq = parseInt(el.dataset.seq, 10);
+
+    if (!isNaN(targetSeq)) {
+        // Find the first element in messagesDiv whose dataset.seq > targetSeq
+        const children = Array.from(messagesDiv.children);
+        const nextEl = children.find(child => {
+            if (child === _teamAiLoadingEl) return false;
+            const childSeq = parseInt(child.dataset.seq, 10);
+            return !isNaN(childSeq) && childSeq > targetSeq;
+        });
+
+        if (nextEl) {
+            messagesDiv.insertBefore(el, nextEl);
+            return;
+        }
+    }
+
+    // Fallback: if no element has a higher seq, insert before spinner if spinner exists, else append
+    if (_teamAiLoadingEl && _teamAiLoadingEl.parentElement === messagesDiv) {
+        messagesDiv.insertBefore(el, _teamAiLoadingEl);
+    } else {
+        messagesDiv.appendChild(el);
+    }
+}
+
 function _syncTeamHistory() {
     if (!sessionId || !sessionId.startsWith('team_') || historyLoading) return;
     fetch(`/api/history?session_id=${sessionId}&page=1&page_size=50`)
@@ -3780,8 +3809,9 @@ function _syncTeamHistory() {
                         }
                     } else {
                         // Bot message:
-                        // 1. Skip if this browser window itself is actively streaming it live via SSE
-                        if (activeReq && activeStreams[activeReq]) return;
+                        // 1. Skip ONLY if this message is for the active request currently streaming live in this browser
+                        const isMsgForActiveReq = activeReq && (msg === lastMsg || (isLastMsgBot && msg === msgs[msgs.length - 1]));
+                        if (isMsgForActiveReq && activeStreams[activeReq]) return;
 
                         // 2. Skip empty/uninitialised bot messages (wait until text content or steps exist)
                         const hasContent = msg.content && msg.content.trim();
@@ -3792,13 +3822,7 @@ function _syncTeamHistory() {
                         el = createBotMessageEl(msg.content || '', ts, null, msg);
                     }
                     if (!el) return;
-                    el.dataset.seq = msg._seq;
-                    // Insert before the AI spinner if it exists so user/bot messages stay above it
-                    if (_teamAiLoadingEl && _teamAiLoadingEl.parentElement === messagesDiv) {
-                        messagesDiv.insertBefore(el, _teamAiLoadingEl);
-                    } else {
-                        messagesDiv.appendChild(el);
-                    }
+                    _insertMessageInOrder(el, msg._seq);
                 });
 
                 if (wasAtBottom) scrollChatToBottom();
