@@ -10095,6 +10095,7 @@ function showLoginScreen() {
     if (!overlay) return;
     overlay.classList.remove('hidden');
     document.getElementById('app').classList.add('hidden');
+    updateBranding();
     // Reset to login form
     showLoginForm();
 
@@ -10307,9 +10308,22 @@ window.fetch = function(...args) {
     });
 };
 
+function updateBranding() {
+    const brandName = isMultiuserMode ? 'CowAgent Pro' : 'CowAgent';
+    const logoEl = document.getElementById('sidebar-logo-text');
+    if (logoEl) logoEl.textContent = brandName;
+    const loginTitleEl = document.getElementById('login-title');
+    if (loginTitleEl) loginTitleEl.textContent = brandName;
+    const verEl = document.getElementById('sidebar-version');
+    if (verEl) {
+        verEl.textContent = APP_VERSION ? `${brandName} ${APP_VERSION}` : brandName;
+    }
+}
+
 // --- initApp (extended for multiuser) ---
 function initApp() {
     sessionId = loadOrCreateSessionId();
+    updateBranding();
     applyI18n();
     _applyInputTooltips();
     _restoreSessionPanel();
@@ -10323,9 +10337,9 @@ function initApp() {
 
     fetch('/api/version').then(r => r.json()).then(data => {
         APP_VERSION = `v${data.version}`;
-        document.getElementById('sidebar-version').textContent = `CowAgent ${APP_VERSION}`;
+        updateBranding();
     }).catch(() => {
-        document.getElementById('sidebar-version').textContent = 'CowAgent';
+        updateBranding();
     });
     chatInput.focus();
 }
