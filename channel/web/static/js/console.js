@@ -1414,7 +1414,7 @@ function navigateTo(viewId) {
     document.getElementById('breadcrumb-page').dataset.i18n = meta.page;
     currentView = viewId;
     
-    if (viewId === 'team-chat') {
+    if (viewId === 'team-chat' || viewId === 'team-workspace') {
         const panel = document.getElementById('session-panel');
         if (panel && panel.classList.contains('hidden')) {
             toggleSessionPanel();
@@ -4764,7 +4764,7 @@ function loadSessionList(onDone) {
 
     const panelTitle = document.querySelector('.session-panel-title');
 
-    if (currentView === 'team-chat') {
+    if (currentView === 'team-chat' || currentView === 'team-workspace') {
         if (panelTitle) panelTitle.textContent = currentLang === 'en' ? 'Team Spaces' : '團聊空間';
         container.innerHTML = '';
         _renderTeamChatSection(container);
@@ -4783,7 +4783,7 @@ function _fetchSessionPage(page, clear, onDone) {
     const container = document.getElementById('session-list');
     if (!container) { _sessionLoading = false; return; }
 
-    if (currentView === 'team-chat') {
+    if (currentView === 'team-chat' || currentView === 'team-workspace') {
         _sessionLoading = false;
         container.innerHTML = '';
         _renderTeamChatSection(container);
