@@ -4865,7 +4865,7 @@ function _renderTeamChatSection(container) {
     if (!teamSection) {
         teamSection = document.createElement('div');
         teamSection.id = 'team-sessions-section';
-        teamSection.className = 'mt-4 pt-3 border-t border-slate-700/50';
+        teamSection.className = 'mt-3 space-y-3';
         container.appendChild(teamSection);
     }
 
@@ -4874,8 +4874,8 @@ function _renderTeamChatSection(container) {
         .then(data => {
             if (data.status !== 'success') return;
             const teams = data.teams || [];
-            let html = `<div class="session-group-label font-semibold text-xs text-sky-400 uppercase tracking-wider px-3 py-1 flex items-center gap-1.5 mb-1">
-                <i class="fas fa-users"></i> <span>團聊空間 (Team Spaces)</span>
+            let html = `<div class="session-group-label font-semibold text-xs text-sky-400 uppercase tracking-wider px-3 py-1 flex items-center gap-1.5 mb-2">
+                <i class="fas fa-users"></i> <span>團聊空間 (TEAM SPACES)</span>
             </div>`;
 
             if (teams.length === 0) {
@@ -4888,15 +4888,41 @@ function _renderTeamChatSection(container) {
                 </div>`;
             } else {
                 teams.forEach(t => {
-                    const teamSessionId = `team_session_${t.id}`;
-                    const isActive = sessionId === teamSessionId;
+                    const isTeamActive = currentView === 'team-workspace' && currentTeamWorkspaceId === t.id;
+                    const threads = t.threads || [];
                     html += `
-                    <div class="session-item ${isActive ? 'active' : ''} flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-slate-800/60 text-slate-300 transition-all mb-1" data-team-session="${teamSessionId}" onclick="switchTeamSession(${t.id}, '${escapeHtml(t.name)}')">
-                        <div class="flex items-center gap-2 overflow-hidden">
-                            <i class="fas fa-users-gear text-sky-400"></i>
-                            <span class="session-title text-sm truncate font-medium">${escapeHtml(t.name)}</span>
+                    <div class="team-group-card bg-slate-800/30 dark:bg-neutral-800/40 rounded-xl border border-slate-700/50 overflow-hidden mb-3">
+                        <div class="flex items-center justify-between px-3 py-2 bg-slate-800/70 dark:bg-neutral-800/80 hover:bg-slate-700/50 cursor-pointer transition-colors"
+                             onclick="openTeamWorkspace(${t.id})">
+                            <div class="flex items-center gap-2 min-w-0">
+                                <i class="fas fa-users-gear text-amber-400 text-sm"></i>
+                                <span class="text-xs font-semibold ${isTeamActive ? 'text-sky-400 font-bold' : 'text-slate-200'} truncate">${escapeHtml(t.name)}</span>
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                                <span class="text-[11px] px-1.5 py-0.5 rounded bg-sky-950/80 text-sky-300 border border-sky-800/50">${t.member_count || 1} 人</span>
+                                <button onclick="event.stopPropagation(); createNewTeamThreadForId(${t.id})"
+                                        class="p-1 text-slate-400 hover:text-white hover:bg-white/10 rounded transition-colors"
+                                        title="新增對話串">
+                                    <i class="fas fa-plus text-xs"></i>
+                                </button>
+                            </div>
                         </div>
-                        <span class="text-xs px-1.5 py-0.5 rounded bg-sky-950/80 text-sky-300 border border-sky-800/50">${t.member_count || 1} 人</span>
+                        <div class="p-1.5 space-y-1 bg-slate-900/40 dark:bg-neutral-900/40">
+                            ${threads.length > 0 ? threads.map(tr => {
+                                const isThreadActive = (currentView === 'team-chat' || currentView === 'chat') && sessionId === tr.session_id;
+                                return `
+                                    <div class="session-item ${isThreadActive ? 'active bg-sky-500/20 text-sky-300 font-semibold' : 'text-slate-300 hover:bg-white/5'} flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-all text-xs"
+                                         onclick="openTeamThreadSession('${tr.session_id}')">
+                                        <div class="flex items-center gap-2 truncate">
+                                            <i class="fas fa-hashtag text-[10px] opacity-70"></i>
+                                            <span class="truncate">${escapeHtml(tr.title)}</span>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('') : `
+                                <div class="px-2 py-1 text-[11px] text-slate-500 italic">無對話串</div>
+                            `}
+                        </div>
                     </div>`;
                 });
             }
@@ -10462,41 +10488,13 @@ function loadSidebarTeams() {
                     container.innerHTML = '';
                     return;
                 }
-                container.innerHTML = data.teams.map(tm => {
-                    const isWorkspaceActive = currentView === 'team-workspace' && currentTeamWorkspaceId === tm.id;
-                    const threads = tm.threads || [];
-                    return `
-                        <div class="team-sidebar-group mb-2 border-l border-slate-700/40 pl-2">
-                            <div class="flex items-center justify-between group/tm hover:bg-white/5 rounded-lg px-2 py-1.5 cursor-pointer text-xs font-semibold text-slate-300 hover:text-white"
-                                 onclick="openTeamWorkspace(${tm.id})">
-                                <div class="flex items-center gap-1.5 min-w-0">
-                                    <i class="fas fa-users-gear text-[11px] text-amber-400"></i>
-                                    <span class="truncate ${isWorkspaceActive ? 'text-primary-400 font-bold' : ''}">${escapeHtml(tm.name)}</span>
-                                </div>
-                                <button onclick="event.stopPropagation(); createNewTeamThreadForId(${tm.id})"
-                                        title="新增對話串"
-                                        class="text-slate-400 hover:text-primary-400 opacity-80 group-hover/tm:opacity-100 transition-opacity p-0.5 ml-1">
-                                    <i class="fas fa-plus text-[10px]"></i>
-                                </button>
-                            </div>
-                            <div class="mt-0.5 space-y-0.5 pl-3">
-                                ${threads.length > 0 ? threads.map(t => {
-                                    const isThreadActive = (currentView === 'team-chat' || currentView === 'chat') && sessionId === t.session_id;
-                                    return `
-                                        <a onclick="openTeamThreadSession('${t.session_id}')"
-                                           class="sidebar-item flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer text-[12px] ${isThreadActive ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'} transition-all truncate"
-                                           title="${escapeHtml(t.title)}">
-                                            <i class="fas fa-hashtag text-[9px] opacity-60"></i>
-                                            <span class="truncate">${escapeHtml(t.title)}</span>
-                                        </a>
-                                    `;
-                                }).join('') : `
-                                    <div class="text-[11px] text-slate-500 py-0.5 italic pl-1">暫無對話串</div>
-                                `}
-                            </div>
-                        </div>
-                    `;
-                }).join('');
+                container.innerHTML = data.teams.map(tm => `
+                    <a onclick="openTeamWorkspace(${tm.id})"
+                       class="sidebar-item flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-all duration-150 hover:bg-white/5 hover:text-neutral-200 text-xs text-slate-300">
+                        <i class="fas fa-users-gear text-[10px] text-amber-400"></i>
+                        <span class="truncate">${escapeHtml(tm.name)}</span>
+                    </a>
+                `).join('');
             }
         })
         .catch(() => {});
@@ -10514,7 +10512,7 @@ function createNewTeamThreadForId(targetTeamId) {
     .then(r => r.json())
     .then(data => {
         if (data.status === 'success' && data.thread) {
-            loadSidebarTeams();
+            loadSessionList();
             openTeamThreadSession(data.thread.session_id);
         } else {
             alert(data.message || '建立新對話串失敗');
