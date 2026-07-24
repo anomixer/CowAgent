@@ -3743,10 +3743,11 @@ function _insertMessageInOrder(el, seq) {
     const targetSeq = parseInt(el.dataset.seq, 10);
 
     if (!isNaN(targetSeq)) {
-        // Find the first element in messagesDiv whose dataset.seq > targetSeq or has data-optimistic="1"
+        // Find the first element in messagesDiv whose dataset.seq > targetSeq or is an optimistic / loading element
         const children = Array.from(messagesDiv.children);
         const nextEl = children.find(child => {
-            if (child === _teamAiLoadingEl || child === el) return false;
+            if (child === el) return false;
+            if (child.dataset.loadingIndicator === '1') return true;
             if (child.dataset.optimistic === '1') return true;
             const childSeq = parseInt(child.dataset.seq, 10);
             return !isNaN(childSeq) && childSeq > targetSeq;
@@ -3758,9 +3759,10 @@ function _insertMessageInOrder(el, seq) {
         }
     }
 
-    // Fallback: if no element has a higher seq, insert before spinner if spinner exists, else append
-    if (_teamAiLoadingEl && _teamAiLoadingEl.parentElement === messagesDiv) {
-        messagesDiv.insertBefore(el, _teamAiLoadingEl);
+    // Fallback: insert before any active loading indicator if one exists, else append
+    const loadingEl = messagesDiv.querySelector('[data-loading-indicator="1"]');
+    if (loadingEl && loadingEl !== el && loadingEl.parentElement === messagesDiv) {
+        messagesDiv.insertBefore(el, loadingEl);
     } else {
         messagesDiv.appendChild(el);
     }
@@ -4459,6 +4461,7 @@ function loadHistory(page) {
 function addLoadingIndicator() {
     const el = document.createElement('div');
     el.className = 'flex gap-3 px-4 sm:px-6 py-3';
+    el.dataset.loadingIndicator = '1';
     el.innerHTML = `
         <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3">
