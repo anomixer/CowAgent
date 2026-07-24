@@ -1481,12 +1481,12 @@ class WebChannel(ChatChannel):
             '/api/auth/users/(.*)', 'AdminUserDetailHandler',
             '/api/auth/users', 'AdminUsersHandler',
             '/api/auth/change-password', 'ChangePasswordHandler',
-            '/api/teams/(.*)/members/leave', 'TeamMemberLeaveHandler',
-            '/api/teams/(.*)/members/(.*)', 'TeamMemberDetailHandler',
-            '/api/teams/(.*)/members', 'TeamMembersHandler',
-            '/api/teams/(.*)/threads', 'TeamThreadsHandler',
-            '/api/teams/(.*)/bulletin', 'TeamBulletinHandler',
-            '/api/teams/(.*)', 'TeamDetailHandler',
+            '/api/teams/(\\d+)/members/leave', 'TeamMemberLeaveHandler',
+            '/api/teams/(\\d+)/members/([^/]+)', 'TeamMemberDetailHandler',
+            '/api/teams/(\\d+)/members', 'TeamMembersHandler',
+            '/api/teams/(\\d+)/threads', 'TeamThreadsHandler',
+            '/api/teams/(\\d+)/bulletin', 'TeamBulletinHandler',
+            '/api/teams/(\\d+)', 'TeamDetailHandler',
             '/api/teams', 'TeamsHandler',
             '/message', 'MessageHandler',
             '/upload', 'UploadHandler',
@@ -2121,7 +2121,10 @@ class TeamDetailHandler:
         prompt = data.get("prompt")  # keep None if not sent, allow empty string to clear
         if prompt is not None:
             prompt = str(prompt).strip()
-        if db.update_team(tid, name=name, description=description, prompt=prompt):
+        announcement = data.get("announcement")
+        if announcement is not None:
+            announcement = str(announcement)
+        if db.update_team(tid, name=name, description=description, prompt=prompt, announcement=announcement):
             logger.info(f"[WebChannel] Admin '{admin['username']}' updated team id={tid}")
             try:
                 from bridge.bridge import Bridge
