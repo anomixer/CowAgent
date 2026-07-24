@@ -3743,10 +3743,11 @@ function _insertMessageInOrder(el, seq) {
     const targetSeq = parseInt(el.dataset.seq, 10);
 
     if (!isNaN(targetSeq)) {
-        // Find the first element in messagesDiv whose dataset.seq > targetSeq
+        // Find the first element in messagesDiv whose dataset.seq > targetSeq or has data-optimistic="1"
         const children = Array.from(messagesDiv.children);
         const nextEl = children.find(child => {
-            if (child === _teamAiLoadingEl) return false;
+            if (child === _teamAiLoadingEl || child === el) return false;
+            if (child.dataset.optimistic === '1') return true;
             const childSeq = parseInt(child.dataset.seq, 10);
             return !isNaN(childSeq) && childSeq > targetSeq;
         });
@@ -3800,7 +3801,8 @@ function _syncTeamHistory() {
                         if (optimistic) {
                             optimistic.dataset.seq = msg._seq;
                             delete optimistic.dataset.optimistic;
-                            return;  // reuse the optimistic element, don't append duplicate
+                            _insertMessageInOrder(optimistic, msg._seq);
+                            return;  // reuse and re-order the optimistic element
                         }
                         if (currentUser && senderName === currentUser.username) {
                             el = createUserMessageEl(cleanText, ts);
