@@ -10965,6 +10965,7 @@ function fetchTeams() {
                 return;
             }
             renderTeamList(data.teams || []);
+            loadSidebarTeams();
         })
         .catch(() => {
             listEl.innerHTML = '<div class="flex items-center justify-center py-20 text-slate-400">' + t('error_send') + '</div>';

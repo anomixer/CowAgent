@@ -59,10 +59,19 @@ def _save_credentials(cred_path: str, data: dict):
     os.replace(tmp_path, cred_path)
 
 
+save_credentials = _save_credentials
+
+
 @singleton
 class WeixinChannel(ChatChannel):
 
     # ilink bot protocol has no outbound voice item; deliver TTS as a file.
+    VOICE_REPLY_AS_FILE = True
+
+    @property
+    def current_qr_url(self) -> str:
+        return getattr(self, "_current_qr_url", "")
+
     NOT_SUPPORT_REPLYTYPE = []
 
     LOGIN_STATUS_IDLE = "idle"

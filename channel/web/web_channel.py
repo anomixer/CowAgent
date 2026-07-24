@@ -5004,8 +5004,8 @@ class WeixinQrHandler:
         except ImportError:
             return ""
 
-    @staticmethod
-    def _get_running_channel():
+    @classmethod
+    def _get_running_channel(cls):
         try:
             import sys
             app_module = sys.modules.get('__main__') or sys.modules.get('app')
@@ -5021,11 +5021,12 @@ class WeixinQrHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             running_ch = self._get_running_channel()
-            if running_ch and hasattr(running_ch, '_current_qr_url') and running_ch._current_qr_url:
-                qr_image = self._qr_to_data_uri(running_ch._current_qr_url)
+            qr_url = getattr(running_ch, 'current_qr_url', getattr(running_ch, '_current_qr_url', None)) if running_ch else None
+            if running_ch and qr_url:
+                qr_image = self._qr_to_data_uri(qr_url)
                 return json.dumps({
                     "status": "success",
-                    "qrcode_url": running_ch._current_qr_url,
+                    "qrcode_url": qr_url,
                     "qr_image": qr_image,
                     "source": "channel",
                 })
@@ -5092,8 +5093,11 @@ class WeixinQrHandler:
                 return json.dumps({"status": "error", "message": "Login confirmed but missing token"})
 
             cred_path = get_weixin_credentials_path()
-            from channel.weixin.weixin_channel import _save_credentials
-            _save_credentials(cred_path, {
+            try:
+                from channel.weixin.weixin_channel import save_credentials
+            except ImportError:
+                from channel.weixin.weixin_channel import _save_credentials as save_credentials
+            save_credentials(cred_path, {
                 "token": bot_token,
                 "base_url": result_base_url,
                 "bot_id": bot_id,
