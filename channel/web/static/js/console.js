@@ -10462,18 +10462,70 @@ function loadSidebarTeams() {
                     container.innerHTML = '';
                     return;
                 }
-                container.innerHTML = data.teams.map(tm => `
-                    <a onclick="openTeamWorkspace(${tm.id})"
-                       class="sidebar-item flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-all duration-150 hover:bg-white/5 hover:text-neutral-200 text-xs text-slate-300">
-                        <i class="fas fa-users-gear text-[10px] text-amber-400"></i>
-                        <span class="truncate">${escapeHtml(tm.name)}</span>
-                    </a>
-                `).join('');
+                container.innerHTML = data.teams.map(tm => {
+                    const isWorkspaceActive = currentView === 'team-workspace' && currentTeamWorkspaceId === tm.id;
+                    const threads = tm.threads || [];
+                    return `
+                        <div class="team-sidebar-group mb-2 border-l border-slate-700/40 pl-2">
+                            <div class="flex items-center justify-between group/tm hover:bg-white/5 rounded-lg px-2 py-1.5 cursor-pointer text-xs font-semibold text-slate-300 hover:text-white"
+                                 onclick="openTeamWorkspace(${tm.id})">
+                                <div class="flex items-center gap-1.5 min-w-0">
+                                    <i class="fas fa-users-gear text-[11px] text-amber-400"></i>
+                                    <span class="truncate ${isWorkspaceActive ? 'text-primary-400 font-bold' : ''}">${escapeHtml(tm.name)}</span>
+                                </div>
+                                <button onclick="event.stopPropagation(); createNewTeamThreadForId(${tm.id})"
+                                        title="新增對話串"
+                                        class="text-slate-400 hover:text-primary-400 opacity-80 group-hover/tm:opacity-100 transition-opacity p-0.5 ml-1">
+                                    <i class="fas fa-plus text-[10px]"></i>
+                                </button>
+                            </div>
+                            <div class="mt-0.5 space-y-0.5 pl-3">
+                                ${threads.length > 0 ? threads.map(t => {
+                                    const isThreadActive = (currentView === 'team-chat' || currentView === 'chat') && sessionId === t.session_id;
+                                    return `
+                                        <a onclick="openTeamThreadSession('${t.session_id}')"
+                                           class="sidebar-item flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer text-[12px] ${isThreadActive ? 'bg-primary-500/20 text-primary-400 font-semibold' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'} transition-all truncate"
+                                           title="${escapeHtml(t.title)}">
+                                            <i class="fas fa-hashtag text-[9px] opacity-60"></i>
+                                            <span class="truncate">${escapeHtml(t.title)}</span>
+                                        </a>
+                                    `;
+                                }).join('') : `
+                                    <div class="text-[11px] text-slate-500 py-0.5 italic pl-1">暫無對話串</div>
+                                `}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
             }
         })
         .catch(() => {});
 }
+
+function createNewTeamThreadForId(targetTeamId) {
+    if (!targetTeamId) return;
+    const title = prompt('請輸入新對話串名稱 (例如: 專案開發討論):', '新團隊對話');
+    if (title === null) return;
+    fetch(`/api/teams/${targetTeamId}/threads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title.trim() || '新團隊對話' })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success' && data.thread) {
+            loadSidebarTeams();
+            openTeamThreadSession(data.thread.session_id);
+        } else {
+            alert(data.message || '建立新對話串失敗');
+        }
+    })
+    .catch(() => {
+        alert('建立新對話串失敗');
+    });
+}
 window.loadSidebarTeams = loadSidebarTeams;
+window.createNewTeamThreadForId = createNewTeamThreadForId;
 
 // --- initApp (extended for multiuser) ---
 function initApp() {
@@ -11087,6 +11139,7 @@ function createNewTeamThread() {
     .then(r => r.json())
     .then(data => {
         if (data.status === 'success' && data.thread) {
+            loadSidebarTeams();
             openTeamThreadSession(data.thread.session_id);
         } else {
             alert(data.message || '建立新對話串失敗');

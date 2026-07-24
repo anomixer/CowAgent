@@ -2034,6 +2034,8 @@ class TeamsHandler:
             teams = db.list_teams()
         else:
             teams = db.list_user_teams(user["id"])
+        for t in teams:
+            t["threads"] = db.get_team_threads(t["id"])
         return json.dumps({"status": "success", "teams": teams})
 
     def POST(self):
