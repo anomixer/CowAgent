@@ -356,6 +356,7 @@ const I18N = {
         share_add_error: '添加分享失败',
         share_delete_error: '取消分享失败',
         share_load_error: '加载分享列表失败',
+        replying_to: '回答',
     },
     'zh-Hant': {
 
@@ -703,6 +704,7 @@ const I18N = {
         share_add_error: '新增分享失敗',
         share_delete_error: '取消分享失敗',
         share_load_error: '載入分享清單失敗',
+        replying_to: '回答',
         },
     en: {
         console: 'Console',
@@ -1049,6 +1051,7 @@ const I18N = {
         share_add_error: 'Failed to add share',
         share_delete_error: 'Failed to remove share',
         share_load_error: 'Failed to load shares',
+        replying_to: 'Replying to',
     }
 };
 
@@ -3106,7 +3109,8 @@ function sendMessage() {
 
     let loadingEl = null;
     if (!isTeamSession || isAiTagged) {
-        loadingEl = addLoadingIndicator();
+        const targetUser = isTeamSession ? (currentUser ? currentUser.username : '') : null;
+        loadingEl = addLoadingIndicator(targetUser);
     }
 
     chatInput.value = '';
@@ -3839,7 +3843,7 @@ function _syncTeamHistory() {
                 if (!_teamAiLoadingEl) {
                     const welcomeScreen = document.getElementById('welcome-screen');
                     if (welcomeScreen) welcomeScreen.remove();
-                    _teamAiLoadingEl = addLoadingIndicator();
+                    _teamAiLoadingEl = addLoadingIndicator(data.active_user);
                     _teamAiLoadingReqId = activeReq;
                     scrollChatToBottom();
                 }
@@ -4458,17 +4462,26 @@ function loadHistory(page) {
         .finally(() => { historyLoading = false; });
 }
 
-function addLoadingIndicator() {
+function addLoadingIndicator(targetUser) {
     const el = document.createElement('div');
     el.className = 'flex gap-3 px-4 sm:px-6 py-3';
     el.dataset.loadingIndicator = '1';
+
+    let userLabel = '';
+    if (targetUser) {
+        userLabel = `<span class="text-xs text-slate-500 dark:text-slate-400 font-medium mr-1.5">${t('replying_to')} <span class="text-primary-600 dark:text-primary-400 font-semibold">${escapeHtml(targetUser)}</span> 中</span>`;
+    }
+
     el.innerHTML = `
         <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3">
-            <div class="flex items-center gap-1.5">
-                <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0s"></span>
-                <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0.2s"></span>
-                <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0.4s"></span>
+            <div class="flex items-center gap-2">
+                ${userLabel}
+                <div class="flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0s"></span>
+                    <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0.2s"></span>
+                    <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0.4s"></span>
+                </div>
             </div>
         </div>
     `;

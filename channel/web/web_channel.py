@@ -392,6 +392,7 @@ class WebChannel(ChatChannel):
         # long-running but still-streaming reply is never wrongly killed.
         self.sse_last_active = {}
         self.active_session_requests = {}  # session_id -> request_id
+        self.active_session_users = {}     # session_id -> username
         self._http_server = None
         self._sse_janitor_started = False
 
@@ -539,6 +540,7 @@ class WebChannel(ChatChannel):
         sid = self.request_to_session.get(request_id)
         if sid and self.active_session_requests.get(sid) == request_id:
             self.active_session_requests.pop(sid, None)
+            self.active_session_users.pop(sid, None)
 
     def _make_sse_callback(self, request_id: str):
         """Build an on_event callback that pushes agent stream events into the SSE queue."""
@@ -1099,6 +1101,9 @@ class WebChannel(ChatChannel):
             request_id = self._generate_request_id()
             self.request_to_session[request_id] = session_id
             self.active_session_requests[session_id] = request_id
+            sender_name = mu_user["username"] if (is_multiuser_enabled() and mu_user) else ""
+            if sender_name:
+                self.active_session_users[session_id] = sender_name
 
             if session_id not in self.session_queues:
                 self.session_queues[session_id] = Queue()
@@ -5728,7 +5733,8 @@ class HistoryHandler:
                 page_size=int(params.page_size),
             )
             active_req = WebChannel().active_session_requests.get(session_id)
-            return json.dumps({"status": "success", "active_request_id": active_req, **result}, ensure_ascii=False)
+            active_user = WebChannel().active_session_users.get(session_id)
+            return json.dumps({"status": "success", "active_request_id": active_req, "active_user": active_user, **result}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] History API error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
