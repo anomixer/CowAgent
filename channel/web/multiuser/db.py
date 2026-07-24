@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS mu_teams (
     name            TEXT    NOT NULL UNIQUE,
     description     TEXT    NOT NULL DEFAULT '',
     prompt          TEXT    NOT NULL DEFAULT '',
+    announcement    TEXT    NOT NULL DEFAULT '',
     created_by      INTEGER NOT NULL,
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
@@ -673,7 +674,7 @@ class MultiUserDB:
             conn = self._get_conn()
             try:
                 row = conn.execute(
-                    "SELECT id, name, description, prompt, created_by, created_at, updated_at "
+                    "SELECT id, name, description, prompt, announcement, created_by, created_at, updated_at "
                     "FROM mu_teams WHERE id = ?", (team_id,)
                 ).fetchone()
                 return dict(row) if row else None
@@ -686,7 +687,7 @@ class MultiUserDB:
             conn = self._get_conn()
             try:
                 rows = conn.execute(
-                    "SELECT t.id, t.name, t.description, t.prompt, t.created_by, t.created_at, "
+                    "SELECT t.id, t.name, t.description, t.prompt, t.announcement, t.created_by, t.created_at, "
                     "(SELECT COUNT(*) FROM mu_team_members m WHERE m.team_id = t.id) AS member_count "
                     "FROM mu_teams t ORDER BY t.name ASC"
                 ).fetchall()
@@ -700,7 +701,7 @@ class MultiUserDB:
             conn = self._get_conn()
             try:
                 rows = conn.execute(
-                    "SELECT t.id, t.name, t.description, t.prompt, t.created_by, t.created_at, "
+                    "SELECT t.id, t.name, t.description, t.prompt, t.announcement, t.created_by, t.created_at, "
                     "m.role AS my_role, "
                     "(SELECT COUNT(*) FROM mu_team_members m2 WHERE m2.team_id = t.id) AS member_count "
                     "FROM mu_teams t "
@@ -740,8 +741,8 @@ class MultiUserDB:
                 conn.close()
 
 
-    def update_team(self, team_id: int, name: str = None, description: str = None, prompt: str = None) -> bool:
-        """Update team name/description/prompt. Returns True if found."""
+    def update_team(self, team_id: int, name: str = None, description: str = None, prompt: str = None, announcement: str = None) -> bool:
+        """Update team attributes."""
         with self._lock:
             conn = self._get_conn()
             try:
@@ -757,6 +758,9 @@ class MultiUserDB:
                 if prompt is not None:
                     fields.append("prompt = ?")
                     params.append(prompt)
+                if announcement is not None:
+                    fields.append("announcement = ?")
+                    params.append(announcement)
                 if not fields:
                     return False
                 fields.append("updated_at = ?")
@@ -770,6 +774,64 @@ class MultiUserDB:
                 return cur.rowcount > 0
             except sqlite3.IntegrityError:
                 return False
+            finally:
+                conn.close()
+
+    def get_team_threads(self, team_id: int) -> List[Dict]:
+        """Get all session sub-threads belonging to team_id."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                prefix1 = f"team_{team_id}"
+                prefix2 = f"team_{team_id}_%"
+                rows = conn.execute(
+                    "SELECT session_id, user_id, title, context_start_seq, created_at, last_active, msg_count "
+                    "FROM sessions "
+                    "WHERE session_id = ? OR session_id LIKE ? "
+                    "ORDER BY last_active DESC",
+                    (prefix1, prefix2)
+                ).fetchall()
+                threads = []
+                for r in rows:
+                    item = dict(r)
+                    if item["user_id"] > 0:
+                        u = conn.execute("SELECT username FROM mu_users WHERE id = ?", (item["user_id"],)).fetchone()
+                        item["username"] = u["username"] if u else f"User #{item['user_id']}"
+                    else:
+                        item["username"] = "System"
+                    threads.append(item)
+                return threads
+            finally:
+                conn.close()
+
+    def create_team_thread(self, team_id: int, user_id: int, title: str = "") -> Dict:
+        """Create a new sub-thread inside team_id."""
+        import secrets
+        thread_suffix = secrets.token_hex(4)
+        session_id = f"team_{team_id}_{thread_suffix}"
+        if not title or not title.strip():
+            title = f"討論區 #{thread_suffix[:4]}"
+        now = int(time.time())
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute(
+                    "INSERT INTO sessions (session_id, user_id, channel_type, title, context_start_seq, created_at, last_active, msg_count) "
+                    "VALUES (?, ?, 'web', ?, 0, ?, ?, 0)",
+                    (session_id, user_id, title, now, now)
+                )
+                conn.commit()
+                u = conn.execute("SELECT username FROM mu_users WHERE id = ?", (user_id,)).fetchone()
+                username = u["username"] if u else "User"
+                return {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "username": username,
+                    "title": title,
+                    "created_at": now,
+                    "last_active": now,
+                    "msg_count": 0
+                }
             finally:
                 conn.close()
 
@@ -1016,13 +1078,18 @@ class MultiUserDB:
             conn.executescript(_DDL)
             conn.commit()
             self.ensure_conversation_user_id_column()
-            # Migrate: add prompt column to mu_teams if missing (legacy databases)
+            # Migrate: add prompt and announcement columns to mu_teams if missing
             try:
                 conn.execute("ALTER TABLE mu_teams ADD COLUMN prompt TEXT NOT NULL DEFAULT ''")
                 conn.commit()
-                logger.debug("[MultiUserDB] Migration: added prompt column to mu_teams")
             except sqlite3.OperationalError:
-                pass  # Column already exists
+                pass
+            try:
+                conn.execute("ALTER TABLE mu_teams ADD COLUMN announcement TEXT NOT NULL DEFAULT ''")
+                conn.commit()
+                logger.debug("[MultiUserDB] Migration: added announcement column to mu_teams")
+            except sqlite3.OperationalError:
+                pass
             # Migrate: add team_id column to mu_kb_shares if missing
             try:
                 conn.execute("ALTER TABLE mu_kb_shares ADD COLUMN team_id INTEGER DEFAULT NULL")

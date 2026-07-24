@@ -61,6 +61,52 @@ class MemoryService:
             "list": files[start:end],
         }
 
+    def list_scoped_memories(self, user_id: int = 0, role: str = "admin") -> dict:
+        """
+        List personal memories and team memories (scoped by team membership/admin).
+        """
+        personal_files = []
+        if user_id > 0:
+            user_mem_dir = os.path.join(self.memory_dir, "users", str(user_id))
+            if os.path.isdir(user_mem_dir):
+                for name in sorted(os.listdir(user_mem_dir), reverse=True):
+                    full = os.path.join(user_mem_dir, name)
+                    if os.path.isfile(full) and name.endswith(".md"):
+                        personal_files.append(self._file_info(full, name, "daily"))
+
+        top_files = self._list_memory_files()
+        for f in top_files:
+            if not any(pf["filename"] == f["filename"] for pf in personal_files):
+                personal_files.append(f)
+
+        team_memories = []
+        try:
+            from channel.web.multiuser.db import get_multiuser_db
+            db = get_multiuser_db()
+            if db.user_count() > 0:
+                teams = db.list_teams() if role == "admin" else db.list_user_teams(user_id)
+                for t in teams:
+                    t_id = t["id"]
+                    t_mem_dir = os.path.join(self.memory_dir, "teams", str(t_id))
+                    t_files = []
+                    if os.path.isdir(t_mem_dir):
+                        for name in sorted(os.listdir(t_mem_dir), reverse=True):
+                            full = os.path.join(t_mem_dir, name)
+                            if os.path.isfile(full) and name.endswith(".md"):
+                                t_files.append(self._file_info(full, name, "daily"))
+                    team_memories.append({
+                        "team_id": t_id,
+                        "team_name": t["name"],
+                        "files": t_files
+                    })
+        except Exception as e:
+            logger.warning(f"[MemoryService] Failed to load team memories: {e}")
+
+        return {
+            "personal_memories": personal_files,
+            "team_memories": team_memories
+        }
+
     def _list_memory_files(self) -> List[dict]:
         """MEMORY.md + memory/*.md (newest first)."""
         files: List[dict] = []

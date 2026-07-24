@@ -463,6 +463,64 @@ class KnowledgeService:
             "enabled": conf().get("knowledge", True),
         }
 
+    def list_scoped_tree(self, user_id: int = 0, role: str = "admin") -> dict:
+        """
+        Return scoped knowledge trees separated into Personal and Team trees.
+        Admin sees all team trees; regular users see personal tree + their teams' trees.
+        """
+        if not os.path.isdir(self.knowledge_dir):
+            return {
+                "personal_tree": {"root_files": [], "tree": [], "stats": {"pages": 0, "size": 0}},
+                "team_trees": [],
+                "enabled": conf().get("knowledge", True)
+            }
+
+        # 1. Personal Knowledge Tree (knowledge/users/{user_id}/)
+        personal_dir = os.path.join(self.knowledge_dir, "users", str(user_id)) if user_id > 0 else self.knowledge_dir
+        os.makedirs(personal_dir, exist_ok=True)
+        p_stats = {"pages": 0, "size": 0}
+        p_root_files, p_tree = self._scan_dir(personal_dir, p_stats, is_root=True)
+
+        # 2. Team Knowledge Trees (knowledge/teams/{team_id}/)
+        team_trees = []
+        try:
+            from channel.web.multiuser.db import get_multiuser_db
+            db = get_multiuser_db()
+            if db.user_count() > 0:
+                teams = db.list_teams() if role == "admin" else db.list_user_teams(user_id)
+                for t in teams:
+                    t_id = t["id"]
+                    t_dir = os.path.join(self.knowledge_dir, "teams", str(t_id))
+                    os.makedirs(t_dir, exist_ok=True)
+                    t_stats = {"pages": 0, "size": 0}
+                    t_root_files, t_tree = self._scan_dir(t_dir, t_stats, is_root=True)
+                    team_trees.append({
+                        "team_id": t_id,
+                        "team_name": t["name"],
+                        "root_files": t_root_files,
+                        "tree": t_tree,
+                        "stats": t_stats
+                    })
+        except Exception as exc:
+            logger.warning(f"[KnowledgeService] Failed to load team knowledge trees: {exc}")
+
+        # Fallback legacy tree scan
+        legacy_stats = {"pages": 0, "size": 0}
+        l_root_files, l_tree = self._scan_dir(self.knowledge_dir, legacy_stats, is_root=True)
+
+        return {
+            "root_files": l_root_files,
+            "tree": l_tree,
+            "stats": legacy_stats,
+            "personal_tree": {
+                "root_files": p_root_files,
+                "tree": p_tree,
+                "stats": p_stats
+            },
+            "team_trees": team_trees,
+            "enabled": conf().get("knowledge", True)
+        }
+
     def _scan_dir(self, dir_path: str, stats: dict, is_root: bool = False) -> tuple:
         """
         Recursively scan a directory.

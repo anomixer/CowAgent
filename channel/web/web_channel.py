@@ -1484,6 +1484,8 @@ class WebChannel(ChatChannel):
             '/api/teams/(.*)/members/leave', 'TeamMemberLeaveHandler',
             '/api/teams/(.*)/members/(.*)', 'TeamMemberDetailHandler',
             '/api/teams/(.*)/members', 'TeamMembersHandler',
+            '/api/teams/(.*)/threads', 'TeamThreadsHandler',
+            '/api/teams/(.*)/bulletin', 'TeamBulletinHandler',
             '/api/teams/(.*)', 'TeamDetailHandler',
             '/api/teams', 'TeamsHandler',
             '/message', 'MessageHandler',
@@ -2146,6 +2148,76 @@ class TeamDetailHandler:
         db.delete_team(tid)
         logger.info(f"[WebChannel] Admin '{admin['username']}' deleted team id={tid} ('{team['name']}')")
         return json.dumps({"status": "success"})
+
+
+class TeamThreadsHandler:
+    """GET -> list team sub-threads; POST -> create a new sub-thread."""
+
+    def GET(self, team_id_str: str):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            team_id = int(team_id_str)
+            db = get_multiuser_db()
+            user = get_current_user() or {"id": 0, "role": "admin"}
+            if user.get("role") != "admin" and not db.is_team_member(team_id, user["id"]):
+                return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
+
+            threads = db.get_team_threads(team_id)
+            return json.dumps({"status": "success", "threads": threads}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] TeamThreads GET error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def POST(self, team_id_str: str):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            team_id = int(team_id_str)
+            db = get_multiuser_db()
+            user = get_current_user() or {"id": 0, "role": "admin"}
+            if user.get("role") != "admin" and not db.is_team_member(team_id, user["id"]):
+                return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
+
+            body = json.loads(web.data() or b"{}")
+            title = body.get("title", "").strip()
+            thread = db.create_team_thread(team_id, user["id"], title)
+            return json.dumps({"status": "success", "thread": thread}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] TeamThreads POST error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class TeamBulletinHandler:
+    """PUT -> update team description, prompt, and announcement."""
+
+    def PUT(self, team_id_str: str):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            team_id = int(team_id_str)
+            db = get_multiuser_db()
+            user = get_current_user() or {"id": 0, "role": "admin"}
+            if user.get("role") != "admin" and not db.is_team_admin(team_id, user["id"]):
+                return json.dumps({"status": "error", "message": "Only Team Admin or Manager can edit bulletin"}, ensure_ascii=False)
+
+            body = json.loads(web.data() or b"{}")
+            announcement = body.get("announcement")
+            prompt = body.get("prompt")
+            description = body.get("description")
+            name = body.get("name")
+
+            success = db.update_team(team_id, name=name, description=description, prompt=prompt, announcement=announcement)
+            if success:
+                team = db.get_team(team_id)
+                if prompt is not None:
+                    from bridge.bridge import Bridge
+                    Bridge().get_agent_bridge().clear_agent_cache()
+                return json.dumps({"status": "success", "team": team}, ensure_ascii=False)
+            return json.dumps({"status": "error", "message": "Failed to update team bulletin"})
+        except Exception as e:
+            logger.error(f"[WebChannel] TeamBulletin PUT error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
 
 
 class TeamMembersHandler:
@@ -5326,11 +5398,16 @@ class MemoryHandler:
             params = web.input(page='1', page_size='20', category='memory')
             workspace_root = _get_workspace_root()
             service = MemoryService(workspace_root)
+            user = get_current_user()
+            user_id = user["id"] if user else 0
+            user_role = user["role"] if user else "admin"
+
             result = service.list_files(
                 page=int(params.page), page_size=int(params.page_size),
                 category=params.category,
             )
-            return json.dumps({"status": "success", **result}, ensure_ascii=False)
+            scoped = service.list_scoped_memories(user_id=user_id, role=user_role)
+            return json.dumps({"status": "success", **result, **scoped}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Memory API error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
@@ -5878,8 +5955,11 @@ class KnowledgeListHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.knowledge.service import KnowledgeService
+            user = get_current_user()
+            user_id = user["id"] if user else 0
+            user_role = user["role"] if user else "admin"
             svc = KnowledgeService(_get_workspace_root())
-            result = svc.list_tree()
+            result = svc.list_scoped_tree(user_id=user_id, role=user_role)
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Knowledge list error: {e}")

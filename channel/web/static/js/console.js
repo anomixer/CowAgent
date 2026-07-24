@@ -1372,19 +1372,20 @@ function toggleTheme() {
 // Sidebar & Navigation
 // =====================================================================
 const VIEW_META = {
-    chat:        { group: 'nav_chat',    page: 'menu_personal_chat' },
-    'team-chat': { group: 'nav_chat',    page: 'menu_team_chat' },
-    config:      { group: 'nav_manage',  page: 'menu_config' },
-    models:      { group: 'nav_manage',  page: 'menu_models' },
-    skills:      { group: 'nav_manage',  page: 'menu_skills' },
-    memory:      { group: 'nav_manage',  page: 'menu_memory' },
-    knowledge:   { group: 'nav_manage',  page: 'menu_knowledge' },
-    channels:    { group: 'nav_manage',  page: 'menu_channels' },
-    tasks:       { group: 'nav_manage',  page: 'menu_tasks' },
-    users:       { group: 'nav_manage',  page: 'menu_users' },
-    teams:       { group: 'nav_manage',  page: 'menu_teams' },
-    profile:     { group: 'nav_manage',  page: 'menu_profile' },
-    logs:        { group: 'nav_monitor', page: 'menu_logs' },
+    chat:             { group: 'nav_chat',    page: 'menu_personal_chat' },
+    'team-chat':      { group: 'nav_chat',    page: 'menu_team_chat' },
+    'team-workspace': { group: 'nav_chat',    page: 'menu_team_chat' },
+    config:           { group: 'nav_manage',  page: 'menu_config' },
+    models:           { group: 'nav_manage',  page: 'menu_models' },
+    skills:           { group: 'nav_manage',  page: 'menu_skills' },
+    memory:           { group: 'nav_manage',  page: 'menu_memory' },
+    knowledge:        { group: 'nav_manage',  page: 'menu_knowledge' },
+    channels:         { group: 'nav_manage',  page: 'menu_channels' },
+    tasks:            { group: 'nav_manage',  page: 'menu_tasks' },
+    users:            { group: 'nav_manage',  page: 'menu_users' },
+    teams:            { group: 'nav_manage',  page: 'menu_teams' },
+    profile:          { group: 'nav_manage',  page: 'menu_profile' },
+    logs:             { group: 'nav_monitor', page: 'menu_logs' },
 };
 
 // Global auth state
@@ -1396,7 +1397,10 @@ let currentView = 'chat';
 
 function navigateTo(viewId) {
     if (!VIEW_META[viewId]) return;
-    const actualView = viewId === 'team-chat' ? 'chat' : viewId;
+    let actualView = viewId;
+    if (viewId === 'team-chat') actualView = 'chat';
+    else if (viewId === 'team-workspace') actualView = 'team-workspace';
+
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     const target = document.getElementById('view-' + actualView);
     if (target) target.classList.add('active');
@@ -6009,6 +6013,51 @@ function loadMemoryView(page) {
             tbody.appendChild(tr);
         });
 
+        // Render Team Memories Section if present
+        let teamSection = document.getElementById('team-memory-section');
+        if (!teamSection) {
+            teamSection = document.createElement('div');
+            teamSection.id = 'team-memory-section';
+            teamSection.className = 'mt-8 pt-6 border-t border-slate-200 dark:border-white/10';
+            listEl.appendChild(teamSection);
+        }
+
+        const teamMems = data.team_memories || [];
+        if (teamMems.length > 0) {
+            teamSection.innerHTML = `
+                <div class="flex items-center gap-2 mb-4">
+                    <i class="fas fa-users text-primary-500"></i>
+                    <h3 class="font-bold text-slate-800 dark:text-slate-100 text-base">團隊記憶 (Team Memories)</h3>
+                </div>
+                <div class="space-y-4">
+                    ${teamMems.map(tm => `
+                        <div class="bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-4">
+                            <div class="flex items-center gap-2 mb-3">
+                                <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800/50">
+                                    <i class="fas fa-people-group mr-1"></i>${escapeHtml(tm.team_name)}
+                                </span>
+                                <span class="text-xs text-slate-400">(${tm.files ? tm.files.length : 0} 檔案)</span>
+                            </div>
+                            ${tm.files && tm.files.length ? `
+                                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                    ${tm.files.map(f => `
+                                        <div onclick="openMemoryFile('${escapeHtml(f.filename)}', 'memory')"
+                                             class="p-2.5 rounded-lg border border-slate-100 dark:border-white/5 bg-slate-50 dark:bg-white/5 hover:border-primary-400 cursor-pointer transition-colors flex items-center justify-between">
+                                            <span class="text-xs font-mono text-slate-700 dark:text-slate-200 truncate">${escapeHtml(f.filename)}</span>
+                                            <span class="text-[10px] text-slate-400 ml-2">${escapeHtml(f.updated_at || '')}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : '<p class="text-xs text-slate-400 py-2">(無團隊每日記憶檔案)</p>'}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            teamSection.classList.remove('hidden');
+        } else {
+            teamSection.classList.add('hidden');
+        }
+
         // Pagination
         const totalPages = Math.ceil(total / memoryPageSize);
         const pagEl = document.getElementById('memory-pagination');
@@ -9010,6 +9059,8 @@ navigateTo = function(viewId) {
 // =====================================================================
 let _knowledgeTreeData = [];
 let _knowledgeRootFiles = [];
+let _personalKnowledgeTree = null;
+let _teamKnowledgeTrees = [];
 let _knowledgeCurrentFile = null;
 let _knowledgeGraphLoaded = false;
 const KNOWLEDGE_IMPORT_MAX_FILES = 100;
@@ -9034,13 +9085,15 @@ function loadKnowledgeView(targetPath) {
         const rootFiles = data.root_files || [];
         _knowledgeTreeData = tree;
         _knowledgeRootFiles = rootFiles;
+        _personalKnowledgeTree = data.personal_tree || null;
+        _teamKnowledgeTrees = data.team_trees || [];
         const stats = data.stats || {};
         const totalPages = stats.pages || 0;
         const sizeStr = stats.size < 1024 ? stats.size + ' B' : (stats.size / 1024).toFixed(1) + ' KB';
 
         statsEl.textContent = totalPages + ' pages · ' + sizeStr;
 
-        if (totalPages === 0 && tree.length === 0 && rootFiles.length === 0) {
+        if (totalPages === 0 && tree.length === 0 && rootFiles.length === 0 && !_personalKnowledgeTree && (!_teamKnowledgeTrees || !_teamKnowledgeTrees.length)) {
             emptyEl.querySelector('p').textContent = t('knowledge_empty_hint');
             const guideEl = document.getElementById('knowledge-empty-guide');
             if (guideEl) guideEl.classList.remove('hidden');
@@ -9053,8 +9106,7 @@ function loadKnowledgeView(targetPath) {
 
         renderKnowledgeTree(tree, rootFiles);
 
-        // Prefer opening the just created/imported file; ensure its group is
-        // expanded so the active item is visible in the tree.
+        // Prefer opening the just created/imported file
         const targetTitle = targetPath ? _findKnowledgeFileTitle(targetPath) : null;
         if (targetTitle !== null) {
             _expandKnowledgeGroupFor(targetPath);
@@ -9120,6 +9172,85 @@ function renderKnowledgeTree(tree, rootFilesOrFilter, filter) {
         rootFiles = rootFilesOrFilter || _knowledgeRootFiles;
         lowerFilter = (filter || '').toLowerCase();
     }
+
+    // If scoped trees exist (Personal vs Team)
+    if (_personalKnowledgeTree || (_teamKnowledgeTrees && _teamKnowledgeTrees.length > 0)) {
+        // 1. Personal Knowledge Tree Group
+        if (_personalKnowledgeTree) {
+            const pdiv = document.createElement('div');
+            pdiv.className = 'knowledge-tree-group open mb-3';
+            const pbtn = document.createElement('button');
+            pbtn.className = 'knowledge-tree-group-btn font-bold text-slate-800 dark:text-slate-100';
+            pbtn.style.paddingLeft = '8px';
+            pbtn.innerHTML = `<i class="fas fa-chevron-right chevron"></i><i class="fas fa-user-gear text-primary-500 text-[12px]"></i><span>👤 個人知識庫</span>`;
+            pbtn.onclick = () => pdiv.classList.toggle('open');
+            pdiv.appendChild(pbtn);
+
+            const pitems = document.createElement('div');
+            pitems.className = 'knowledge-tree-group-items';
+            (_personalKnowledgeTree.root_files || []).forEach(f => {
+                if (lowerFilter && !f.title.toLowerCase().includes(lowerFilter) && !f.name.toLowerCase().includes(lowerFilter)) return;
+                const fbtn = document.createElement('button');
+                fbtn.className = 'knowledge-tree-file' + (_knowledgeCurrentFile === f.name ? ' active' : '');
+                fbtn.dataset.path = f.name;
+                fbtn.style.paddingLeft = '20px';
+                fbtn.innerHTML = `<i class="fas fa-file-lines text-[10px] text-slate-400"></i><span class="truncate">${escapeHtml(f.title)}</span>${_knowledgeFileActions(f.name)}`;
+                fbtn.onclick = () => openKnowledgeFile(f.name, f.title);
+                pitems.appendChild(fbtn);
+            });
+            _renderKnowledgeGroups(pitems, _personalKnowledgeTree.tree || [], '', lowerFilter, 1);
+            pdiv.appendChild(pitems);
+            container.appendChild(pdiv);
+        }
+
+        // 2. Team Knowledge Trees Group
+        if (_teamKnowledgeTrees && _teamKnowledgeTrees.length > 0) {
+            const tdiv = document.createElement('div');
+            tdiv.className = 'knowledge-tree-group open mb-3';
+            const tbtn = document.createElement('button');
+            tbtn.className = 'knowledge-tree-group-btn font-bold text-slate-800 dark:text-slate-100';
+            tbtn.style.paddingLeft = '8px';
+            tbtn.innerHTML = `<i class="fas fa-chevron-right chevron"></i><i class="fas fa-users-gear text-amber-500 text-[12px]"></i><span>👥 團隊知識庫</span>`;
+            tbtn.onclick = () => tdiv.classList.toggle('open');
+            tdiv.appendChild(tbtn);
+
+            const titems = document.createElement('div');
+            titems.className = 'knowledge-tree-group-items';
+
+            _teamKnowledgeTrees.forEach(tm => {
+                const subdiv = document.createElement('div');
+                subdiv.className = 'knowledge-tree-group open';
+                const subbtn = document.createElement('button');
+                subbtn.className = 'knowledge-tree-group-btn font-semibold text-slate-700 dark:text-slate-200';
+                subbtn.style.paddingLeft = '20px';
+                subbtn.innerHTML = `<i class="fas fa-chevron-right chevron"></i><i class="fas fa-folder-closed text-amber-400 text-[11px]"></i><span>${escapeHtml(tm.team_name)}</span>`;
+                subbtn.onclick = () => subdiv.classList.toggle('open');
+                subdiv.appendChild(subbtn);
+
+                const subitems = document.createElement('div');
+                subitems.className = 'knowledge-tree-group-items';
+                (tm.root_files || []).forEach(f => {
+                    const fpath = `teams/${tm.team_id}/${f.name}`;
+                    if (lowerFilter && !f.title.toLowerCase().includes(lowerFilter) && !f.name.toLowerCase().includes(lowerFilter)) return;
+                    const fbtn = document.createElement('button');
+                    fbtn.className = 'knowledge-tree-file' + (_knowledgeCurrentFile === fpath ? ' active' : '');
+                    fbtn.dataset.path = fpath;
+                    fbtn.style.paddingLeft = '32px';
+                    fbtn.innerHTML = `<i class="fas fa-file-lines text-[10px] text-slate-400"></i><span class="truncate">${escapeHtml(f.title)}</span>${_knowledgeFileActions(fpath)}`;
+                    fbtn.onclick = () => openKnowledgeFile(fpath, f.title);
+                    subitems.appendChild(fbtn);
+                });
+                _renderKnowledgeGroups(subitems, tm.tree || [], `teams/${tm.team_id}`, lowerFilter, 2);
+                subdiv.appendChild(subitems);
+                titems.appendChild(subdiv);
+            });
+            tdiv.appendChild(titems);
+            container.appendChild(tdiv);
+        }
+        return;
+    }
+
+    // Default legacy tree rendering fallback
     (rootFiles || []).forEach(f => {
         if (lowerFilter && !f.title.toLowerCase().includes(lowerFilter) && !f.name.toLowerCase().includes(lowerFilter)) return;
         const fbtn = document.createElement('button');
@@ -10320,10 +10451,35 @@ function updateBranding() {
     }
 }
 
+function loadSidebarTeams() {
+    const container = document.getElementById('sidebar-teams-container');
+    if (!container) return;
+    fetch('/api/teams')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success' && data.teams) {
+                if (data.teams.length === 0) {
+                    container.innerHTML = '';
+                    return;
+                }
+                container.innerHTML = data.teams.map(tm => `
+                    <a onclick="openTeamWorkspace(${tm.id})"
+                       class="sidebar-item flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-all duration-150 hover:bg-white/5 hover:text-neutral-200 text-xs text-slate-300">
+                        <i class="fas fa-users-gear text-[10px] text-amber-400"></i>
+                        <span class="truncate">${escapeHtml(tm.name)}</span>
+                    </a>
+                `).join('');
+            }
+        })
+        .catch(() => {});
+}
+window.loadSidebarTeams = loadSidebarTeams;
+
 // --- initApp (extended for multiuser) ---
 function initApp() {
     sessionId = loadOrCreateSessionId();
     updateBranding();
+    loadSidebarTeams();
     applyI18n();
     _applyInputTooltips();
     _restoreSessionPanel();
@@ -10814,6 +10970,176 @@ function fetchTeams() {
             listEl.innerHTML = '<div class="flex items-center justify-center py-20 text-slate-400">' + t('error_send') + '</div>';
         });
 }
+
+let currentTeamWorkspaceId = null;
+let currentTeamData = null;
+
+function openTeamWorkspace(teamId) {
+    currentTeamWorkspaceId = teamId;
+    navigateTo('team-workspace');
+    renderTeamWorkspace(teamId);
+}
+
+function renderTeamWorkspace(teamId) {
+    if (!teamId) return;
+    currentTeamWorkspaceId = teamId;
+    const nameEl = document.getElementById('tw-team-name');
+    const descEl = document.getElementById('tw-team-desc');
+    const badgeEl = document.getElementById('tw-member-badge');
+    const announceEl = document.getElementById('tw-announcement-content');
+    const promptEl = document.getElementById('tw-prompt-content');
+    const threadsListEl = document.getElementById('tw-threads-list');
+
+    if (nameEl) nameEl.textContent = '載入中...';
+    if (threadsListEl) threadsListEl.innerHTML = '<div class="col-span-2 text-center py-10 text-slate-400"><i class="fas fa-spinner fa-spin mr-2"></i>載入對話串中...</div>';
+
+    fetch(`/api/teams/${teamId}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success' && data.team) {
+                currentTeamData = data.team;
+                if (nameEl) nameEl.textContent = data.team.name;
+                if (descEl) descEl.textContent = data.team.description || '(暫無團隊描述)';
+                if (badgeEl) badgeEl.textContent = `成員 ${data.team.member_count || 1} 人`;
+                if (announceEl) announceEl.textContent = data.team.announcement || '(暫無團隊公告)';
+                if (promptEl) promptEl.textContent = data.team.prompt || '(預設無團隊 System Prompt)';
+            }
+        })
+        .catch(() => {});
+
+    fetch(`/api/teams/${teamId}/threads`)
+        .then(r => r.json())
+        .then(data => {
+            if (!threadsListEl) return;
+            if (data.status === 'success' && data.threads) {
+                renderTeamThreadsList(data.threads);
+            } else {
+                threadsListEl.innerHTML = '<div class="col-span-2 text-center py-8 text-slate-400">載入對話串失敗</div>';
+            }
+        })
+        .catch(() => {
+            if (threadsListEl) threadsListEl.innerHTML = '<div class="col-span-2 text-center py-8 text-slate-400">載入對話串失敗</div>';
+        });
+}
+
+function renderTeamThreadsList(threads) {
+    const el = document.getElementById('tw-threads-list');
+    if (!el) return;
+    if (!threads || !threads.length) {
+        el.innerHTML = `
+            <div class="col-span-2 flex flex-col items-center justify-center py-12 text-slate-400 bg-slate-50/50 dark:bg-white/5 rounded-xl border border-dashed border-slate-200 dark:border-white/10">
+                <i class="fas fa-comments text-2xl mb-2 opacity-50"></i>
+                <p class="text-sm font-medium">尚無團隊對話串</p>
+                <button onclick="createNewTeamThread()" class="mt-3 text-xs text-primary-500 hover:underline font-semibold">+ 點此開啟第一個對話串</button>
+            </div>
+        `;
+        return;
+    }
+
+    el.innerHTML = threads.map(t => {
+        const timeStr = t.last_active ? new Date(t.last_active * 1000).toLocaleString() : '';
+        const isCurrentSession = sessionId === t.session_id;
+        return `
+            <div class="flex flex-col justify-between p-4 rounded-xl border ${isCurrentSession ? 'border-primary-400 dark:border-primary-500 bg-primary-500/5' : 'border-slate-200 dark:border-white/10 bg-white dark:bg-[#1A1A1A]'} hover:shadow-md transition-all">
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300">
+                            <i class="fas fa-user text-[10px] mr-1"></i>${escapeHtml(t.username || 'System')}
+                        </span>
+                        <span class="text-[11px] text-slate-400 dark:text-slate-500">${timeStr}</span>
+                    </div>
+                    <h4 class="font-semibold text-slate-800 dark:text-slate-100 text-sm mb-1 truncate" title="${escapeHtml(t.title)}">${escapeHtml(t.title)}</h4>
+                    <p class="text-xs text-slate-400 dark:text-slate-500">${t.msg_count || 0} 條對話訊息</p>
+                </div>
+                <div class="mt-4 pt-3 border-t border-slate-100 dark:border-white/5 flex items-center justify-end">
+                    <button onclick="openTeamThreadSession('${t.session_id}')" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-xs font-medium cursor-pointer transition-colors">
+                        <span>進入對話</span>
+                        <i class="fas fa-arrow-right text-[10px]"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function openTeamThreadSession(targetSessionId) {
+    _saveSessionId(targetSessionId);
+    navigateTo('team-chat');
+    historyPage = 0;
+    historyHasMore = false;
+    historyLoading = false;
+    const ws = document.getElementById('welcome-screen');
+    if (ws) ws.remove();
+    messagesDiv.innerHTML = '';
+    loadHistory(1);
+}
+
+function createNewTeamThread() {
+    if (!currentTeamWorkspaceId) return;
+    const title = prompt('請輸入新對話串名稱 (例如: 專案開發討論):', '新團隊對話');
+    if (title === null) return;
+    fetch(`/api/teams/${currentTeamWorkspaceId}/threads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title.trim() || '新團隊對話' })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success' && data.thread) {
+            openTeamThreadSession(data.thread.session_id);
+        } else {
+            alert(data.message || '建立新對話串失敗');
+        }
+    })
+    .catch(() => {
+        alert('建立新對話串失敗');
+    });
+}
+
+function openTeamBulletinModal() {
+    if (!currentTeamData) return;
+    const modal = document.getElementById('team-bulletin-modal');
+    if (!modal) return;
+    document.getElementById('tbm-announcement').value = currentTeamData.announcement || '';
+    document.getElementById('tbm-prompt').value = currentTeamData.prompt || '';
+    document.getElementById('tbm-description').value = currentTeamData.description || '';
+    modal.classList.remove('hidden');
+}
+
+function closeTeamBulletinModal() {
+    const modal = document.getElementById('team-bulletin-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+function saveTeamBulletin() {
+    if (!currentTeamWorkspaceId) return;
+    const announcement = document.getElementById('tbm-announcement').value;
+    const promptVal = document.getElementById('tbm-prompt').value;
+    const description = document.getElementById('tbm-description').value;
+
+    fetch(`/api/teams/${currentTeamWorkspaceId}/bulletin`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ announcement, prompt: promptVal, description })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            closeTeamBulletinModal();
+            renderTeamWorkspace(currentTeamWorkspaceId);
+        } else {
+            alert(data.message || '儲存失敗');
+        }
+    })
+    .catch(() => alert('儲存失敗'));
+}
+
+window.openTeamWorkspace = openTeamWorkspace;
+window.openTeamThreadSession = openTeamThreadSession;
+window.createNewTeamThread = createNewTeamThread;
+window.openTeamBulletinModal = openTeamBulletinModal;
+window.closeTeamBulletinModal = closeTeamBulletinModal;
+window.saveTeamBulletin = saveTeamBulletin;
 
 function renderTeamList(teams) {
     const listEl = document.getElementById('teams-list');
