@@ -193,33 +193,30 @@ def _group_into_display_turns(
     include_thinking: bool = True,
 ) -> List[Dict[str, Any]]:
     """
-    Convert raw (role, content_json, created_at) DB rows into display turns.
+    Convert raw (role, content_json, created_at) or (seq, role, content_json, created_at, extras)
+    DB rows into display turns.
 
     One display turn = one visible user message  +  one merged assistant reply.
     All intermediate assistant messages (those carrying tool_use) and the final
     assistant text reply produced for the same user query are collapsed into a
     single assistant turn, exactly matching the live SSE rendering where tools
     and the final answer appear inside the same bubble.
-
-    Grouping rules:
-    - A visible user message starts a new group.
-    - tool_result user messages are internal; their content is attached to the
-      matching tool_use entry via tool_use_id and they never become own turns.
-    - All assistant messages within a group are merged:
-        * tool_use blocks → tool_calls list (result filled from tool_results)
-        * text blocks → last non-empty text becomes the display content
     """
     # ------------------------------------------------------------------ #
     # Pass 1: split rows into groups, each starting with a visible user msg
     # ------------------------------------------------------------------ #
-    # group = (user_row | None, [subsequent_rows])
-    # user_row: (content, created_at)
     groups: List[tuple] = []
     cur_user: Optional[tuple] = None
     cur_rest: List[tuple] = []
     started = False
 
-    for role, raw_content, created_at, raw_extras in rows:
+    for item in rows:
+        if len(item) == 5:
+            seq, role, raw_content, created_at, raw_extras = item
+        else:
+            role, raw_content, created_at, raw_extras = item
+            seq = None
+
         try:
             content = json.loads(raw_content)
         except Exception:
@@ -234,11 +231,11 @@ def _group_into_display_turns(
         if role == "user" and _is_visible_user_message(content):
             if started:
                 groups.append((cur_user, cur_rest))
-            cur_user = (content, created_at, extras)
+            cur_user = (content, created_at, extras, seq)
             cur_rest = []
             started = True
         else:
-            cur_rest.append((role, content, created_at, extras))
+            cur_rest.append((role, content, created_at, extras, seq))
 
     if started:
         groups.append((cur_user, cur_rest))
@@ -251,13 +248,13 @@ def _group_into_display_turns(
     for user_row, rest in groups:
         # User turn
         if user_row:
-            content, created_at, _u_extras = user_row
+            content, created_at, _u_extras, user_seq = user_row
             text = _extract_display_text(content)
-            # Hide internal injection markers (scheduler / self-evolution) so the
-            # user never sees a synthetic "[SCHEDULED] self-evolution" bubble;
-            # the assistant reply that follows is still rendered.
             if text and not _is_internal_user_marker(text):
-                turns.append({"role": "user", "content": text, "created_at": created_at})
+                user_turn: Dict[str, Any] = {"role": "user", "content": text, "created_at": created_at}
+                if user_seq is not None:
+                    user_turn["_seq"] = user_seq
+                turns.append(user_turn)
 
         # Build an ordered list of steps preserving the original sequence:
         #   thinking → content → tool_call → content → ...
@@ -266,8 +263,11 @@ def _group_into_display_turns(
         final_text = ""
         final_ts: Optional[int] = None
         merged_extras: Dict[str, Any] = {}
+        bot_seq: Optional[int] = None
 
-        for role, content, created_at, extras in rest:
+        for role, content, created_at, extras, seq in rest:
+            if role == "assistant" and seq is not None:
+                bot_seq = seq
             if role == "assistant" and isinstance(extras, dict):
                 merged_extras.update(extras)
             if role == "user":
@@ -311,25 +311,24 @@ def _group_into_display_turns(
                 step["result"] = tr.get("result", "")
                 step["is_error"] = tr.get("is_error", False)
 
-        # Detect a self-evolution bubble BEFORE cleaning the marker away, so the
-        # UI can flag it even though the visible text stays clean.
+        # Detect a self-evolution bubble BEFORE cleaning the marker away
         is_evolution = _is_evolution_text(final_text)
 
-        # Clean internal markers from the user-facing assistant text. Applies to
-        # both the final content and the mirrored content step so the rendered
-        # bubble shows clean text while the stored message keeps the markers.
+        # Clean internal markers from the user-facing assistant text
         final_text = _clean_display_text(final_text)
         for step in steps:
             if step.get("type") == "content":
                 step["content"] = _clean_display_text(step.get("content", ""))
 
         if steps or final_text:
-            turn = {
+            turn: Dict[str, Any] = {
                 "role": "assistant",
                 "content": final_text,
                 "steps": steps,
                 "created_at": final_ts or (user_row[1] if user_row else 0),
             }
+            if bot_seq is not None:
+                turn["_seq"] = bot_seq
             if is_evolution:
                 turn["kind"] = "evolution"
             if merged_extras:
@@ -1034,12 +1033,7 @@ class ConversationStore:
         except Exception:
             include_thinking = False
 
-        # Strip seq for display grouping, but record max seq per visible user group
-        plain_rows = [
-            (role, content, created_at, extras_raw)
-            for _seq, role, content, created_at, extras_raw in rows
-        ]
-        visible = _group_into_display_turns(plain_rows, include_thinking=include_thinking)
+        visible = _group_into_display_turns(rows, include_thinking=include_thinking)
 
         # Build a mapping: find the seq of each visible user message to annotate context boundary.
         # Walk through rows to find visible user message seqs in order.
@@ -1058,7 +1052,7 @@ class ConversationStore:
         # Mark which turns are before the context boundary.
         user_turn_idx = 0
         for turn in visible:
-            if turn["role"] == "user" and user_turn_idx < len(visible_user_seqs):
+            if turn["role"] == "user" and "_seq" not in turn and user_turn_idx < len(visible_user_seqs):
                 turn["_seq"] = visible_user_seqs[user_turn_idx]
                 user_turn_idx += 1
 
