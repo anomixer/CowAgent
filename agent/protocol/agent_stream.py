@@ -4,12 +4,19 @@ Agent Stream Execution Module - Multi-turn reasoning based on tool-call
 Provides streaming output, event system, and complete tool-call loop
 """
 import json
+import re
 import time
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
 from agent.protocol.cancel import AgentCancelledError
 from agent.protocol.models import LLMRequest, LLMModel
-from agent.protocol.message_utils import sanitize_claude_messages, compress_turn_to_text_only
+from agent.protocol.message_utils import (
+    sanitize_claude_messages,
+    compress_turn_to_text_only,
+    identify_complete_turns,
+    build_compaction_summary_text,
+    find_first_user_text_block,
+)
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
 from common.i18n import t as _t
@@ -34,6 +41,54 @@ MAX_STORED_REASONING_CHARS = 4 * 1024  # 4 KB
 # Marker inserted between head and tail when reasoning is truncated.
 _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omitted] ...\n\n"
 
+# --------------------------------------------------------------------------
+# Fatal-error classification.
+#
+# Both branches below drop the whole in-memory context, so a false positive
+# costs the user their working conversation. Every marker must therefore be
+# specific enough that it cannot appear in an unrelated failure: generic words
+# ("without", "each", "must have", "not found") matched far too much, and a
+# bare "400" substring also matched token counts such as 4000.
+# --------------------------------------------------------------------------
+
+# Word-bounded so "4000" / "40096" are not read as HTTP 400.
+_RE_HTTP_400 = re.compile(r"\b400\b")
+
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context length exceeded", "maximum context length", "prompt is too long",
+    "context overflow", "context window", "exceeds model context",
+    "request_too_large", "request exceeds the maximum size",
+    "too many tokens", "input is too long",
+)
+
+# Structural tool_use/tool_result pairing complaints only.
+_MESSAGE_FORMAT_MARKERS = (
+    "tool_use", "tool_result", "tool_call_id", "tool_calls",
+    "tool result", "tool id",
+    "must be a response to a preceeding message",
+)
+
+
+def _is_context_overflow(error_str_lower: str) -> bool:
+    if "[context_overflow]" in error_str_lower:
+        return True
+    return any(m in error_str_lower for m in _CONTEXT_OVERFLOW_MARKERS)
+
+
+def _is_message_format_error(error_str_lower: str) -> bool:
+    """Detect broken tool_use/tool_result pairing rejected by the provider.
+
+    Requires both a structural marker and a 400-class signal, so an unrelated
+    400 (bad model name, missing parameter, oversized upload) never qualifies.
+    """
+    if not any(m in error_str_lower for m in _MESSAGE_FORMAT_MARKERS):
+        return False
+    return bool(
+        _RE_HTTP_400.search(error_str_lower)
+        or "invalid_request" in error_str_lower
+        or "invalidparameter" in error_str_lower
+    )
+
 
 def _truncate_reasoning_for_storage(text: str) -> str:
     """Trim long reasoning to head + tail with an omission marker.
@@ -53,19 +108,46 @@ def _truncate_reasoning_for_storage(text: str) -> str:
     return head + _REASONING_TRUNCATE_MARKER.format(omitted=omitted) + tail
 
 
-def _parse_tool_args(args_str: str, finish_reason: Optional[str]) -> Tuple[dict, Optional[str]]:
+# Appended only for the file-writing tools, where "send less" needs to say how.
+_SPLIT_WRITE_ADVICE = (
+    "To change an existing file, use edit rather than rewriting the whole file. "
+    "To create a large file, write the first part, then append each remaining part "
+    "with edit using an empty oldText (calling write again would overwrite what you "
+    "just wrote)."
+)
+
+
+def _cut_off_message(cause: str, tool_name: Optional[str]) -> str:
+    message = (
+        f"Your tool call was cut off by {cause}, so it did not run and nothing was written. "
+        "Repeating the same call will be cut off again - send less in one call instead."
+    )
+    if tool_name in ("write", "edit"):
+        message += " " + _SPLIT_WRITE_ADVICE
+    return message
+
+
+def _parse_tool_args(args_str: str, finish_reason: Optional[str],
+                     tool_name: Optional[str] = None) -> Tuple[dict, Optional[str]]:
     """Parse tool args JSON. Returns (args, error_msg); error_msg is None on success.
 
     On JSONDecodeError: detect truncation first (skip repair, surface max_tokens hint);
     otherwise try json-repair for escape issues; finally fall back to the raw decoder error.
     """
+    truncated_by_limit = finish_reason in ("length", "max_tokens")
     if not args_str:
+        # No arguments at all is valid for tools that take none, so only the
+        # finish reason can convict here. _execute_tool catches the rest by
+        # checking the call against the tool's required parameters.
+        if truncated_by_limit:
+            return {}, _cut_off_message("the output token limit", tool_name)
         return {}, None
     try:
         return json.loads(args_str), None
     except json.JSONDecodeError as e:
-        if finish_reason in ("length", "max_tokens") or not args_str.rstrip().endswith("}"):
-            return {}, "Output truncated (max_tokens reached). Split content into smaller chunks across multiple tool calls."
+        if truncated_by_limit or not args_str.rstrip().endswith("}"):
+            cause = "the output token limit" if truncated_by_limit else "arguments ending mid-JSON"
+            return {}, _cut_off_message(cause, tool_name)
         if _HAS_JSON_REPAIR:
             try:
                 repaired = _repair_json(args_str, return_objects=True)
@@ -139,6 +221,10 @@ class AgentStreamExecutor:
         
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
+
+        # Absolute paths already reported as artifacts, so a write-then-edit
+        # sequence on the same file only surfaces one card in the UI.
+        self._emitted_artifacts = set()
 
     def _check_cancelled(self) -> None:
         """Raise AgentCancelledError if the user requested cancellation.
@@ -268,10 +354,30 @@ class AgentStreamExecutor:
             # clear stop boundary on the next turn.
             self.messages.append({
                 "role": "assistant",
-                "content": [{"type": "text", "text": "_(Cancelled by user)_"}],
+                "content": [{"type": "text", "text": self._cancellation_marker()}],
             })
         except Exception as e:
             logger.warning(f"[Agent] _handle_cancelled cleanup failed: {e}")
+
+    @staticmethod
+    def _cancellation_marker() -> str:
+        """Stop-boundary note, listing background jobs a cancel does not kill."""
+        marker = "_(Cancelled by user)_"
+        try:
+            from agent.tools.bash import background
+            running = [job for job in background.list_jobs() if job["running"]]
+        except Exception:
+            return marker
+        if not running:
+            return marker
+        lines = "\n".join(
+            f"- {job['id']}: {job['command']} ({job['elapsed']}s elapsed)"
+            for job in running
+        )
+        return (
+            f"{marker}\nBackground commands are still running - cancelling does not "
+            f"stop them. Use bash(bash_id=..., kill=true) to stop one.\n{lines}"
+        )
 
     def _emit_event(self, event_type: str, data: dict = None):
         """Emit event"""
@@ -284,7 +390,37 @@ class AgentStreamExecutor:
                 })
             except Exception as e:
                 logger.error(f"Event callback error: {e}")
-    
+
+    # Tools whose successful execution may have produced a user-facing file.
+    _ARTIFACT_TOOLS = ("write", "edit")
+
+    def _maybe_emit_artifact(self, tool_call: dict, result: dict) -> None:
+        """Report a file written by `write`/`edit` so clients can preview it."""
+        if not self.on_event:
+            return
+        if tool_call.get("name") not in self._ARTIFACT_TOOLS:
+            return
+        if result.get("status") != "success":
+            return
+
+        data = result.get("result")
+        path = data.get("path") if isinstance(data, dict) else None
+        if not path:
+            path = (tool_call.get("arguments") or {}).get("path")
+        if not path:
+            return
+
+        from agent.protocol.artifact import safe_build_artifact
+
+        artifact = safe_build_artifact(path)
+        if not artifact:
+            return
+        if artifact["path"] in self._emitted_artifacts:
+            return
+        self._emitted_artifacts.add(artifact["path"])
+        logger.info(f"🗂  Artifact: {artifact['rel_path']} ({artifact['kind']})")
+        self._emit_event("artifact", artifact)
+
     def _is_thinking_enabled(self) -> bool:
         """Whether deep-thinking mode is on at the model layer.
 
@@ -641,6 +777,9 @@ class AgentStreamExecutor:
                                 self.files_to_send.append(result_data)
                                 logger.info(f"📎 File queued for sending: {result_data.get('file_name', result_data.get('path'))}")
                                 self._emit_event("file_to_send", result_data)
+
+                        # Surface user-facing files written by the agent
+                        self._maybe_emit_artifact(tool_call, result)
                         
                         # Check for critical error - abort entire conversation
                         if result.get("status") == "critical_error":
@@ -1149,33 +1288,13 @@ class AgentStreamExecutor:
             error_str = str(e)
             error_str_lower = error_str.lower()
             
-            # Check if error is context overflow (non-retryable, needs session reset)
-            # Method 1: Check for special marker (set in stream error handling above)
-            is_context_overflow = '[context_overflow]' in error_str_lower
-            
-            # Method 2: Fallback to keyword matching for non-stream errors
-            if not is_context_overflow:
-                is_context_overflow = any(keyword in error_str_lower for keyword in [
-                    'context length exceeded', 'maximum context length', 'prompt is too long',
-                    'context overflow', 'context window', 'too large', 'exceeds model context',
-                    'request_too_large', 'request exceeds the maximum size'
-                ])
-            
-            # Check if error is message format error (incomplete tool_use/tool_result pairs)
-            # This happens when previous conversation had tool failures or context trimming
-            # broke tool_use/tool_result pairs.
-            # Note: MiniMax returns error 2013 "tool result's tool id(...) not found" for
-            # tool_call_id mismatches — the keywords below are intentionally broad to catch
-            # both standard (Claude/OpenAI) and provider-specific (MiniMax) variants.
-            is_message_format_error = any(keyword in error_str_lower for keyword in [
-                'tool_use', 'tool_result', 'tool result', 'without', 'immediately after',
-                'corresponding', 'must have', 'each',
-                'tool_call_id', 'tool id', 'is not found', 'not found', 'tool_calls',
-                'must be a response to a preceeding message',
-                '2013',  # MiniMax error code for tool_call_id mismatch
-            ]) and ('400' in error_str_lower or 'status: 400' in error_str_lower
-                     or 'invalid_request' in error_str_lower
-                     or 'invalidparameter' in error_str_lower)
+            # Context overflow is non-retryable and needs the working context reset.
+            is_context_overflow = _is_context_overflow(error_str_lower)
+
+            # Incomplete tool_use/tool_result pairs rejected by the provider.
+            # MiniMax's "tool result's tool id(...) not found" (code 2013) is
+            # covered by the "tool result" / "tool id" markers.
+            is_message_format_error = _is_message_format_error(error_str_lower)
             
             if is_context_overflow or is_message_format_error:
                 error_type = "context overflow" if is_context_overflow else "message format error"
@@ -1201,19 +1320,21 @@ class AgentStreamExecutor:
                             _overflow_retry=True
                         )
 
-                # Aggressive trim didn't help or this is a message format error
-                # -> clear in-memory history to recover without purging persisted DB
-                logger.warning("🔄 Clearing conversation history in memory to recover")
+                # Aggressive trim didn't help, or this is a message format error.
+                # Reset the working context only: the persisted history is
+                # irreplaceable, and it can never reintroduce broken tool pairs
+                # because every load path strips tool_use/tool_result blocks.
+                logger.warning("🔄 Resetting in-memory context to recover (stored history kept)")
                 self.messages.clear()
                 if is_context_overflow:
                     raise Exception(_t(
-                        "抱歉，对话历史过长导致上下文溢出。我已清空历史记录，请重新描述你的需求。",
-                        "Sorry, the conversation history got too long and overflowed the context. I've cleared the history — please describe your request again.",
+                        "抱歉，对话历史过长导致上下文溢出。我已重置当前上下文（历史记录仍然保留），请重新描述你的需求。",
+                        "Sorry, the conversation history got too long and overflowed the context. I've reset the current context (your history is kept) — please describe your request again.",
                     ))
                 else:
                     raise Exception(_t(
-                        "抱歉，之前的对话出现了问题。我已清空历史记录，请重新发送你的消息。",
-                        "Sorry, something went wrong with the earlier conversation. I've cleared the history — please send your message again.",
+                        "抱歉，之前的对话出现了问题。我已重置当前上下文（历史记录仍然保留），请重新发送你的消息。",
+                        "Sorry, something went wrong with the earlier conversation. I've reset the current context (your history is kept) — please send your message again.",
                     ))
             
             # Check if error is rate limit (429)
@@ -1260,7 +1381,7 @@ class AgentStreamExecutor:
                 tool_id = f"call_{uuid.uuid4().hex[:24]}"
 
             args_str = tc.get("arguments") or ""
-            arguments, parse_err = _parse_tool_args(args_str, stop_reason)
+            arguments, parse_err = _parse_tool_args(args_str, stop_reason, tc["name"])
             if parse_err:
                 logger.error(
                     f"Tool args parse failed for {tc['name']} ({len(args_str)} chars): {parse_err}"
@@ -1343,6 +1464,13 @@ class AgentStreamExecutor:
 
         return full_content, tool_calls
 
+    def _required_params(self, tool_name: str) -> list:
+        """Parameter names a tool's schema declares as required."""
+        tool = self.tools.get(tool_name)
+        params = getattr(tool, "params", None)
+        required = params.get("required") if isinstance(params, dict) else None
+        return list(required) if isinstance(required, list) else []
+
     def _execute_tool(self, tool_call: Dict) -> Dict[str, Any]:
         """
         Execute tool
@@ -1363,6 +1491,25 @@ class AgentStreamExecutor:
                 "result": tool_call["_parse_error"],
                 "execution_time": 0,
             }
+            self._record_tool_result(tool_name, arguments, False)
+            return result
+
+        # A call whose arguments never arrived parses into an empty dict, which
+        # would otherwise reach the tool and be reported as one missing field -
+        # sending the model off to fix a parameter it never got to send.
+        missing = self._required_params(tool_name) if not arguments else []
+        if missing:
+            result = {
+                "status": "error",
+                "result": (
+                    f"Your {tool_name} call arrived with no arguments at all, so it did not "
+                    f"run and nothing was written. It requires: {', '.join(missing)}. "
+                    "The arguments were most likely cut off before they were sent."
+                    + (" " + _SPLIT_WRITE_ADVICE if tool_name in ("write", "edit") else "")
+                ),
+                "execution_time": 0,
+            }
+            logger.error(f"Tool {tool_name} called with no arguments (required: {missing})")
             self._record_tool_result(tool_name, arguments, False)
             return result
 
@@ -1402,6 +1549,7 @@ class AgentStreamExecutor:
             # Set tool context
             tool.model = self.model
             tool.context = self.agent
+            tool.cancel_event = self.cancel_event
             tool.progress_callback = lambda message: self._emit_event(
                 "tool_execution_progress",
                 {
@@ -1417,6 +1565,7 @@ class AgentStreamExecutor:
                 result: ToolResult = tool.execute_tool(arguments)
             finally:
                 tool.progress_callback = None
+                tool.cancel_event = None
             execution_time = time.time() - start_time
 
             result_dict = {
@@ -1520,48 +1669,7 @@ class AgentStreamExecutor:
         Returns:
             List of turns, each turn is a dict with 'messages' list
         """
-        turns = []
-        current_turn = {'messages': []}
-        
-        for msg in self.messages:
-            role = msg.get('role')
-            content = msg.get('content', [])
-            
-            if role == 'user':
-                # Determine if this is a real user query (not a tool_result injection
-                # or an internal hint message injected by the agent loop).
-                is_user_query = False
-                has_tool_result = False
-                if isinstance(content, list):
-                    has_text = any(
-                        isinstance(block, dict) and block.get('type') == 'text'
-                        for block in content
-                    )
-                    has_tool_result = any(
-                        isinstance(block, dict) and block.get('type') == 'tool_result'
-                        for block in content
-                    )
-                    # A message with tool_result is always internal, even if it
-                    # also contains text blocks (shouldn't happen, but be safe).
-                    is_user_query = has_text and not has_tool_result
-                elif isinstance(content, str):
-                    is_user_query = True
-                
-                if is_user_query:
-                    if current_turn['messages']:
-                        turns.append(current_turn)
-                    current_turn = {'messages': [msg]}
-                else:
-                    current_turn['messages'].append(msg)
-            else:
-                # AI 回复，属于当前轮次
-                current_turn['messages'].append(msg)
-        
-        # 添加最后一个轮次
-        if current_turn['messages']:
-            turns.append(current_turn)
-        
-        return turns
+        return identify_complete_turns(self.messages)
     
     def _estimate_turn_tokens(self, turn: Dict) -> int:
         """估算一个轮次的 tokens"""
@@ -1736,21 +1844,7 @@ class AgentStreamExecutor:
             return None
 
         # Find the first user text block in kept_turns as injection target
-        target_block = None
-        for turn in kept_turns:
-            for msg in turn["messages"]:
-                if msg.get("role") == "user":
-                    content = msg.get("content", [])
-                    if isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                target_block = block
-                                break
-                    if target_block:
-                        break
-            if target_block:
-                break
-
+        target_block = find_first_user_text_block(kept_turns)
         if not target_block:
             return None
 
@@ -1760,12 +1854,8 @@ class AgentStreamExecutor:
         def _on_summary_ready(summary: str):
             if not summary or not summary.strip():
                 return
-            target_block["text"] = (
-                f"[System: Previous conversation summary — "
-                f"{turn_count} turns were compacted]\n\n"
-                f"{summary.strip()}\n\n"
-                f"The recent conversation continues below.\n\n---\n\n"
-                f"{original_text}"
+            target_block["text"] = build_compaction_summary_text(
+                summary, turn_count, original_text
             )
             logger.info(
                 f"📝 Context summary injected "
@@ -1931,24 +2021,6 @@ class AgentStreamExecutor:
             f"({old_count} -> {len(self.messages)} messages, "
             f"~{current_tokens + system_tokens} -> ~{kept_tokens + system_tokens} tokens)"
         )
-
-    def _clear_session_db(self):
-        """
-        Clear the current session's persisted messages from SQLite DB.
-
-        This prevents dirty data (broken tool_use/tool_result pairs) from being
-        reloaded on the next request or after a restart.
-        """
-        try:
-            session_id = getattr(self.agent, '_current_session_id', None)
-            if not session_id:
-                return
-            from agent.memory import get_conversation_store
-            store = get_conversation_store()
-            store.clear_session(session_id)
-            logger.info(f"🗑️ Cleared dirty session data from DB: {session_id}")
-        except Exception as e:
-            logger.warning(f"Failed to clear session DB: {e}")
 
     def _prepare_messages(self) -> List[Dict[str, Any]]:
         """

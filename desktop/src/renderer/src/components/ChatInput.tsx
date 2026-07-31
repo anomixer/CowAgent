@@ -1,9 +1,21 @@
 import React, { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react'
-import { Plus, Paperclip, Square, X, File as FileIcon, Loader2, Trash2 } from 'lucide-react'
+import {
+  Plus,
+  Paperclip,
+  Square,
+  X,
+  File as FileIcon,
+  Loader2,
+  Trash2,
+  AtSign,
+  Folder
+} from 'lucide-react'
 import { t } from '../i18n'
-import type { Attachment } from '../types'
+import type { Attachment, WorkspaceEntry } from '../types'
 import apiClient from '../api/client'
 import { PaperPlaneIcon } from './icons'
+import { WORKSPACE_DRAG_TYPE } from './FileTree'
+import { iconFor, colorFor } from '../lib/fileKind'
 
 export type ChatInputHandle = (text: string, attachments: Attachment[]) => void
 
@@ -31,9 +43,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashIndex, setSlashIndex] = useState(0)
+  // `@` workspace-file picker
+  const [mentionItems, setMentionItems] = useState<WorkspaceEntry[]>([])
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const mentionStartRef = useRef(-1)
+  const mentionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const composingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -47,6 +65,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     { cmd: '/help', desc: t('slash_help') },
     { cmd: '/status', desc: t('slash_status') },
     { cmd: '/context', desc: t('slash_context') },
+    { cmd: '/compact', desc: t('slash_compact') },
     { cmd: '/skill list', desc: t('slash_skill_list') },
     { cmd: '/skill search ', desc: t('slash_skill_search') },
     { cmd: '/skill install ', desc: t('slash_skill_install') },
@@ -137,7 +156,73 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     resetHeight()
   }, [text, attachments, isStreaming, onSend])
 
+  const mentionOpen = mentionStartRef.current >= 0 && mentionItems.length > 0
+
+  const closeMention = () => {
+    mentionStartRef.current = -1
+    setMentionItems([])
+    setMentionIndex(0)
+  }
+
+  /** Reference an existing workspace file or folder in place, not as an upload. */
+  const addWorkspaceRef = (entry: WorkspaceEntry) => {
+    setAttachments((prev) =>
+      prev.some((a) => a.file_type === 'workspace_ref' && a.file_path === entry.path)
+        ? prev
+        : [
+            ...prev,
+            {
+              file_path: entry.path,
+              file_name: entry.name,
+              file_type: 'workspace_ref',
+              is_dir: entry.is_dir,
+            },
+          ]
+    )
+  }
+
+  const acceptMention = (index: number) => {
+    const item = mentionItems[index]
+    const el = textareaRef.current
+    if (!item || !el) return
+    addWorkspaceRef(item)
+    // Drop the "@query" fragment: the file rides along as an attachment.
+    const caret = el.selectionStart
+    const next = text.slice(0, mentionStartRef.current) + text.slice(caret)
+    const caretAfter = mentionStartRef.current
+    setText(next)
+    closeMention()
+    requestAnimationFrame(() => {
+      el.focus()
+      el.selectionStart = el.selectionEnd = caretAfter
+      autoSize(el)
+    })
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Mention menu takes precedence: it's only open while typing "@…".
+    if (mentionOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionIndex((i) => (i + 1) % mentionItems.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionIndex((i) => (i - 1 + mentionItems.length) % mentionItems.length)
+        return
+      }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        e.preventDefault()
+        acceptMention(mentionIndex)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        closeMention()
+        return
+      }
+    }
     // Slash menu navigation
     if (slashOpen && filtered.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -174,30 +259,61 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     // open slash menu when the input starts with "/" and has no space
     setSlashOpen(v.startsWith('/') && !v.includes(' '))
     setSlashIndex(0)
+
+    // Trigger the file picker on "@" at the start or after whitespace.
+    const match = v.slice(0, e.target.selectionStart).match(/(?:^|\s)@([^\s@]*)$/)
+    if (mentionTimerRef.current) clearTimeout(mentionTimerRef.current)
+    if (!match) {
+      closeMention()
+      return
+    }
+    mentionStartRef.current = e.target.selectionStart - match[1].length - 1
+    mentionTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await apiClient.workspaceSearch(match[1], 12)
+        if (mentionStartRef.current < 0) return
+        setMentionItems(res.results || [])
+        setMentionIndex(0)
+      } catch {
+        closeMention()
+      }
+    }, 160)
   }
 
   const uploadFiles = async (files: File[]) => {
     if (!files.length) return
     setUploading(true)
+    setUploadError('')
+    // Report per-file outcomes: a silent failure here is indistinguishable from
+    // the file picker never opening, which makes the feature look broken.
+    const failed: string[] = []
     try {
       for (const file of files) {
-        const result = await apiClient.uploadFile(file, sessionId)
-        if (result.status === 'success') {
-          setAttachments((prev) => [
-            ...prev,
-            {
-              file_path: result.file_path,
-              file_name: result.file_name,
-              file_type: result.file_type as Attachment['file_type'],
-              preview_url: result.preview_url,
-            },
-          ])
+        try {
+          const result = await apiClient.uploadFile(file, sessionId)
+          if (result.status === 'success') {
+            setAttachments((prev) => [
+              ...prev,
+              {
+                file_path: result.file_path,
+                file_name: result.file_name,
+                file_type: result.file_type as Attachment['file_type'],
+                preview_url: result.preview_url,
+              },
+            ])
+          } else {
+            failed.push(`${file.name}: ${result.message || 'unknown error'}`)
+          }
+        } catch (err) {
+          failed.push(`${file.name}: ${(err as Error).message}`)
         }
       }
-    } catch (err) {
-      console.error('Upload failed:', err)
     } finally {
       setUploading(false)
+      if (failed.length) {
+        console.error('Upload failed:', failed)
+        setUploadError(`${t('upload_failed')} — ${failed.join('; ')}`)
+      }
     }
   }
 
@@ -207,12 +323,26 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(false)
-    const files = Array.from(e.dataTransfer.files || [])
+  const handleDropData = (dt: DataTransfer) => {
+    // A file dragged from the workspace panel is already on disk in the
+    // workspace — reference it instead of uploading a duplicate.
+    const wsPayload = dt.getData(WORKSPACE_DRAG_TYPE)
+    if (wsPayload) {
+      try {
+        addWorkspaceRef(JSON.parse(wsPayload) as WorkspaceEntry)
+      } catch {
+        /* malformed drag payload */
+      }
+      return
+    }
+    const files = Array.from(dt.files || [])
     if (files.length) uploadFiles(files)
   }
+
+  // Read through a ref so the window listeners below can stay bound once
+  // instead of re-subscribing whenever the input's state changes.
+  const dropHandlerRef = useRef(handleDropData)
+  dropHandlerRef.current = handleDropData
 
   const handlePaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items
@@ -239,6 +369,58 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     if (slashIndex >= filtered.length) setSlashIndex(0)
   }, [filtered.length, slashIndex])
 
+  // Accept drops anywhere in the window rather than only over the input box:
+  // users aim at the conversation area, and a drop that no element handles makes
+  // Chromium navigate to the dropped file, replacing the whole UI.
+  useEffect(() => {
+    const carriesFiles = (dt: DataTransfer | null) =>
+      !!dt && (dt.types.includes('Files') || dt.types.includes(WORKSPACE_DRAG_TYPE))
+
+    // dragenter/dragleave also fire when moving between descendants, so track
+    // nesting depth and only drop the highlight once the drag really left.
+    let depth = 0
+    const onDragEnter = (e: DragEvent) => {
+      if (!carriesFiles(e.dataTransfer)) return
+      e.preventDefault()
+      depth += 1
+      setDragOver(true)
+    }
+    const onDragOver = (e: DragEvent) => {
+      if (!carriesFiles(e.dataTransfer)) return
+      e.preventDefault()
+    }
+    const onDragLeave = (e: DragEvent) => {
+      if (!carriesFiles(e.dataTransfer)) return
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) setDragOver(false)
+    }
+    const onDrop = (e: DragEvent) => {
+      depth = 0
+      setDragOver(false)
+      if (!carriesFiles(e.dataTransfer)) return
+      e.preventDefault()
+      dropHandlerRef.current(e.dataTransfer!)
+    }
+    // A drag can end without ever dropping (Esc, or released outside the window).
+    const onDragEnd = () => {
+      depth = 0
+      setDragOver(false)
+    }
+
+    window.addEventListener('dragenter', onDragEnter)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+    window.addEventListener('dragend', onDragEnd)
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragend', onDragEnd)
+    }
+  }, [])
+
   const canSend = !isStreaming && (!!text.trim() || attachments.length > 0)
 
   return (
@@ -247,16 +429,23 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         className={`max-w-3xl mx-auto relative rounded-2xl transition-all ${
           dragOver ? 'ring-2 ring-accent ring-offset-2 ring-offset-surface' : ''
         }`}
-        onDragOver={(e) => {
-          e.preventDefault()
-          setDragOver(true)
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={handleDrop}
       >
         {dragOver && (
           <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-accent-soft text-accent text-sm font-medium pointer-events-none">
-            {t('input_placeholder')}
+            {t('drop_to_attach')}
+          </div>
+        )}
+
+        {uploadError && (
+          <div className="mb-2 flex items-start gap-2 rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-xs text-danger">
+            <span className="flex-1 break-all">{uploadError}</span>
+            <button
+              onClick={() => setUploadError('')}
+              className="flex-shrink-0 cursor-pointer hover:opacity-70"
+              title={t('ws_close')}
+            >
+              <X size={12} />
+            </button>
           </div>
         )}
 
@@ -288,6 +477,34 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           </div>
         )}
 
+        {/* Workspace file picker (@) */}
+        {mentionOpen && (
+          <div className="absolute bottom-full left-0 right-0 mb-1.5 max-h-72 overflow-y-auto rounded-xl border border-default bg-elevated shadow-xl z-30 p-1.5">
+            {mentionItems.map((item, i) => {
+              const Icon = iconFor(item.kind)
+              return (
+                <button
+                  key={item.path}
+                  onMouseEnter={() => setMentionIndex(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    acceptMention(i)
+                  }}
+                  className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left cursor-pointer transition-colors ${
+                    i === mentionIndex ? 'bg-accent-soft' : 'hover:bg-surface-2'
+                  }`}
+                >
+                  <Icon size={13} className={`shrink-0 ${colorFor(item.kind)}`} />
+                  <span className="text-[13px] text-content shrink-0 max-w-[45%] truncate">{item.name}</span>
+                  <span className="flex-1 min-w-0 text-[11px] text-content-tertiary text-right truncate">
+                    {item.path}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+
         {/* Attachment preview */}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
@@ -309,8 +526,18 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   </div>
                 ) : (
                   <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-inset border border-default rounded-lg text-xs text-content-secondary max-w-[180px] relative pr-7">
-                    <FileIcon size={12} />
-                    <span className="truncate">{att.file_name}</span>
+                    {att.file_type === 'workspace_ref' ? (
+                      att.is_dir ? (
+                        <Folder size={12} className="text-accent" />
+                      ) : (
+                        <AtSign size={12} className="text-accent" />
+                      )
+                    ) : (
+                      <FileIcon size={12} />
+                    )}
+                    <span className="truncate" title={att.file_path}>
+                      {att.file_name}
+                    </span>
                     <button
                       onClick={() => removeAttachment(i)}
                       className="absolute -top-1 -right-1 w-[18px] h-[18px] rounded-full bg-danger text-white flex items-center justify-center cursor-pointer"
@@ -355,7 +582,6 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             className="hidden"
             multiple
             onChange={handleFileSelect}
-            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.xml,.zip,.py,.js,.ts,.java,.c,.cpp,.go,.rs,.md"
           />
 
           <textarea

@@ -1,3 +1,4 @@
+import base64
 import datetime
 import hashlib
 import hmac
@@ -14,6 +15,7 @@ import time
 import uuid
 from queue import Queue, Empty
 from typing import List, Tuple
+from urllib.parse import quote
 
 import web
 
@@ -26,7 +28,7 @@ from common import const
 from common import i18n
 from common.log import logger
 from common.singleton import singleton
-from config import conf, get_data_root, get_weixin_credentials_path
+from config import conf, get_data_root, get_weixin_credentials_path, read_config_template
 
 # Multi-user auth (optional; gracefully degrades when no users registered)
 from channel.web.multiuser.auth import (
@@ -44,6 +46,21 @@ from channel.web.multiuser.db import get_multiuser_db
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
+
+def _read_config_file_for_write() -> dict:
+    """Baseline dict for a partial write to config.json.
+
+    When the file does not exist yet (fresh install), seed from
+    config-template.json — the very config the running process loaded. Starting
+    from an empty dict would persist a file missing every template default
+    (model, agent limits, ...), silently changing behavior after a restart.
+    """
+    config_path = os.path.join(get_data_root(), "config.json")
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return read_config_template()
+
 
 def _get_web_password() -> str:
     # Coerce to str so non-string values in config.json (e.g. numeric password) won't break comparisons
@@ -146,6 +163,22 @@ def _require_auth():
         require_login()
         return
     if not _check_auth():
+        # Log which credential the caller offered (never the value). A rejected
+        # request is otherwise invisible in run.log, which makes client bugs —
+        # e.g. an endpoint that forgets the Authorization header — undiagnosable.
+        offered = []
+        if web.cookies().get("cow_auth_token", ""):
+            offered.append("cookie")
+        if _get_bearer_token():
+            offered.append("bearer")
+        if _get_query_token():
+            offered.append("query")
+        logger.warning(
+            "[WebChannel] 401 Unauthorized: %s %s (credentials offered: %s)",
+            web.ctx.env.get("REQUEST_METHOD", "?"),
+            web.ctx.env.get("PATH_INFO", "?"),
+            ", ".join(offered) or "none",
+        )
         raise web.HTTPError("401 Unauthorized",
                              {"Content-Type": "application/json; charset=utf-8"},
                              json.dumps({"status": "error", "message": "Unauthorized"}))
@@ -232,6 +265,166 @@ def _get_upload_dir() -> str:
     tmp_dir = os.path.join(ws_root, "tmp")
     os.makedirs(tmp_dir, exist_ok=True)
     return tmp_dir
+
+
+def _get_workspace_root() -> str:
+    """Resolve the agent workspace directory."""
+    from common.utils import expand_path
+    root = expand_path(conf().get("agent_workspace", "~/cow"))
+    if is_multiuser_enabled():
+        from channel.web.multiuser.auth import get_current_user
+        user = get_current_user()
+        if user:
+            return os.path.join(root, "users", str(user["id"]))
+    return root
+
+
+_PREVIEW_SECRET = None
+_PREVIEW_SECRET_LOCK = threading.Lock()
+
+
+def _get_preview_secret() -> bytes:
+    """
+    Stable secret used to sign /preview directory tokens.
+
+    Preview URLs can't rely on the auth cookie: the preview iframe is sandboxed
+    without `allow-same-origin`, so its subresource requests come from an opaque
+    origin and Chrome withholds the SameSite=Lax cookie. The signature in the
+    URL is what authorizes the request instead, so it must survive restarts.
+    """
+    global _PREVIEW_SECRET
+    if _PREVIEW_SECRET is not None:
+        return _PREVIEW_SECRET
+    with _PREVIEW_SECRET_LOCK:
+        if _PREVIEW_SECRET is not None:
+            return _PREVIEW_SECRET
+        path = os.path.join(get_data_root(), ".preview_secret")
+        secret = None
+        try:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    secret = (f.read() or "").strip() or None
+        except Exception as e:
+            logger.warning(f"[WebChannel] Could not read preview secret: {e}")
+        if not secret:
+            secret = uuid.uuid4().hex + uuid.uuid4().hex
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(secret)
+                os.chmod(path, 0o600)
+            except Exception as e:
+                logger.warning(f"[WebChannel] Could not persist preview secret: {e}")
+        _PREVIEW_SECRET = secret.encode()
+        return _PREVIEW_SECRET
+
+
+def _encode_dir_token(dir_path: str) -> str:
+    """Encode a directory path into a signed, URL-safe token for /preview."""
+    real = os.path.realpath(dir_path)
+    body = base64.urlsafe_b64encode(real.encode("utf-8")).decode("ascii").rstrip("=")
+    sig = hmac.new(_get_preview_secret(), real.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+    return f"{body}.{sig}"
+
+
+def _decode_dir_token(token: str) -> str:
+    """Verify and decode a /preview directory token. Raises ValueError if invalid."""
+    body, _, sig = (token or "").partition(".")
+    if not body or not sig:
+        raise ValueError("Malformed preview token")
+    padding = "=" * (-len(body) % 4)
+    try:
+        real = base64.urlsafe_b64decode(body + padding).decode("utf-8")
+    except Exception:
+        raise ValueError("Malformed preview token")
+    expected = hmac.new(_get_preview_secret(), real.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+    if not hmac.compare_digest(sig, expected):
+        raise ValueError("Bad preview token signature")
+    return real
+
+
+def _serve_allowed_roots() -> list:
+    """Roots that /api/file and /preview may read from (symlinks resolved)."""
+    serve_root = conf().get("web_file_serve_root", "~") or "~"
+    return [
+        os.path.realpath(os.path.expanduser(serve_root)),
+        os.path.realpath(_get_workspace_root()),
+    ]
+
+
+def _is_path_allowed(real_path: str) -> bool:
+    roots = _serve_allowed_roots()
+    if os.sep in roots:
+        return True
+    for root in roots:
+        try:
+            if os.path.commonpath([real_path, root]) == root:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _build_preview_url(abs_path: str) -> str:
+    """
+    Preview URL that mounts the file's *directory*, so relative assets
+    referenced by an HTML page (./style.css, ./img/a.png) resolve correctly.
+    """
+    directory = os.path.dirname(abs_path)
+    name = os.path.basename(abs_path)
+    return f"/preview/{_encode_dir_token(directory)}/{quote(name)}"
+
+
+def _build_artifact_payload(data: dict) -> dict:
+    """Turn an agent `artifact` event into an SSE payload for the web clients."""
+    file_path = data.get("path", "")
+    if not file_path:
+        return None
+    return {
+        "type": "artifact",
+        "abs_path": file_path,
+        "rel_path": data.get("rel_path") or os.path.basename(file_path),
+        "file_name": data.get("file_name") or os.path.basename(file_path),
+        "kind": data.get("kind", "file"),
+        "previewable": bool(data.get("previewable")),
+        "size": data.get("size", 0),
+        "raw_url": f"/api/file?path={quote(file_path)}",
+        "preview_url": _build_preview_url(file_path),
+    }
+
+
+def _artifacts_from_steps(steps) -> list:
+    """
+    Rebuild the artifact cards of a persisted assistant message.
+
+    History replay has no SSE events, so the `write`/`edit` tool calls are the
+    only record. Doing this server-side keeps one implementation of the
+    workspace-internal filter — and lets absolute paths inside the workspace be
+    recognised, which a client mirroring the rules can't do.
+    """
+    from agent.protocol.artifact import get_workspace_root, safe_build_artifact
+
+    out = []
+    seen = set()
+    root = None
+    for step in steps or []:
+        if not isinstance(step, dict) or step.get("type") != "tool":
+            continue
+        if step.get("is_error") or step.get("name") not in ("write", "edit"):
+            continue
+        args = step.get("arguments")
+        path = str((args or {}).get("path") or "").strip() if isinstance(args, dict) else ""
+        if not path:
+            continue
+        if root is None:
+            root = get_workspace_root()
+        info = safe_build_artifact(path, root)
+        if not info or info["path"] in seen:
+            continue
+        seen.add(info["path"])
+        payload = _build_artifact_payload(info)
+        if payload:
+            out.append(payload)
+    return out
 
 
 def _sanitize_upload_relative_path(relative_path: str) -> str:
@@ -712,6 +905,11 @@ class WebChannel(ChatChannel):
                     payload["abs_path"] = file_path
                 q.put(payload)
 
+            elif event_type == "artifact":
+                payload = _build_artifact_payload(data)
+                if payload:
+                    q.put(payload)
+
         return on_event
 
     # ------------------------------------------------------------------
@@ -866,7 +1064,20 @@ class WebChannel(ChatChannel):
 
     def upload_file(self):
         """Handle file or directory upload via multipart/form-data."""
+
+        def _reject(message):
+            logger.warning("[WebChannel] Upload rejected: %s", message)
+            return json.dumps({"status": "error", "message": message})
+
         try:
+            # Trace the request on arrival: it is the only way to tell a client
+            # that never sent anything (file picker / drag-drop broken) apart
+            # from a request the backend rejected.
+            logger.info(
+                "[WebChannel] Upload request received: %s bytes, content-type=%s",
+                web.ctx.env.get("CONTENT_LENGTH") or "?",
+                web.ctx.env.get("CONTENT_TYPE") or "?",
+            )
             params = _raw_web_input()
             file_obj = params.get("file")
             file_objs = params.get("files")
@@ -892,11 +1103,11 @@ class WebChannel(ChatChannel):
             upload_dir = _get_upload_dir()
             if is_directory_upload:
                 if not upload_id:
-                    return json.dumps({"status": "error", "message": "Missing upload_id for directory upload"})
+                    return _reject("Missing upload_id for directory upload")
                 if not directory_files:
-                    return json.dumps({"status": "error", "message": "No files uploaded"})
+                    return _reject("No files uploaded")
                 if len(directory_files) != len(directory_rel_paths):
-                    return json.dumps({"status": "error", "message": "Directory upload payload mismatch"})
+                    return _reject("Directory upload payload mismatch")
 
                 safe_upload_id = _sanitize_upload_id(upload_id)
                 upload_root = os.path.join(upload_dir, f"webdir_{safe_upload_id}")
@@ -939,7 +1150,7 @@ class WebChannel(ChatChannel):
                 }, ensure_ascii=False)
 
             if file_obj is None or not hasattr(file_obj, "filename") or not file_obj.filename:
-                return json.dumps({"status": "error", "message": "No file uploaded"})
+                return _reject(f"No file uploaded (form fields: {sorted(params.keys())})")
 
             original_name = file_obj.filename
             ext = os.path.splitext(original_name)[1].lower()
@@ -1064,7 +1275,20 @@ class WebChannel(ChatChannel):
                     fpath = att.get("file_path", "")
                     if not fpath:
                         continue
-                    if ftype == "image":
+                    if ftype == "workspace_ref":
+                        # Already lives in the workspace (dragged from the file panel
+                        # or picked with @); reference it in place so the agent opens
+                        # the original instead of an uploaded copy. Naming the kind
+                        # tells the agent whether to `read` it or `ls` into it.
+                        is_dir = os.path.isdir(
+                            os.path.join(_get_workspace_root(), fpath)
+                        )
+                        label = (
+                            i18n.t('工作空间目录', 'Workspace directory') if is_dir
+                            else i18n.t('工作空间文件', 'Workspace file')
+                        )
+                        file_refs.append(f"[{label}: {fpath}]")
+                    elif ftype == "image":
                         file_refs.append(f"[{i18n.t('图片', 'Image')}: {fpath}]")
                     elif ftype == "video":
                         file_refs.append(f"[{i18n.t('视频', 'Video')}: {fpath}]")
@@ -1230,8 +1454,15 @@ class WebChannel(ChatChannel):
         # tail so async post-processing (TTS auto-synthesis) can deliver a
         # `voice_attach` event before the client disconnects.
         POST_DONE_TAIL_SECONDS = 60
+        # A cancel only takes effect at the agent's next checkpoint, so the run
+        # keeps emitting events (tool results, the partial reply) for a while
+        # after the user presses Stop. Stay open for them, just not for the
+        # full idle timeout.
+        CANCEL_GRACE_SECONDS = 60
+        POST_CANCEL_TAIL_SECONDS = 3
         post_done = False
         post_deadline = 0.0
+        cancelled = False
 
         try:
             while time.time() < deadline:
@@ -1247,19 +1478,26 @@ class WebChannel(ChatChannel):
                     yield b": keepalive\n\n"
                     continue
 
-                deadline = time.time() + idle_timeout
+                deadline = time.time() + (
+                    CANCEL_GRACE_SECONDS if cancelled else idle_timeout
+                )
                 payload = json.dumps(item, ensure_ascii=False)
                 yield f"data: {payload}\n\n".encode("utf-8")
 
                 itype = item.get("type")
                 if itype == "done":
                     post_done = True
-                    post_deadline = time.time() + POST_DONE_TAIL_SECONDS
+                    post_deadline = time.time() + (
+                        POST_CANCEL_TAIL_SECONDS if cancelled
+                        else POST_DONE_TAIL_SECONDS
+                    )
                 elif itype == "cancelled":
-                    # Close SSE tail quickly after cancel; don't wait for the
-                    # full TTS tail since the user already pressed Stop.
-                    post_done = True
-                    post_deadline = time.time() + 3
+                    # Wait for the run to actually wind down and send its
+                    # partial reply as "done"; closing on a blind timer here
+                    # strands in-flight tool bubbles and makes the client
+                    # reconnect onto a dropped queue.
+                    cancelled = True
+                    deadline = time.time() + CANCEL_GRACE_SECONDS
                 elif itype == "voice_attach":
                     # WSGI buffers the previous chunk until the next yield;
                     # shrink the tail so the generator wakes up quickly to
@@ -1492,6 +1730,11 @@ class WebChannel(ChatChannel):
             '/upload', 'UploadHandler',
             '/uploads/(.*)', 'UploadsHandler',
             '/api/file', 'FileServeHandler',
+            '/preview/(.+)', 'PreviewHandler',
+            '/api/workspace/tree', 'WorkspaceTreeHandler',
+            '/api/workspace/search', 'WorkspaceSearchHandler',
+            '/api/workspace/resolve', 'WorkspaceResolveHandler',
+            '/api/workspace/meta', 'WorkspaceMetaHandler',
             '/api/voice/asr', 'VoiceAsrHandler',
             '/api/voice/tts', 'VoiceTtsHandler',
             '/poll', 'PollHandler',
@@ -1521,6 +1764,7 @@ class WebChannel(ChatChannel):
             '/api/scheduler/delete', 'SchedulerDeleteHandler',
             '/api/sessions', 'SessionsHandler',
             '/api/sessions/(.*)/generate_title', 'SessionTitleHandler',
+            '/api/prompt/optimize', 'PromptOptimizeHandler',
             '/api/sessions/(.*)/clear_context', 'SessionClearContextHandler',
             '/api/sessions/(.*)', 'SessionDetailHandler',
             '/api/history', 'HistoryHandler',
@@ -2529,14 +2773,7 @@ class FileServeHandler:
             # Defaults to the user home dir plus the agent workspace; set web_file_serve_root="/"
             # to allow the whole filesystem.
             file_path = os.path.realpath(file_path)
-            serve_root = conf().get("web_file_serve_root", "~") or "~"
-            allowed_roots = [
-                os.path.realpath(os.path.expanduser(serve_root)),
-                os.path.realpath(_get_workspace_root()),
-            ]
-            if os.sep not in allowed_roots and not any(
-                os.path.commonpath([file_path, root]) == root for root in allowed_roots
-            ):
+            if not _is_path_allowed(file_path):
                 raise web.notfound()
             if not os.path.isfile(file_path):
                 raise web.notfound()
@@ -2552,6 +2789,65 @@ class FileServeHandler:
             raise
         except Exception as e:
             logger.error(f"[WebChannel] Error serving file: {e}")
+            raise web.notfound()
+
+
+class PreviewHandler:
+    """
+    Directory-mounted file server for the preview panel: /preview/<token>/<relpath>
+
+    Unlike /api/file (single file, query param) this mounts the file's directory,
+    so relative assets inside a generated HTML page resolve normally. The token is
+    HMAC-signed, which is what authorizes the request - the sandboxed iframe can't
+    send the auth cookie.
+    """
+
+    def GET(self, path_info):
+        try:
+            token, _, rel_path = (path_info or "").partition("/")
+            if not token or not rel_path:
+                raise web.notfound()
+
+            from urllib.parse import unquote
+            rel_path = unquote(rel_path)
+
+            try:
+                base_dir = _decode_dir_token(token)
+            except ValueError:
+                raise web.notfound()
+
+            full_path = os.path.realpath(os.path.join(base_dir, rel_path))
+            base_real = os.path.realpath(base_dir)
+            # Confine to the mounted directory, then to the globally allowed roots.
+            if os.path.commonpath([full_path, base_real]) != base_real:
+                raise web.notfound()
+            if not _is_path_allowed(full_path) or not os.path.isfile(full_path):
+                raise web.notfound()
+
+            content_type = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
+            web.header('Content-Type', content_type)
+            web.header('Cache-Control', 'no-cache')
+            web.header('X-Content-Type-Options', 'nosniff')
+            if content_type.startswith("text/html"):
+                # Agent-generated pages are untrusted. The CSP sandbox forces an
+                # opaque origin even when the page is opened as a top-level tab,
+                # so it can't read the console's localStorage auth token; the
+                # panel's iframe already applies the same flags.
+                #
+                # No frame-ancestors here: the desktop renderer is loaded from
+                # file:// (or the Vite dev server), so 'self' would block its
+                # preview iframe outright. The sandbox is what carries the
+                # security guarantee; framing alone reveals nothing extra.
+                web.header(
+                    'Content-Security-Policy',
+                    "sandbox allow-scripts allow-popups allow-forms allow-modals",
+                )
+            with open(full_path, 'rb') as f:
+                return f.read()
+        except web.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"[WebChannel] Error serving preview: {e}")
             raise web.notfound()
 
 
@@ -2603,8 +2899,8 @@ class ConfigHandler:
     _RECOMMENDED_MODELS = [
         const.DEEPSEEK_V4_FLASH, const.DEEPSEEK_V4_PRO,
         const.MINIMAX_M3, const.MINIMAX_M2_7_HIGHSPEED, const.MINIMAX_M2_7,
-        # claude-sonnet-5 is the Claude default; claude-fable-5 follows right after it.
-        const.CLAUDE_SONNET_5, const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS,
+        # claude-opus-5 is the Claude default; claude-sonnet-5 / claude-fable-5 follow right after it.
+        const.CLAUDE_OPUS_5, const.CLAUDE_SONNET_5, const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS,
         const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE,
         const.GPT_56_LUNA, const.GPT_56_TERRA, const.GPT_56_SOL, const.GPT_55, const.GPT_54, const.GPT_54_MINI, const.GPT_54_NANO, const.GPT_5, const.GPT_41, const.GPT_4o,
         const.GLM_5_2, const.GLM_5_1, const.GLM_5_TURBO, const.GLM_5, const.GLM_4_7,
@@ -2649,7 +2945,7 @@ class ConfigHandler:
             "api_base_key": "claude_api_base",
             "api_base_default": "https://api.anthropic.com/v1",
             "api_base_placeholder": _PLACEHOLDER_V1,
-            "models": [const.CLAUDE_SONNET_5, const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS],
+            "models": [const.CLAUDE_OPUS_5, const.CLAUDE_SONNET_5, const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS],
         }),
         ("gemini", {
             "label": "Gemini",
@@ -2870,15 +3166,9 @@ class ConfigHandler:
                 return json.dumps({"status": "error", "message": "no valid keys to update"})
 
             config_path = os.path.join(get_data_root(), "config.json")
-            old_password = ""  # Store old password before update
-            if os.path.exists(config_path):
-                with open(config_path, "r", encoding="utf-8") as f:
-                    file_cfg = json.load(f)
-                    # Capture old password before updating
-                    if "web_password" in applied:
-                        old_password = file_cfg.get("web_password", "")
-            else:
-                file_cfg = {}
+            file_cfg = _read_config_file_for_write()
+            # Capture old password before updating
+            old_password = file_cfg.get("web_password", "") if "web_password" in applied else ""
             file_cfg.update(applied)
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(file_cfg, f, indent=4, ensure_ascii=False)
@@ -3264,7 +3554,10 @@ class ModelsHandler:
         "doubao":    [const.DOUBAO_SEED_2_1_PRO, const.DOUBAO_SEED_2_1_TURBO, const.DOUBAO_SEED_2_PRO],
         "moonshot":  [const.KIMI_K2_6],
         "dashscope": [const.QWEN37_PLUS, const.QWEN36_PLUS],
-        "claudeAPI": [const.CLAUDE_SONNET_5, const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS],
+        # claude-sonnet-5 stays first here (unlike the chat lists): the first
+        # entry is the auto-picked vision model, and image understanding does
+        # not justify the Opus price.
+        "claudeAPI": [const.CLAUDE_SONNET_5, const.CLAUDE_OPUS_5, const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS],
         "gemini":    [const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE],
         "qianfan":   [const.ERNIE_45_TURBO_VL],
         # Zhipu's bot hard-codes the call to glm-5v-turbo regardless of what
@@ -3334,11 +3627,7 @@ class ModelsHandler:
 
     @classmethod
     def _read_file_config(cls) -> dict:
-        path = cls._config_path()
-        if not os.path.exists(path):
-            return {}
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return _read_config_file_for_write()
 
     @classmethod
     def _write_file_config(cls, data: dict) -> None:
@@ -4714,13 +5003,9 @@ class ChannelsHandler:
             from common import i18n
             local_config = conf()
             active_channels = self._active_channel_set()
-            # Desktop build ships without lark-oapi, so hide Feishu from the list.
-            desktop_mode = os.environ.get("COW_DESKTOP") == "1"
             channels = []
             is_hant = i18n.get_language() == i18n.ZH_HANT
             for ch_name, ch_def in self.CHANNEL_DEFS.items():
-                if desktop_mode and ch_name == "feishu":
-                    continue
                 fields_out = []
                 for f in ch_def["fields"]:
                     raw_val = local_config.get(f["key"], f.get("default", ""))
@@ -4819,11 +5104,7 @@ class ChannelsHandler:
             return json.dumps({"status": "error", "message": "no valid fields to update"})
 
         config_path = os.path.join(get_data_root(), "config.json")
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                file_cfg = json.load(f)
-        else:
-            file_cfg = {}
+        file_cfg = _read_config_file_for_write()
         file_cfg.update(applied)
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(file_cfg, f, indent=4, ensure_ascii=False)
@@ -4889,17 +5170,23 @@ class ChannelsHandler:
         local_config["channel_type"] = new_channel_type
 
         config_path = os.path.join(get_data_root(), "config.json")
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                file_cfg = json.load(f)
-        else:
-            file_cfg = {}
+        file_cfg = _read_config_file_for_write()
         file_cfg.update(applied)
         file_cfg["channel_type"] = new_channel_type
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(file_cfg, f, indent=4, ensure_ascii=False)
 
         logger.info(f"[WebChannel] Channel '{channel_name}' connecting, channel_type={new_channel_type}")
+
+        # Feishu pulls its SDK bundle on first use; tell the UI so it can warn
+        # about the one-time wait rather than reporting an instant success.
+        downloading = False
+        if channel_name == "feishu":
+            try:
+                from channel.feishu import lark_install
+                downloading = lark_install.needs_download()
+            except Exception as e:
+                logger.warning(f"[WebChannel] Could not check Feishu SDK state: {e}")
 
         def _do_start():
             try:
@@ -4933,6 +5220,7 @@ class ChannelsHandler:
         return json.dumps({
             "status": "success",
             "channel_type": new_channel_type,
+            "downloading": downloading,
         }, ensure_ascii=False)
 
     def _handle_disconnect(self, channel_name: str):
@@ -4944,11 +5232,7 @@ class ChannelsHandler:
         local_config["channel_type"] = new_channel_type
 
         config_path = os.path.join(get_data_root(), "config.json")
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                file_cfg = json.load(f)
-        else:
-            file_cfg = {}
+        file_cfg = _read_config_file_for_write()
         file_cfg["channel_type"] = new_channel_type
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(file_cfg, f, indent=4, ensure_ascii=False)
@@ -5139,7 +5423,9 @@ class FeishuRegisterHandler:
 
     GET  /api/feishu/register   → 启动注册：调用 SDK 生成二维码 URL，立即返回；
                                    后台线程继续轮询飞书侧直到用户扫码授权。
-    POST /api/feishu/register   → 轮询当前会话状态（pending / done / error / expired）。
+    POST /api/feishu/register   → 轮询当前会话状态（downloading / pending / done /
+                                   error / expired）。桌面版首次启用时要先下载飞书
+                                   SDK 包，此时二维码尚不存在，改由轮询补发。
                                    注册成功后不直接写 config，由前端再调
                                    /api/channels {action:'connect'} 走标准启用流程。
     """
@@ -5172,11 +5458,22 @@ class FeishuRegisterHandler:
 
         def _worker():
             try:
+                # Desktop builds don't bundle lark_oapi; fetch it on demand the
+                # first time the user enables Feishu (requires network). Flag it
+                # so the modal explains the wait instead of just spinning.
+                from channel.feishu import lark_install
+                if lark_install.needs_download():
+                    with cls._lock:
+                        cls._state["status"] = "downloading"
+                lark_install.ensure(allow_install=True)
                 import lark_oapi as lark
-            except ImportError:
+            except ImportError as e:
                 with cls._lock:
                     cls._state["status"] = "error"
-                    cls._state["error"] = "lark-oapi SDK 未安装，请执行 pip install -U lark-oapi"
+                    cls._state["error"] = (
+                        "飞书 SDK 不可用，请联网后重试，"
+                        "或手动执行 pip install -U 'lark-oapi>=1.5.5'（%s）" % e
+                    )
                 return
 
             def _on_qr(info):
@@ -5240,7 +5537,9 @@ class FeishuRegisterHandler:
             import time as _t
             for _ in range(100):
                 with self._lock:
-                    if self._state.get("url") or self._state.get("status") in ("error", "expired", "denied"):
+                    if self._state.get("url") or self._state.get("status") in (
+                        "downloading", "error", "expired", "denied"
+                    ):
                         break
                 _t.sleep(0.1)
             with self._lock:
@@ -5248,6 +5547,13 @@ class FeishuRegisterHandler:
                     return json.dumps({
                         "status": "error",
                         "message": self._state.get("error", "register failed"),
+                    })
+                if self._state.get("status") == "downloading":
+                    # The SDK bundle is still coming down; the QR only exists
+                    # once it lands, so hand the frontend over to polling.
+                    return json.dumps({
+                        "status": "success",
+                        "register_status": "downloading",
                     })
                 if not self._state.get("url"):
                     return json.dumps({
@@ -5292,26 +5598,21 @@ class FeishuRegisterHandler:
                         "register_status": status,
                         "message": self._state.get("error", ""),
                     })
-                # pending / starting：还在等用户扫码
-                return json.dumps({
-                    "status": "success",
-                    "register_status": "pending",
-                })
+                if status == "downloading":
+                    return json.dumps({
+                        "status": "success",
+                        "register_status": "downloading",
+                    })
+                # pending / starting：还在等用户扫码。二维码可能是在 GET 返回
+                # "downloading" 之后才生成的，带上让前端补渲染。
+                payload = {"status": "success", "register_status": "pending"}
+                if self._state.get("url"):
+                    payload["qrcode_url"] = self._state["url"]
+                    payload["qr_image"] = self._state.get("qr_image", "")
+                return json.dumps(payload)
         except Exception as e:
             logger.error(f"[WebChannel] FeishuRegister POST error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
-
-
-def _get_workspace_root():
-    """Resolve the agent workspace directory."""
-    from common.utils import expand_path
-    root = expand_path(conf().get("agent_workspace", "~/cow"))
-    if is_multiuser_enabled():
-        from channel.web.multiuser.auth import get_current_user
-        user = get_current_user()
-        if user:
-            return os.path.join(root, "users", str(user["id"]))
-    return root
 
 
 class ToolsHandler:
@@ -5691,6 +5992,19 @@ class SessionDetailHandler:
             if not _check_session_owner(session_id):
                 return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
 
+            # Stop any in-flight run first: a reply that lands after the delete
+            # would otherwise keep burning tokens for a session nobody can see.
+            try:
+                from agent.protocol import get_cancel_registry
+                cancelled = get_cancel_registry().cancel_session(session_id)
+                if cancelled:
+                    logger.info(
+                        f"[WebChannel] Cancelled {cancelled} in-flight request(s) "
+                        f"for deleted session {session_id}"
+                    )
+            except Exception as e:
+                logger.warning(f"[WebChannel] Cancel on delete failed: {e}")
+
             from agent.memory import get_conversation_store
             store = get_conversation_store()
             store.clear_session(session_id)
@@ -5706,6 +6020,12 @@ class SessionDetailHandler:
                 pass
 
             channel = WebChannel()
+            # Drop messages still waiting in the channel queue: processing them
+            # after the delete would recreate the session from scratch.
+            try:
+                channel.cancel_session(session_id)
+            except Exception as e:
+                logger.warning(f"[WebChannel] Failed to drain queue on delete: {e}")
             channel.session_queues.pop(session_id, None)
 
             logger.info(f"[WebChannel] Session deleted: {session_id}")
@@ -5767,6 +6087,32 @@ class SessionTitleHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
 
+class PromptOptimizeHandler:
+    """Optimize a colloquial user prompt into a structured AI-ready instruction."""
+
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            body = json.loads(web.data() or b"{}")
+            user_input = (body.get("input") or "").strip()
+            if not user_input:
+                return json.dumps({"status": "error", "message": "input required"})
+
+            context_messages = body.get("context_messages", None)
+
+            from agent.chat.session_service import optimize_prompt
+            optimized = optimize_prompt(user_input, context_messages)
+
+            return json.dumps(
+                {"status": "success", "optimized": optimized},
+                ensure_ascii=False,
+            )
+        except Exception as e:
+            logger.error(f"[WebChannel] Prompt optimization error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
 class SessionClearContextHandler:
     def POST(self, session_id: str):
         _require_auth()
@@ -5818,9 +6164,20 @@ class HistoryHandler:
                 page=int(params.page),
                 page_size=int(params.page_size),
             )
+            for msg in result.get("messages") or []:
+                if msg.get("role") != "assistant":
+                    continue
+                artifacts = _artifacts_from_steps(msg.get("steps"))
+                if artifacts:
+                    msg["artifacts"] = artifacts
             active_req = WebChannel().active_session_requests.get(session_id)
             active_user = WebChannel().active_session_users.get(session_id)
-            return json.dumps({"status": "success", "active_request_id": active_req, "active_user": active_user, **result}, ensure_ascii=False)
+            return json.dumps({
+                "status": "success",
+                "active_request_id": active_req,
+                "active_user": active_user,
+                **result,
+            }, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] History API error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
@@ -5956,6 +6313,121 @@ class AssetsHandler:
         except Exception as e:
             logger.error(f"Error serving static file: {e}", exc_info=True)
             raise web.notfound()
+
+
+def _workspace_service():
+    from agent.workspace.service import WorkspaceService
+    return WorkspaceService(_get_workspace_root())
+
+
+def _decorate_entry(svc, entry: dict) -> dict:
+    """Attach the URLs the frontend needs to preview or download an entry."""
+    if entry.get("is_dir"):
+        return entry
+    abs_path = entry.get("abs_path") or os.path.join(svc.root, entry["path"])
+    entry["abs_path"] = abs_path
+    entry["raw_url"] = f"/api/file?path={quote(abs_path)}"
+    entry["preview_url"] = _build_preview_url(abs_path)
+    return entry
+
+
+class WorkspaceTreeHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            params = web.input(path='', show_hidden='')
+            svc = _workspace_service()
+            result = svc.list_dir(params.path, show_hidden=params.show_hidden == '1')
+            result["entries"] = [_decorate_entry(svc, e) for e in result["entries"]]
+            return json.dumps({"status": "success", **result}, ensure_ascii=False)
+        except (ValueError, FileNotFoundError) as e:
+            return json.dumps({"status": "error", "message": str(e)})
+        except Exception as e:
+            logger.error(f"[WebChannel] Workspace tree error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class WorkspaceSearchHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            params = web.input(q='', limit='30')
+            try:
+                limit = max(1, min(100, int(params.limit)))
+            except (TypeError, ValueError):
+                limit = 30
+            svc = _workspace_service()
+            result = svc.search(params.q, limit=limit)
+            result["results"] = [_decorate_entry(svc, e) for e in result["results"]]
+            return json.dumps({"status": "success", **result}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Workspace search error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class WorkspaceResolveHandler:
+    """
+    Metadata + preview/raw URLs for one entry, given a relative or absolute path.
+
+    Directories resolve as well (the client then browses instead of previewing),
+    just without the file URLs.
+    """
+
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from agent.protocol.artifact import classify_kind, is_previewable
+            params = web.input(path='')
+            raw_path = (params.path or '').strip()
+            if not raw_path:
+                return json.dumps({"status": "error", "message": "path is required"})
+
+            svc = _workspace_service()
+            if os.path.isabs(os.path.expanduser(raw_path)):
+                abs_path = os.path.realpath(os.path.expanduser(raw_path))
+                if not _is_path_allowed(abs_path):
+                    return json.dumps({"status": "error", "message": "Path not allowed"})
+                is_dir = os.path.isdir(abs_path)
+                if not is_dir and not os.path.isfile(abs_path):
+                    return json.dumps({"status": "error", "message": "File not found"})
+                kind = "directory" if is_dir else classify_kind(abs_path)
+                entry = {
+                    "name": os.path.basename(abs_path),
+                    "path": svc.to_rel(abs_path),
+                    "abs_path": abs_path,
+                    "is_dir": is_dir,
+                    "kind": kind,
+                    "previewable": (not is_dir) and is_previewable(kind),
+                    "size": 0 if is_dir else os.path.getsize(abs_path),
+                    "mtime": os.path.getmtime(abs_path),
+                }
+            else:
+                entry = svc.stat_file(raw_path)
+
+            # A directory has nothing to serve; the client browses into it.
+            if not entry["is_dir"]:
+                entry["raw_url"] = f"/api/file?path={quote(entry['abs_path'])}"
+                entry["preview_url"] = _build_preview_url(entry["abs_path"])
+            return json.dumps({"status": "success", "file": entry}, ensure_ascii=False)
+        except (ValueError, FileNotFoundError) as e:
+            return json.dumps({"status": "error", "message": str(e)})
+        except Exception as e:
+            logger.error(f"[WebChannel] Workspace resolve error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class WorkspaceMetaHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            return json.dumps({"status": "success", **_workspace_service().meta()}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Workspace meta error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
 
 
 class KnowledgeListHandler:

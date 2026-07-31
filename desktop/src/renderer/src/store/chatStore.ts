@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import apiClient from '../api/client'
-import type { ChatMessage, MessageStep, Attachment, StreamEvent, HistoryMessage } from '../types'
+import { useWorkspaceStore } from './workspaceStore'
+import { parseAttachmentMarkers } from '../lib/fileKind'
+import type { Artifact, ChatMessage, MessageStep, Attachment, StreamEvent, HistoryMessage } from '../types'
 
 /**
  * Per-session chat state. Supports parallel sessions: each session keeps its
@@ -107,12 +109,16 @@ function attachmentsFromSteps(steps: MessageStep[]): Attachment[] {
 /** Convert a backend history message into a UI ChatMessage. */
 function historyToMessage(m: HistoryMessage): ChatMessage {
   if (m.role === 'user') {
+    // History persists only the prompt text, so the attachment chips have to be
+    // recovered from the `[label: path]` markers appended to it.
+    const { text, attachments } = parseAttachmentMarkers(m.content)
     return {
       id: uid('user'),
       role: 'user',
-      content: m.content,
+      content: text,
       timestamp: m.created_at,
       userSeq: m._seq,
+      attachments,
     }
   }
 
@@ -132,6 +138,8 @@ function historyToMessage(m: HistoryMessage): ChatMessage {
     .map((s) => ({ ...s }))
   const finalContent = m.content || (lastContentIdx >= 0 ? raw[lastContentIdx].content || '' : '')
   const attachments = attachmentsFromSteps(raw)
+  // Artifacts are rebuilt by the backend, which alone knows the workspace root.
+  const artifacts = m.artifacts || []
 
   return {
     id: uid('assistant'),
@@ -144,6 +152,7 @@ function historyToMessage(m: HistoryMessage): ChatMessage {
     extras: m.extras,
     botSeq: m._seq,
     attachments: attachments.length > 0 ? attachments : undefined,
+    artifacts: artifacts.length > 0 ? artifacts : undefined,
   }
 }
 
@@ -287,6 +296,27 @@ export const useChatStore = create<ChatState>((set, get) => {
           break
         }
 
+        case 'artifact': {
+          if (!data.abs_path) break
+          const artifact: Artifact = {
+            abs_path: data.abs_path,
+            rel_path: data.rel_path || data.file_name || '',
+            file_name: data.file_name || '',
+            kind: data.kind || 'file',
+            previewable: !!data.previewable,
+            size: data.size || 0,
+            raw_url: data.raw_url || '',
+            preview_url: data.preview_url || '',
+          }
+          updateMsg(sid, botId, (m) =>
+            (m.artifacts || []).some((a) => a.abs_path === artifact.abs_path)
+              ? m
+              : { ...m, artifacts: [...(m.artifacts || []), artifact] }
+          )
+          useWorkspaceStore.getState().addTurnArtifact(artifact)
+          break
+        }
+
         case 'cancelled':
           updateMsg(sid, botId, (m) => ({ ...m, isCancelled: true }))
           break
@@ -316,6 +346,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           }
           // The answer is final: free the UI now (don't wait for onerror).
           completeTurn()
+          useWorkspaceStore.getState().maybeAutoOpen()
           // Backend keeps the stream open for a short tail (e.g. TTS audio via
           // voice_attach). Close it ourselves if nothing else arrives.
           if (tailTimer) clearTimeout(tailTimer)
@@ -373,6 +404,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       }
       patchMessages(sid, (msgs) => [...msgs, userMsg, botMsg])
       patchSession(sid, { isStreaming: true })
+      useWorkspaceStore.getState().resetTurnArtifacts()
 
       try {
         const res = await apiClient.sendMessage(sid, text, {

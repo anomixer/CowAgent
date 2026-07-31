@@ -47,7 +47,9 @@ export interface ElectronAPI {
 // Mirrors UpdateStatus in src/main/updater.ts.
 export type UpdateStatus =
   | { state: 'checking' }
-  | { state: 'available'; version: string; notes?: string }
+  // userInitiated: true when the check came from an explicit "check for update"
+  // click; drives whether a dismissed version re-opens the panel (see store).
+  | { state: 'available'; version: string; notes?: string; userInitiated?: boolean }
   | { state: 'not-available' }
   | { state: 'downloading'; percent: number }
   | { state: 'downloaded'; version: string }
@@ -87,6 +89,8 @@ export interface ChatMessage {
   /** Unix seconds. Backend history uses `created_at`; we normalize to `timestamp`. */
   timestamp: number
   attachments?: Attachment[]
+  /** User-facing files the agent wrote during this turn, shown as file cards. */
+  artifacts?: Artifact[]
   /** Ordered steps (thinking / content / tool). Preferred over legacy toolCalls. */
   steps?: MessageStep[]
   /** Legacy live-stream tool events (kept for backward compat during streaming). */
@@ -107,11 +111,67 @@ export interface ChatMessage {
 export interface Attachment {
   file_path: string
   file_name: string
-  file_type: 'image' | 'video' | 'file' | 'directory'
+  /** `workspace_ref` points at an existing workspace file (dragged from the
+   *  file panel or picked with `@`) and is referenced in place, not uploaded. */
+  file_type: 'image' | 'video' | 'file' | 'directory' | 'workspace_ref'
+  /** For `workspace_ref`: whether the reference points at a folder. */
+  is_dir?: boolean
   preview_url?: string
   /** Local absolute path (set for files sent via the `send` tool) so the
    *  desktop client can open them directly with the OS default app. */
   abs_path?: string
+}
+
+// ============================================================
+// Workspace files / artifacts
+// ============================================================
+
+/** Coarse file classes the preview panel knows how to render. */
+export type FileKind =
+  | 'directory'
+  | 'html'
+  | 'markdown'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'pdf'
+  | 'csv'
+  | 'code'
+  | 'office'
+  | 'text'
+  | 'file'
+
+export interface WorkspaceEntry {
+  name: string
+  /** Workspace-relative path. */
+  path: string
+  is_dir: boolean
+  kind: FileKind
+  previewable: boolean
+  size: number
+  mtime: number
+  abs_path?: string
+  raw_url?: string
+  preview_url?: string
+}
+
+export interface WorkspaceTree {
+  path: string
+  root: string
+  entries: WorkspaceEntry[]
+  truncated: boolean
+}
+
+/** A user-facing file the agent wrote during a turn. */
+export interface Artifact {
+  abs_path: string
+  rel_path: string
+  file_name: string
+  kind: FileKind
+  previewable: boolean
+  size: number
+  raw_url: string
+  preview_url: string
 }
 
 /** Live tool event during SSE streaming. */
@@ -135,6 +195,7 @@ export type StreamEventType =
   | 'message_end'
   | 'phase'
   | 'file_to_send'
+  | 'artifact'
   | 'image'
   | 'video'
   | 'file'
@@ -160,6 +221,13 @@ export interface StreamEvent {
   file_type?: string
   web_url?: string
   audio_url?: string
+  /** `artifact` event fields. */
+  rel_path?: string
+  kind?: FileKind
+  previewable?: boolean
+  size?: number
+  raw_url?: string
+  preview_url?: string
   request_id?: string
   timestamp?: number
   user_seq?: number
@@ -197,6 +265,8 @@ export interface HistoryMessage {
   reasoning?: string
   kind?: 'evolution'
   extras?: Record<string, unknown>
+  /** Files written this turn, rebuilt server-side from the write/edit steps. */
+  artifacts?: Artifact[]
   /** Per-message sequence number used by delete/regenerate APIs. */
   _seq?: number
 }

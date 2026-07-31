@@ -1,20 +1,20 @@
 """
-Cloud management client for connecting to the LinkAI control console.
+Cloud management client for connecting to a remote control console.
 
-Handles remote configuration sync, message push, and skill management
-via the LinkAI socket protocol.
+Handles remote configuration sync, message push, and skill management over
+the console's socket protocol.
 
-NOTE: By default, no cloud-related config is enabled. The application runs
-entirely locally without connecting to any remote service. The cloud client
-is only activated when BOTH of the following conditions are met:
+DEFAULT IS LOCAL-ONLY. Out of the box no cloud config is enabled: the
+application runs entirely on this machine and uploads nothing to any remote
+service. The cloud client is only activated when BOTH of these hold:
 
-  1. ``use_linkai`` is set to True in config (checked in app.py before
-     importing this module).
+  1. ``use_linkai`` is True in config (checked in app.py before this module
+     is imported).
   2. ``cloud_deployment_id`` (or env CLOUD_DEPLOYMENT_ID) is non-empty
      (checked in app.py and again in the ``start()`` function below).
 
-If either condition is missing, this module is never loaded and the
-program continues as a purely local application.
+If either is missing this module is never loaded and the program continues
+as a purely local application.
 """
 
 from bridge.context import Context, ContextType
@@ -23,6 +23,8 @@ from common.log import logger
 from linkai import LinkAIClient, PushMsg
 from config import conf, pconf, plugin_config, available_setting, write_plugin_config, get_root, get_weixin_credentials_path
 from plugins import PluginManager
+from contextlib import contextmanager
+from contextvars import ContextVar
 import threading
 import time
 import json
@@ -33,6 +35,7 @@ chat_client: LinkAIClient
 
 
 CHANNEL_ACTIONS = {"channel_create", "channel_update", "channel_delete"}
+
 
 # channelType -> config key mapping for app credentials.
 # secret_key may be "" for single-token channels (e.g. telegram/discord).
@@ -51,6 +54,27 @@ CREDENTIAL_MAP = {
 }
 
 
+# Console user driving the request handled by the current thread. Kept in a
+# ContextVar so outbound calls can read it without passing it through every
+# call signature; background threads start empty.
+_console_user: ContextVar = ContextVar("console_user", default=None)
+
+
+def current_user_id():
+    """Console user for the request being handled, or None."""
+    return _console_user.get()
+
+
+@contextmanager
+def _acting_user(user_id):
+    value = str(user_id).strip() if user_id is not None and str(user_id).strip() else None
+    token = _console_user.set(value)
+    try:
+        yield
+    finally:
+        _console_user.reset(token)
+
+
 class CloudClient(LinkAIClient):
     def __init__(self, api_key: str, channel, host: str = "", port=None):
         super().__init__(api_key, host, port=port)
@@ -62,6 +86,7 @@ class CloudClient(LinkAIClient):
         self._knowledge_service = None
         self._chat_service = None
         self._session_service = None
+        self._workspace_service = None
 
     @property
     def skill_service(self):
@@ -109,6 +134,21 @@ class CloudClient(LinkAIClient):
             except Exception as e:
                 logger.error(f"[CloudClient] Failed to init KnowledgeService: {e}")
         return self._knowledge_service
+
+    @property
+    def workspace_service(self):
+        """Lazy-init WorkspaceService."""
+        if self._workspace_service is None:
+            try:
+                from agent.workspace.service import WorkspaceService
+                from config import conf
+                from common.utils import expand_path
+                workspace_root = expand_path(conf().get("agent_workspace", "~/cow"))
+                self._workspace_service = WorkspaceService(workspace_root)
+                logger.debug("[CloudClient] WorkspaceService initialised")
+            except Exception as e:
+                logger.error(f"[CloudClient] Failed to init WorkspaceService: {e}")
+        return self._workspace_service
 
     @property
     def chat_service(self):
@@ -543,6 +583,30 @@ class CloudClient(LinkAIClient):
         return svc.dispatch(action, payload)
 
     # ------------------------------------------------------------------
+    # workspace callback
+    # ------------------------------------------------------------------
+    def on_workspace(self, data: dict) -> dict:
+        """
+        Handle WORKSPACE messages from the cloud console.
+
+        Read-only browsing of the agent workspace. WorkspaceService keeps every
+        path inside the workspace root and caps response sizes.
+
+        :param data: message data with 'action', 'clientId', 'payload'
+        :return: response dict
+        """
+        action = data.get("action", "")
+        payload = data.get("payload") or {}
+
+        logger.info(f"[CloudClient] on_workspace: action={action}, path={payload.get('path', '')}")
+
+        svc = self.workspace_service
+        if svc is None:
+            return {"action": action, "code": 500, "message": "WorkspaceService not available", "payload": None}
+
+        return svc.dispatch(action, payload)
+
+    # ------------------------------------------------------------------
     # chat callback
     # ------------------------------------------------------------------
     def on_chat(self, data: dict, send_chunk_fn):
@@ -557,28 +621,34 @@ class CloudClient(LinkAIClient):
         query = payload.get("query", "")
         session_id = payload.get("session_id", "cloud_console")
         channel_type = payload.get("channel_type", "")
+        # Console user on whose behalf this runs; usage is attributed to them
+        # instead of the account this deployment is registered under.
+        user_id = payload.get("user_id") or data.get("user_id")
         if not session_id.startswith("session_"):
             session_id = f"session_{session_id}"
-        logger.info(f"[CloudClient] on_chat: session={session_id}, channel={channel_type}, query={query[:80]}")
+        logger.info(f"[CloudClient] on_chat: session={session_id}, channel={channel_type}, "
+                    f"user_id={user_id}, query={query[:80]}")
 
-        # Intercept cow/slash commands before the agent runs
-        try:
-            from plugins import PluginManager
-            mgr = PluginManager()
-            instance = mgr.instances.get("COW_CLI")
-            if instance and hasattr(instance, "execute"):
-                result = instance.execute(query, session_id=session_id)
-                if result is not None:
-                    send_chunk_fn({"chunk_type": "content", "delta": result, "segment_id": 0})
-                    return
-        except Exception as e:
-            logger.warning(f"[CloudClient] cow_cli intercept failed: {e}")
+        with _acting_user(user_id):
+            # Intercept cow/slash commands before the agent runs
+            try:
+                from plugins import PluginManager
+                mgr = PluginManager()
+                instance = mgr.instances.get("COW_CLI")
+                if instance and hasattr(instance, "execute"):
+                    result = instance.execute(query, session_id=session_id)
+                    if result is not None:
+                        send_chunk_fn({"chunk_type": "content", "delta": result, "segment_id": 0})
+                        return
+            except Exception as e:
+                logger.warning(f"[CloudClient] cow_cli intercept failed: {e}")
 
-        svc = self.chat_service
-        if svc is None:
-            raise RuntimeError("ChatService not available")
+            svc = self.chat_service
+            if svc is None:
+                raise RuntimeError("ChatService not available")
 
-        svc.run(query=query, session_id=session_id, channel_type=channel_type, send_chunk_fn=send_chunk_fn)
+            svc.run(query=query, session_id=session_id, channel_type=channel_type,
+                    send_chunk_fn=send_chunk_fn)
 
     # ------------------------------------------------------------------
     # history callback
@@ -610,7 +680,10 @@ class CloudClient(LinkAIClient):
             return self._query_history(payload)
 
         if action in self._SESSION_ACTIONS:
-            return self._dispatch_session(action, payload)
+            # Some actions (e.g. generate_title) call the model, so attribute
+            # them to the console user just like a chat request.
+            with _acting_user(payload.get("user_id")):
+                return self._dispatch_session(action, payload)
 
         return {"action": action, "code": 404, "message": f"unknown action: {action}", "payload": None}
 

@@ -17,6 +17,8 @@ import type {
   KnowledgeGraph,
   KnowledgeAction,
   KnowledgeImportPayload,
+  WorkspaceEntry,
+  WorkspaceTree,
 } from '../types'
 
 interface ApiResult {
@@ -64,6 +66,26 @@ class ApiClient {
         ...(this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {}),
         ...options?.headers,
       },
+    })
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    }
+    return res.json()
+  }
+
+  /** POST multipart form data.
+   *
+   * `request()` can't be reused: it forces a JSON content type, while FormData
+   * must set its own multipart boundary. The auth header still has to be wired
+   * up by hand — the desktop app renders from file://, so it authenticates via
+   * the header, never the cookie.
+   */
+  private async postFormData<T>(path: string, formData: FormData): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+      headers: this.authToken ? { Authorization: `Bearer ${this.authToken}` } : undefined,
     })
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${res.statusText}`)
@@ -152,16 +174,12 @@ class ApiClient {
     file_name: string
     file_type: string
     preview_url: string
+    message?: string
   }> {
     const formData = new FormData()
     formData.append('file', file)
     if (sessionId) formData.append('session_id', sessionId)
-    const res = await fetch(`${this.baseUrl}/upload`, {
-      method: 'POST',
-      body: formData,
-      credentials: 'include',
-    })
-    return res.json()
+    return this.postFormData('/upload', formData)
   }
 
   getFileUrl(previewUrl: string): string {
@@ -173,6 +191,29 @@ class ApiClient {
 
   getServeFileUrl(absPath: string): string {
     return this.withToken(`${this.baseUrl}/api/file?path=${encodeURIComponent(absPath)}`)
+  }
+
+  // ---------------------------------------------------------
+  // Workspace browsing / preview
+  // ---------------------------------------------------------
+
+  async workspaceTree(path = ''): Promise<WorkspaceTree & ApiResult> {
+    return this.request(`/api/workspace/tree?path=${encodeURIComponent(path)}`)
+  }
+
+  async workspaceSearch(query: string, limit = 30): Promise<{ results: WorkspaceEntry[] } & ApiResult> {
+    return this.request(`/api/workspace/search?q=${encodeURIComponent(query)}&limit=${limit}`)
+  }
+
+  async workspaceResolve(path: string): Promise<{ file: WorkspaceEntry } & ApiResult> {
+    return this.request(`/api/workspace/resolve?path=${encodeURIComponent(path)}`)
+  }
+
+  /** Absolute URL for a `/preview/...` path. The signed token in the path is
+   *  what authorizes it, so no auth token is appended. */
+  getPreviewUrl(previewPath: string): string {
+    if (/^https?:\/\//.test(previewPath)) return previewPath
+    return `${this.baseUrl}${previewPath}`
   }
 
   // ---------------------------------------------------------
@@ -274,7 +315,7 @@ class ApiClient {
   }
 
   // Feishu one-click register
-  async getFeishuRegister(): Promise<{ status: string; qrcode_url?: string; qr_image?: string; expire_in?: number; message?: string }> {
+  async getFeishuRegister(): Promise<{ status: string; register_status?: string; qrcode_url?: string; qr_image?: string; expire_in?: number; message?: string }> {
     return this.request('/api/feishu/register')
   }
 
@@ -355,12 +396,7 @@ class ApiClient {
     formData.append('target_category', targetCategory)
     formData.append('conflict_strategy', 'rename')
     files.forEach((file) => formData.append('files', file, file.name))
-    const res = await fetch(`${this.baseUrl}/api/knowledge/import`, {
-      method: 'POST',
-      body: formData,
-      credentials: 'include',
-    })
-    return res.json()
+    return this.postFormData('/api/knowledge/import', formData)
   }
 
   // ---------------------------------------------------------
@@ -407,12 +443,7 @@ class ApiClient {
   async voiceAsr(audio: File | Blob): Promise<{ status: string; text?: string; audio_url?: string; message?: string }> {
     const formData = new FormData()
     formData.append('file', audio, 'recording.webm')
-    const res = await fetch(`${this.baseUrl}/api/voice/asr`, {
-      method: 'POST',
-      body: formData,
-      credentials: 'include',
-    })
-    return res.json()
+    return this.postFormData('/api/voice/asr', formData)
   }
 
   async voiceTts(text: string, sessionId?: string): Promise<{ status: string; audio_url?: string; message?: string }> {

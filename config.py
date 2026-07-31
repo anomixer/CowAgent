@@ -33,7 +33,7 @@ available_setting = {
     "custom_providers": [],
     "proxy": "",  # proxy used by openai
     # chatgpt model; when use_azure_chatgpt is true, this is the Azure model deployment name
-    "model": "gpt-3.5-turbo",  # options: gpt-4o, gpt-4o-mini, gpt-4-turbo, claude-3-sonnet, wenxin, moonshot, qwen-turbo, xunfei, glm-4, minimax, gemini, etc. See common/const.py for the full list
+    "model": "deepseek-v4-flash",  # options: gpt-4o, gpt-4o-mini, gpt-4-turbo, claude-3-sonnet, wenxin, moonshot, qwen-turbo, xunfei, glm-4, minimax, gemini, etc. See common/const.py for the full list
     "bot_type": "",  # optional; for OpenAI-compatible third-party services set "openai" or "custom" (in custom mode switching model won't auto-switch bot_type). See common/const.py for bot names; inferred from model name if left empty
     "use_azure_chatgpt": False,  # whether to use Azure chatgpt
     "azure_deployment_id": "",  # azure model deployment name
@@ -257,9 +257,9 @@ available_setting = {
     "mcp_oauth_redirect_base": "",  # Base URL for MCP OAuth callback (e.g. http://your-ip:9899); empty uses local web console
     "agent": True,  # whether to enable Agent mode
     "agent_workspace": "~/cow",  # agent workspace path, used to store skills, memory, etc.
-    "agent_max_context_tokens": 50000,  # max context tokens in Agent mode
-    "agent_max_context_turns": 20,  # max context memory turns in Agent mode
-    "agent_max_steps": 20,  # max decision steps per run in Agent mode
+    "agent_max_context_tokens": 64000,  # max context tokens in Agent mode
+    "agent_max_context_turns": 30,  # max context memory turns in Agent mode
+    "agent_max_steps": 30,  # max decision steps per run in Agent mode
     "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models
     "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
     "knowledge": True,  # whether to enable the knowledge base feature
@@ -403,11 +403,7 @@ def load_config():
     config_path = os.path.join(get_data_root(), "config.json")
     if not os.path.exists(config_path):
         logger.info("config file not found, falling back to config-template.json")
-        # Resolve the template via get_resource_root() so it works both from
-        # source and from a frozen (PyInstaller) bundle, where the template
-        # ships inside the bundle (sys._MEIPASS) and CWD may differ.
-        template_path = os.path.join(get_resource_root(), "config-template.json")
-        config_path = template_path if os.path.exists(template_path) else "./config-template.json"
+        config_path = get_config_template_path()
 
     config_str = read_file(config_path)
     logger.debug("[INIT] config str: {}".format(drag_sensitive(config_str)))
@@ -665,6 +661,26 @@ def get_resource_root():
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return sys._MEIPASS
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_config_template_path():
+    """Path to the bundled config-template.json.
+
+    Resolved via get_resource_root() so it works both from source and from a
+    frozen (PyInstaller) bundle, where the template ships inside sys._MEIPASS
+    and CWD may differ.
+    """
+    template_path = os.path.join(get_resource_root(), "config-template.json")
+    return template_path if os.path.exists(template_path) else "./config-template.json"
+
+
+def read_config_template():
+    """Load config-template.json as a dict; returns {} when unreadable."""
+    try:
+        return json.loads(read_file(get_config_template_path()))
+    except Exception as e:
+        logger.warning("[Config] failed to read config template: {}".format(e))
+        return {}
 
 
 def get_data_root():

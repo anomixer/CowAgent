@@ -52,7 +52,7 @@ def add_openai_compatible_support(bot_instance):
             return {
                 'api_key': conf().get("open_ai_api_key"),
                 'api_base': conf().get("open_ai_api_base"),
-                'model': conf().get("model", "gpt-3.5-turbo"),
+                'model': conf().get("model") or const.DEFAULT_MODEL,
                 'default_temperature': conf().get("temperature", 0.9),
                 'default_top_p': conf().get("top_p", 1.0),
                 'default_frequency_penalty': conf().get("frequency_penalty", 0.0),
@@ -88,7 +88,7 @@ class AgentLLMModel(LLMModel):
     ]
 
     def __init__(self, bridge: Bridge, bot_type: str = "chat"):
-        super().__init__(model=conf().get("model", const.GPT_41))
+        super().__init__(model=conf().get("model") or const.DEFAULT_MODEL)
         self.bridge = bridge
         self.bot_type = bot_type
         self._bot = None
@@ -96,7 +96,7 @@ class AgentLLMModel(LLMModel):
 
     @property
     def model(self):
-        return conf().get("model", const.GPT_41)
+        return conf().get("model") or const.DEFAULT_MODEL
 
     @model.setter
     def model(self, value):
@@ -337,7 +337,7 @@ class AgentBridge:
                 try:
                     tool = tool_manager.create_tool(tool_name)
                     if tool:
-                        if workspace_dir and hasattr(tool, 'cwd'):
+                        if workspace_dir:
                             tool.cwd = workspace_dir
                         tools.append(tool)
                 except Exception as e:
@@ -431,6 +431,10 @@ class AgentBridge:
         as the database. The operation is a no-op when the agent has not been
         instantiated yet for the session.
 
+        Tool blocks are stripped exactly as on session restore. Deleting a
+        message can orphan a tool_use from its tool_result, and replaying that
+        pair would make the provider reject the next request.
+
         Returns:
             Number of messages now held in the agent's memory. Returns -1 if
             the agent does not exist or has no compatible ``messages`` attr.
@@ -451,6 +455,7 @@ class AgentBridge:
                 f"[AgentBridge] Failed to load messages for sync (session={session_id}): {e}"
             )
             return -1
+        remaining = AgentInitializer._filter_text_only_messages(remaining)
         with agent.messages_lock:
             agent.messages.clear()
             for msg in remaining:
@@ -628,7 +633,11 @@ class AgentBridge:
                 if pre_persisted and new_messages and new_messages[0].get("role") == "user":
                     new_messages = new_messages[1:]
                 if new_messages:
-                    self._persist_messages(session_id, list(new_messages), channel_type, user_id)
+                    self._persist_messages(
+                        session_id, list(new_messages), channel_type,
+                        user_id=user_id,
+                        create_if_missing=not pre_persisted
+                    )
             
             # Record this user turn for the self-evolution idle trigger. Skip
             # scheduler-injected / scheduled-task sessions so internal runs do
@@ -671,6 +680,9 @@ class AgentBridge:
             
         except Exception as e:
             logger.error(f"Agent reply error: {e}")
+            # The in-memory context may have been reset to recover from a format
+            # error or overflow, but the stored history is deliberately left
+            # intact: it is irreplaceable and is never reloaded with tool blocks.
             # Release cancel token on error path too (idempotent).
             if cancel_event is not None and (request_id or session_id):
                 try:
@@ -881,11 +893,17 @@ class AgentBridge:
     def _persist_messages(
         self, session_id: str, new_messages: list, channel_type: str = "",
         user_id: int = 0,
+        create_if_missing: bool = True,
     ) -> None:
         """
         Persist new messages to the conversation store after each agent run.
 
         Failures are logged but never propagate — they must not interrupt replies.
+
+        ``create_if_missing=False`` is used once the user turn is known to be
+        stored already: a missing session row then means the user deleted the
+        session while the reply was still running, so the reply is dropped
+        instead of resurrecting the session without its question.
         """
         if not new_messages:
             return
@@ -907,10 +925,16 @@ class AgentBridge:
 
         try:
             from agent.memory import get_conversation_store
-            get_conversation_store().append_messages(
+            stored = get_conversation_store().append_messages(
                 session_id, messages_to_store, channel_type=channel_type,
                 user_id=user_id,
+                create_if_missing=create_if_missing
             )
+            if not stored and not create_if_missing:
+                logger.info(
+                    f"[AgentBridge] Session {session_id} was deleted mid-run, "
+                    f"dropped {len(messages_to_store)} reply message(s)"
+                )
         except Exception as e:
             logger.warning(
                 f"[AgentBridge] Failed to persist messages for session={session_id}: {e}"
@@ -1135,8 +1159,9 @@ class AgentBridge:
 
     def clear_session(self, session_id: str):
         """
-        Clear a specific session's agent and conversation history
-        
+        Drop the cached agent for a session. Persisted history is untouched;
+        the next request rebuilds the agent and restores from the store.
+
         Args:
             session_id: Session identifier to clear
         """

@@ -413,6 +413,81 @@ function Install-Dependencies {
     } else {
         Write-Warn ((T "cow CLI 不在 PATH 中，你可以使用" "cow CLI not in PATH. You can use") + ": $PythonCmd -m cli.cli")
     }
+
+    # Optional: bundle ripgrep for a faster search_files tool. Never fatal.
+    Install-Ripgrep
+}
+
+# ── install ripgrep (best-effort) ────────────────────────────────
+# Bundle a fast search backend for the search_files tool. This is OPTIONAL: the search_files
+# tool falls back to PowerShell / pure-Python when rg is absent, so ANY failure
+# here (no network, download error, unzip error) is swallowed with a warning
+# and never blocks the install. We drop rg.exe into the Python Scripts dir,
+# which the installer already puts on PATH, so shutil.which("rg") finds it.
+function Install-Ripgrep {
+    $RgVersion = "15.2.0"
+    try {
+        # Already available on PATH? Nothing to do.
+        if (Get-Command rg -ErrorAction SilentlyContinue) {
+            Write-Cow (T "已检测到 ripgrep (rg)，跳过安装" "ripgrep (rg) already available, skipping")
+            return
+        }
+
+        # Target the Python Scripts dir (already on PATH from Install-Dependencies).
+        $scriptsDir = & $PythonCmd -c "import sysconfig; print(sysconfig.get_path('scripts'))" 2>$null
+        if (-not $scriptsDir -or -not (Test-Path $scriptsDir)) {
+            Write-Warn (T "跳过 ripgrep 安装（找不到脚本目录），将使用内置兜底搜索" "Skipping ripgrep install (no scripts dir); built-in fallback search will be used")
+            return
+        }
+        $rgTarget = Join-Path $scriptsDir "rg.exe"
+        if (Test-Path $rgTarget) { return }
+
+        Write-Cow (T "正在安装 ripgrep（加速文件搜索）..." "Installing ripgrep (faster file search)...")
+
+        $asset = "ripgrep-$RgVersion-x86_64-pc-windows-msvc.zip"
+        # GitHub first, then the jsDelivr/Gitee-style mirror for zh networks.
+        $urls = @(
+            "https://github.com/BurntSushi/ripgrep/releases/download/$RgVersion/$asset",
+            "https://cdn.link-ai.tech/code/cow/vendor/$asset"
+        )
+
+        $tmpZip = Join-Path $env:TEMP "cow-$asset"
+        $tmpDir = Join-Path $env:TEMP "cow-rg-$([guid]::NewGuid().ToString('N'))"
+        $downloaded = $false
+        foreach ($u in $urls) {
+            try {
+                $oldPP = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
+                Invoke-WebRequest -Uri $u -OutFile $tmpZip -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+                $ProgressPreference = $oldPP
+                $downloaded = $true
+                break
+            } catch {
+                $ProgressPreference = $oldPP
+            }
+        }
+        if (-not $downloaded) {
+            Write-Warn (T "ripgrep 下载失败，将使用内置兜底搜索（不影响使用）" "ripgrep download failed; built-in fallback search will be used (no impact)")
+            return
+        }
+
+        # Extract and pull just rg.exe out of the archive's nested folder.
+        New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+        Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
+        $rgExe = Get-ChildItem -Path $tmpDir -Recurse -Filter "rg.exe" | Select-Object -First 1
+        if ($rgExe) {
+            Copy-Item $rgExe.FullName $rgTarget -Force
+            Write-Cow ((T "ripgrep 安装成功" "ripgrep installed") + ": $rgTarget")
+        } else {
+            Write-Warn (T "ripgrep 解压异常，将使用内置兜底搜索" "ripgrep extraction failed; built-in fallback search will be used")
+        }
+
+        # Best-effort cleanup of temp files.
+        try { Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue } catch {}
+        try { Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    } catch {
+        # Never let an rg install problem break the main install flow.
+        Write-Warn (T "ripgrep 安装跳过（不影响使用），将使用内置兜底搜索" "ripgrep install skipped (no impact); built-in fallback search will be used")
+    }
 }
 
 # Add the Python Scripts dir to PATH for this session and persist it to the
@@ -454,7 +529,7 @@ function Add-ScriptsDirToPath {
 # Each entry: Provider / default model name / config key field / optional base.
 $ModelChoices = @{
     1  = @{ Provider = "DeepSeek";                Default = "deepseek-v4-flash";                   Field = "deepseek_api_key" }
-    2  = @{ Provider = "Claude";                  Default = "claude-opus-4-8";                     Field = "claude_api_key";    BaseField = "claude_api_base" }
+    2  = @{ Provider = "Claude";                  Default = "claude-opus-5";                       Field = "claude_api_key";    BaseField = "claude_api_base" }
     3  = @{ Provider = "Gemini";                  Default = "gemini-3.1-pro-preview";              Field = "gemini_api_key";    BaseField = "gemini_api_base" }
     4  = @{ Provider = "OpenAI";                  Default = "gpt-5.6-luna";                        Field = "open_ai_api_key";   BaseField = "open_ai_api_base" }
     5  = @{ Provider = "MiniMax";                 Default = "MiniMax-M3";                          Field = "minimax_api_key" }
@@ -471,7 +546,7 @@ function Select-Model {
     $title = T "选择 AI 模型" "Select AI Model"
     $options = @(
         "DeepSeek (deepseek-v4-flash, deepseek-v4-pro, etc.)",
-        "Claude (claude-opus-4-8, claude-fable-5, etc.)",
+        "Claude (claude-opus-5, claude-sonnet-5, etc.)",
         "Gemini (gemini-3.5-flash, gemini-3.1-pro-preview, etc.)",
         "OpenAI (gpt-5.6-luna, etc.)",
         "MiniMax (MiniMax-M3, etc.)",

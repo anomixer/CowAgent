@@ -147,6 +147,16 @@ function createWindow() {
     return { action: 'deny' }
   })
 
+  // Last-resort backstop for a stray file drop: Chromium would navigate the
+  // renderer to the dropped file and the UI would be gone until restart.
+  // Renderer reloads keep the same URL, so they are unaffected.
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    if (url.startsWith('file:') && url !== mainWindow?.webContents.getURL()) {
+      console.warn(`[Electron] Blocked navigation to dropped file: ${url}`)
+      e.preventDefault()
+    }
+  })
+
   // Close-to-tray: hide the window instead of destroying it, so the tray's
   // "Show" can bring it back. Only a real Quit (menu/tray/Cmd+Q) destroys it.
   mainWindow.on('close', (e) => {
@@ -250,7 +260,9 @@ function setupIPC() {
   // the China CDN mirror (zh) or R2 (others).
   ipcMain.handle('update-check', (_event, lang?: string) => {
     setUpdateLanguage(lang)
-    checkForUpdates()
+    // This channel is only hit by an explicit "check for update" click, so the
+    // panel should re-open even if the version was previously dismissed.
+    checkForUpdates(true)
   })
   ipcMain.handle('update-download', (_event, lang?: string) => {
     setUpdateLanguage(lang)
@@ -329,8 +341,10 @@ app.whenReady().then(async () => {
 
   // Wire auto-update: a first silent check a few seconds after launch (so it
   // doesn't compete with backend startup), then poll every 4 hours so a
-  // long-running window still surfaces new releases. autoDownload is off, so a
-  // found update only lights the badge + opens the panel for the user to opt in.
+  // long-running window still surfaces new releases. Both are automatic checks
+  // (userInitiated=false): the panel auto-opens once per new version, and once
+  // the user dismisses it these polls only keep the footer/menu dot lit rather
+  // than re-popping the panel. autoDownload is off, so any update is opt-in.
   initUpdater(() => mainWindow)
   setTimeout(() => checkForUpdates(), 5000)
   const UPDATE_POLL_MS = 4 * 60 * 60 * 1000

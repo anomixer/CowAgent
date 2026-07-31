@@ -7,7 +7,7 @@ Design:
 - Pruning: age-based only (sessions not updated within N days are deleted)
 - Thread-safe via a single in-process lock
 
-Storage path: ~/cow/sessions/conversations.db
+Storage path: ~/cow/memory/long-term/index.db (shared with the memory index)
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     channel_type      TEXT    NOT NULL DEFAULT '',
     title             TEXT    NOT NULL DEFAULT '',
     context_start_seq INTEGER NOT NULL DEFAULT 0,
+    user_id           INTEGER NOT NULL DEFAULT 0,
     created_at        INTEGER NOT NULL,
     last_active       INTEGER NOT NULL,
     msg_count         INTEGER NOT NULL DEFAULT 0
@@ -351,6 +352,7 @@ class ConversationStore:
     def __init__(self, db_path: Path | str):
         self._db_path = Path(db_path) if isinstance(db_path, str) else db_path
         self._lock = threading.RLock()  # Use RLock to allow reentrant locking
+        self._schema_identity: tuple = ()
         self._init_db()
 
     # ------------------------------------------------------------------
@@ -440,7 +442,8 @@ class ConversationStore:
         messages: List[Dict[str, Any]],
         channel_type: str = "",
         user_id: int = 0,
-    ) -> None:
+        create_if_missing: bool = True,
+    ) -> bool:
         """
         Append new messages to a session's history.
 
@@ -453,15 +456,31 @@ class ConversationStore:
             channel_type: Source channel (e.g. "feishu", "web", "wechat").
                           Only written on session creation; ignored on update.
             user_id: Owner user ID (0 = unowned / legacy mode).
+            create_if_missing: When False, do nothing if the session row is
+                          gone. Callers that already stored the user turn use
+                          this so a session deleted mid-run is not recreated
+                          from the reply alone.
+
+        Returns:
+            True when the messages were written, False when the session was
+            missing and ``create_if_missing`` is False.
         """
         if not messages:
-            return
+            return False
 
         now = int(time.time())
         with self._lock:
             conn = self._connect()
             try:
                 with conn:
+                    if not create_if_missing:
+                        exists = conn.execute(
+                            "SELECT 1 FROM sessions WHERE session_id = ?",
+                            (session_id,),
+                        ).fetchone()
+                        if not exists:
+                            return False
+
                     # INSERT OR IGNORE creates the row on first visit;
                     # the UPDATE always refreshes last_active.
                     # Avoids ON CONFLICT...DO UPDATE (requires SQLite >= 3.24).
@@ -537,6 +556,7 @@ class ConversationStore:
                                         (title, session_id),
                                     )
                                     break
+                    return True
             finally:
                 conn.close()
 
@@ -1189,13 +1209,37 @@ class ConversationStore:
 
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = self._connect()
+        conn = self._raw_connect()
         try:
             conn.executescript(_DDL)
             conn.commit()
             self._migrate(conn)
         finally:
             conn.close()
+        self._schema_identity = self._db_identity()
+
+    def _db_identity(self) -> tuple:
+        """Identify the physical file behind _db_path, or () when it is missing."""
+        try:
+            st = self._db_path.stat()
+        except OSError:
+            return ()
+        return (st.st_dev, st.st_ino)
+
+    def _ensure_schema(self) -> None:
+        """Recreate the conversation tables when the shared DB file was swapped.
+
+        The long-term memory index lives in the same file and may quarantine and
+        replace it on corruption. Without this check, every later query would
+        keep failing with "no such table: sessions" for the whole process
+        lifetime, so new messages would silently stop being persisted.
+        """
+        if self._db_identity() == self._schema_identity:
+            return
+        logger.warning(
+            "[ConversationStore] Shared DB file was replaced; recreating conversation schema"
+        )
+        self._init_db()
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         """Apply incremental schema migrations on existing databases."""
@@ -1236,8 +1280,20 @@ class ConversationStore:
                 logger.info("[ConversationStore] Migrated: added messages.extras column")
             except Exception as e:
                 logger.warning(f"[ConversationStore] Migration (extras) failed: {e}")
+        if "user_id" not in cols:
+            try:
+                conn.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+                conn.commit()
+                logger.info("[ConversationStore] Migrated: added user_id column")
+            except Exception as e:
+                logger.warning(f"[ConversationStore] Migration (user_id) failed: {e}")
 
     def _connect(self) -> sqlite3.Connection:
+        with self._lock:
+            self._ensure_schema()
+        return self._raw_connect()
+
+    def _raw_connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path), timeout=10)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")

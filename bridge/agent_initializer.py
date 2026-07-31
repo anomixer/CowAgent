@@ -426,11 +426,15 @@ class AgentInitializer:
         memory_tools = []
         
         try:
-            from agent.memory import MemoryManager, MemoryConfig
+            from agent.memory import MemoryManager, MemoryConfig, set_global_memory_config
             from agent.tools import MemorySearchTool, MemoryGetTool
             from config import conf
 
             memory_config = MemoryConfig(workspace_root=workspace_root)
+            # Keeps ConversationStore/evolution on the same workspace as this
+            # agent even if the singleton was built before the config was
+            # loaded (see set_global_memory_config's docstring).
+            set_global_memory_config(memory_config)
 
             embedding_provider = self._init_embedding_provider(
                 memory_config, session_id=session_id
@@ -527,13 +531,32 @@ class AgentInitializer:
                     # config.json's `tools.<name>` section) instead of replacing
                     # it, otherwise per-tool user configs (e.g. browser.cdp_endpoint)
                     # would be silently dropped.
-                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'send', 'browser']:
+                    if tool_name in ['read', 'write', 'edit', 'bash', 'search_files', 'ls', 'web_fetch', 'send', 'browser']:
                         merged_config = dict(getattr(tool, 'config', None) or {})
                         merged_config.update(file_config)
                         tool.config = merged_config
                         tool.cwd = merged_config.get("cwd", getattr(tool, 'cwd', None))
+                        if hasattr(tool, 'timeout'):
+                            # create_tool() builds the instance before tool_configs is
+                            # merged in, so a config-derived .timeout is frozen at its
+                            # __init__-time default; re-derive it here like cwd above,
+                            # for any tool that has one (not name-gated to grep,
+                            # so a future tool with a .timeout attribute isn't missed).
+                            tool.timeout = merged_config.get("timeout", getattr(tool, 'timeout', None))
                         if 'memory_manager' in merged_config:
                             tool.memory_manager = merged_config['memory_manager']
+                        # Re-derive config-derived attributes that were set during
+                        # __init__ (before tool.config was populated from user config).
+                        # bash is the only tool with such attributes (default_timeout,
+                        # safety_mode); the general pattern works for any tool.
+                        if hasattr(tool, 'default_timeout'):
+                            tool.default_timeout = merged_config.get(
+                                "timeout", tool.default_timeout
+                            )
+                        if hasattr(tool, 'safety_mode'):
+                            tool.safety_mode = merged_config.get(
+                                "safety_mode", tool.safety_mode
+                            )
                     tools.append(tool)
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to load tool {tool_name}: {e}")

@@ -1,10 +1,12 @@
 import React, { useState } from 'react'
-import { Copy, Check, RefreshCw, Trash2, File as FileIcon, Sprout } from 'lucide-react'
+import { Copy, Check, RefreshCw, Trash2, File as FileIcon, Folder, Sprout } from 'lucide-react'
 import type { ChatMessage } from '../types'
 import { t } from '../i18n'
 import apiClient from '../api/client'
+import { useWorkspaceStore } from '../store/workspaceStore'
 import Markdown from './Markdown'
 import MessageSteps, { ThinkingStep } from './MessageSteps'
+import FileCard from './FileCard'
 import { product } from '@product'
 
 interface MessageBubbleProps {
@@ -43,6 +45,7 @@ const HoverAction: React.FC<{ onClick: () => void; title: string; danger?: boole
 const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRegenerate, onEdit, onDelete, onMediaLoad }) => {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
+  const preview = useWorkspaceStore((s) => s.preview)
 
   const copy = () => {
     navigator.clipboard.writeText(message.content)
@@ -73,6 +76,16 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRegenerate, on
                   alt={att.file_name}
                   className="max-w-[180px] max-h-[150px] rounded-xl object-cover border border-default"
                 />
+              ) : att.file_type === 'workspace_ref' ? (
+                <div
+                  key={i}
+                  title={att.file_path}
+                  onClick={() => preview(att.file_path)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 hover:bg-surface-3 rounded-xl text-xs text-content-secondary cursor-pointer transition-colors"
+                >
+                  {att.is_dir ? <Folder size={13} /> : <FileIcon size={13} />}
+                  {att.file_name}
+                </div>
               ) : (
                 <div key={i} className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 rounded-xl text-xs text-content-secondary">
                   <FileIcon size={13} />
@@ -142,6 +155,15 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRegenerate, on
 
           {/* Final answer */}
           {message.content && <Markdown content={message.content} />}
+
+          {/* Files the agent wrote this turn — click to open the preview panel. */}
+          {message.artifacts && message.artifacts.length > 0 && (
+            <div className="flex flex-col items-start">
+              {message.artifacts.map((a) => (
+                <FileCard key={a.abs_path || a.rel_path} meta={a} />
+              ))}
+            </div>
+          )}
 
           {/* Media attachments sent via the `send` tool (images / files). */}
           {message.attachments && message.attachments.length > 0 && (
