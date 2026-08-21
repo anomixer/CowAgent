@@ -257,6 +257,17 @@ available_setting = {
     "mcp_oauth_redirect_base": "",  # Base URL for MCP OAuth callback (e.g. http://your-ip:9899); empty uses local web console
     "agent": True,  # whether to enable Agent mode
     "agent_workspace": "~/cow",  # agent workspace path, used to store skills, memory, etc.
+    # Optional native multi-agent registry. When empty or omitted, CowAgent
+    # synthesizes one "default" agent from agent_workspace and behaves exactly
+    # as before. Each configured workspace is a complete CowAgent workspace.
+    "agents": [],
+    # Agent handling conversations with no explicit binding. Defaults to the
+    # first configured agent when unset.
+    "default_agent_id": "",
+    # Routes inbound conversations to an agent. Each entry needs channel_type
+    # and agent_id; add conversation_id to bind one chat rather than the whole
+    # channel. Unbound conversations go to default_agent_id.
+    "agent_bindings": [],
     "agent_max_context_tokens": 64000,  # max context tokens in Agent mode
     "agent_max_context_turns": 30,  # max context memory turns in Agent mode
     "agent_max_steps": 30,  # max decision steps per run in Agent mode
@@ -452,6 +463,15 @@ def load_config():
         logger.setLevel(logging.DEBUG)
         logger.debug("[INIT] set log level to DEBUG")
 
+    # The registry caches profiles on first access. Anything that resolved a
+    # path before this point cached the pre-config workspace, so drop it.
+    # Rebuilding here also surfaces an invalid "agents" block at startup
+    # rather than on the first inbound message.
+    from agent.registry import get_agent_registry, set_agent_registry
+
+    set_agent_registry(None)
+    agent_registry = get_agent_registry()
+
     # Resolve the global UI language as early as possible so that every
     # downstream layer (logs, CLI, agent prompts, channel replies) shares it.
     resolved_lang = i18n.resolve_language(config.get("cow_lang", "auto"))
@@ -468,8 +488,16 @@ def load_config():
 
     # Agent mode info
     if config.get("agent", True):
-        workspace = config.get("agent_workspace", "~/cow")
-        logger.info("[INIT] Mode: Agent (workspace: {})".format(workspace))
+        profiles = agent_registry.list(include_disabled=False)
+        if len(profiles) == 1:
+            logger.info("[INIT] Mode: Agent (workspace: {})".format(profiles[0].workspace))
+        else:
+            logger.info("[INIT] Mode: Agent ({} agents)".format(len(profiles)))
+            for profile in profiles:
+                marker = " (default)" if profile.id == agent_registry.default_agent_id else ""
+                logger.info(
+                    "[INIT]   - {}{}: {}".format(profile.id, marker, profile.workspace)
+                )
     else:
         logger.info("[INIT] Mode: Chat (set \"agent\":true in config.json to enable Agent mode)")
 

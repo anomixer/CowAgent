@@ -308,12 +308,28 @@ def _warmup_mcp_tools():
     (npx / uvx etc.) finish initializing before the first user message
     arrives. Returns immediately — the actual work happens on a daemon
     thread inside ToolManager. Safe to call when MCP is not configured.
+
+    Warms every enabled Agent: this runs before any routing has happened, so
+    without the loop only the default Agent's servers would be ready and the
+    rest would boot on their first message instead.
     """
     try:
+        from agent.registry import get_agent_registry
         from agent.tools import ToolManager
-        ToolManager()._load_mcp_tools()
+        from common.runtime_identity import identity_scope
+
+        profiles = get_agent_registry().list(include_disabled=False)
     except Exception as e:
         logger.warning(f"[App] MCP warmup failed (non-fatal): {e}")
+        return
+
+    for profile in profiles:
+        # Per Agent, so one broken mcp.json does not stop the others warming.
+        try:
+            with identity_scope(agent_id=profile.id):
+                ToolManager()._load_mcp_tools()
+        except Exception as e:
+            logger.warning(f"[App] MCP warmup failed for '{profile.id}' (non-fatal): {e}")
 
 
 def _warmup_scheduler():
@@ -334,8 +350,9 @@ def _warn_if_legacy_workspace_data_exists():
     empty even though old data still exists, with no indication why.
     """
     try:
+        from common.state_dir import state_root_str
         from common.utils import expand_path
-        workspace_root = expand_path(conf().get("agent_workspace", "~/cow"))
+        workspace_root = state_root_str()
         legacy_root = expand_path("~/cow")
         # samefile checks filesystem identity, so case-insensitive filesystems
         # (default on Windows and macOS) are handled correctly - normcase
@@ -362,34 +379,41 @@ def _warn_if_legacy_workspace_data_exists():
 
 
 def _sync_builtin_skills():
-    """Sync builtin skills from project skills/ to workspace skills/ on startup."""
+    """Sync builtin skills from project skills/ into every enabled Agent's
+    workspace, so a newly configured Agent is not born without them."""
     import shutil
     try:
-        from common.utils import expand_path
-        workspace = expand_path(conf().get("agent_workspace", "~/cow"))
+        from agent.registry import get_agent_registry
+        from common.runtime_identity import RuntimeIdentity
+        from common.state_dir import skills_dir
+
         project_root = os.path.dirname(os.path.abspath(__file__))
         builtin_dir = os.path.join(project_root, "skills")
-        custom_dir = os.path.join(workspace, "skills")
-
         if not os.path.isdir(builtin_dir):
             return
 
-        os.makedirs(custom_dir, exist_ok=True)
-        synced = 0
-        for name in os.listdir(builtin_dir):
-            src = os.path.join(builtin_dir, name)
-            if not os.path.isdir(src) or not os.path.isfile(os.path.join(src, "SKILL.md")):
-                continue
-            dst = os.path.join(custom_dir, name)
-            try:
-                if os.path.isdir(dst):
-                    shutil.rmtree(dst)
-                shutil.copytree(src, dst)
-                synced += 1
-            except Exception as e:
-                logger.warning(f"[App] Failed to sync builtin skill '{name}': {e}")
-        if synced:
-            logger.info(f"[App] Synced {synced} builtin skill(s) to workspace")
+        for profile in get_agent_registry().list(include_disabled=False):
+            custom_dir = str(
+                skills_dir(RuntimeIdentity(agent_id=profile.id), ensure=True)
+            )
+            synced = 0
+            for name in os.listdir(builtin_dir):
+                src = os.path.join(builtin_dir, name)
+                if not os.path.isdir(src) or not os.path.isfile(os.path.join(src, "SKILL.md")):
+                    continue
+                dst = os.path.join(custom_dir, name)
+                try:
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    shutil.copytree(src, dst)
+                    synced += 1
+                except Exception as e:
+                    logger.warning(f"[App] Failed to sync builtin skill '{name}': {e}")
+            if synced:
+                logger.info(
+                    f"[App] Synced {synced} builtin skill(s) to workspace of "
+                    f"agent '{profile.id}'"
+                )
     except Exception as e:
         logger.warning(f"[App] Builtin skills sync failed: {e}")
 

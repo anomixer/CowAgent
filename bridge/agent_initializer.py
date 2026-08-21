@@ -38,8 +38,12 @@ class AgentInitializer:
         self.bridge = bridge
         self.agent_bridge = agent_bridge
     
-    def initialize_agent(self, session_id: Optional[str] = None,
-                         user_id: Optional[int] = None) -> Agent:
+    def initialize_agent(
+        self,
+        session_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> Agent:
         """
         Initialize agent for a session
 
@@ -49,20 +53,22 @@ class AgentInitializer:
 
         Args:
             session_id: Session ID (None for default agent)
-            user_id:    User ID for multi-user persona/team injection.
-                        When None (legacy / default), no user context is added.
+            agent_id: Agent profile identifier. Omit for the configured default.
+            user_id: User ID for multi-user persona/team injection.
+                     When None (legacy / default), no user context is added.
 
         Returns:
             Initialized agent instance
         """
-        from config import conf
-        
-        # Get workspace from config
-        workspace_root = expand_path(conf().get("agent_workspace", "~/cow"))
-        from channel.web.multiuser.auth import is_multiuser_enabled
-        if is_multiuser_enabled() and user_id is not None:
-            workspace_root = os.path.join(workspace_root, "users", str(user_id))
+        from agent.registry import get_agent_registry
+        from common.runtime_identity import current_identity
 
+        # An explicit agent_id wins (admin, warmup, tests); otherwise follow
+        # the identity routing established for this message.
+        identity = current_identity()
+        profile = get_agent_registry().get(agent_id or identity.agent_id)
+        workspace_root = profile.workspace
+        
         # Migrate API keys
         self._migrate_config_to_env(workspace_root)
         
@@ -83,7 +89,9 @@ class AgentInitializer:
         tools = self._load_tools(workspace_root, memory_manager, memory_tools, session_id)
         
         # Initialize scheduler if needed
-        self._initialize_scheduler(tools, session_id)
+        self._initialize_scheduler(
+            tools, session_id, workspace_root=workspace_root, agent_id=profile.id
+        )
         
         # Load context files
         context_files = load_context_files(workspace_root)
@@ -226,8 +234,9 @@ class AgentInitializer:
         # Build system prompt
         prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")
         runtime_info = self._get_runtime_info(workspace_root)
-
-        # Assemble system prompt
+        runtime_info["agent_id"] = profile.id
+        runtime_info["agent_name"] = profile.name
+        
         system_prompt = prompt_builder.build(
             tools=tools,
             context_files=context_files,
@@ -265,6 +274,10 @@ class AgentInitializer:
             if hasattr(agent, 'model') and agent.model:
                 memory_manager.flush_manager.llm_model = agent.model
 
+        agent.agent_id = profile.id
+        agent.agent_profile = profile
+        agent.workspace_dir = workspace_root
+
         # Restore persisted conversation history for this session
         if session_id:
             self._restore_conversation_history(agent, session_id)
@@ -294,7 +307,7 @@ class AgentInitializer:
 
         try:
             from agent.memory import get_conversation_store
-            store = get_conversation_store()
+            store = get_conversation_store(agent.workspace_dir)
             max_turns = conf().get("agent_max_context_turns", 20)
             # Scheduler tasks run on a stable isolated session per task and
             # can fire many times a day; a smaller restore window keeps prompt
@@ -426,15 +439,15 @@ class AgentInitializer:
         memory_tools = []
         
         try:
-            from agent.memory import MemoryManager, MemoryConfig, set_global_memory_config
+            from agent.memory import MemoryManager, MemoryConfig, register_memory_config
             from agent.tools import MemorySearchTool, MemoryGetTool
             from config import conf
 
             memory_config = MemoryConfig(workspace_root=workspace_root)
-            # Keeps ConversationStore/evolution on the same workspace as this
-            # agent even if the singleton was built before the config was
-            # loaded (see set_global_memory_config's docstring).
-            set_global_memory_config(memory_config)
+            # Publish per workspace, not process-wide: this runs once per Agent,
+            # and a single global slot would leave the last one to initialize
+            # owning where every Agent's memory is written.
+            register_memory_config(memory_config)
 
             embedding_provider = self._init_embedding_provider(
                 memory_config, session_id=session_id
@@ -583,34 +596,52 @@ class AgentInitializer:
         
         return tools
     
-    def _initialize_scheduler(self, tools: List, session_id: Optional[str] = None):
+    def _initialize_scheduler(
+        self,
+        tools: List,
+        session_id: Optional[str] = None,
+        workspace_root: str = None,
+        agent_id: str = None,
+    ):
         """Initialize scheduler service if needed.
 
         Serialize the check-and-set under a module-level lock so concurrent
         first-time session inits cannot each create a new SchedulerService
         (which would leak background scanning threads).
         """
-        if not self.agent_bridge.scheduler_initialized:
+        if agent_id not in self.agent_bridge.scheduler_agent_ids:
             with _scheduler_init_lock:
-                if not self.agent_bridge.scheduler_initialized:
+                if agent_id not in self.agent_bridge.scheduler_agent_ids:
                     try:
                         from agent.tools.scheduler.integration import init_scheduler
-                        if init_scheduler(self.agent_bridge):
+                        if init_scheduler(
+                            self.agent_bridge,
+                            workspace_root=workspace_root,
+                            agent_id=agent_id,
+                        ):
+                            self.agent_bridge.scheduler_agent_ids.add(agent_id)
                             self.agent_bridge.scheduler_initialized = True
                             if session_id is None:
-                                logger.info("[AgentInitializer] Scheduler service initialized")
+                                logger.info(
+                                    f"[AgentInitializer] Scheduler initialized "
+                                    f"for agent={agent_id}"
+                                )
                     except Exception as e:
                         logger.warning(f"[AgentInitializer] Failed to initialize scheduler: {e}")
         
         # Inject scheduler dependencies
-        if self.agent_bridge.scheduler_initialized:
+        if agent_id in self.agent_bridge.scheduler_agent_ids:
             try:
                 from agent.tools.scheduler.integration import get_task_store, get_scheduler_service
                 from agent.tools import SchedulerTool
                 from config import conf
                 
-                task_store = get_task_store()
-                scheduler_service = get_scheduler_service()
+                task_store = get_task_store(
+                    workspace_root=workspace_root, agent_id=agent_id
+                )
+                scheduler_service = get_scheduler_service(
+                    workspace_root=workspace_root, agent_id=agent_id
+                )
                 
                 for tool in tools:
                     if isinstance(tool, SchedulerTool):
@@ -626,6 +657,7 @@ class AgentInitializer:
                         else:
                             ct = raw_ct
                         tool.config["channel_type"] = ct
+                        tool.config["agent_id"] = agent_id
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to inject scheduler dependencies: {e}")
     
@@ -787,11 +819,10 @@ class AgentInitializer:
 
     def _flush_all_agents(self):
         """Flush memory for all active agent sessions, then run Deep Dream."""
-        agents = []
-        if self.agent_bridge.default_agent:
-            agents.append(("default", self.agent_bridge.default_agent))
-        for sid, agent in self.agent_bridge.agents.items():
-            agents.append((sid, agent))
+        agents = [
+            (f"{agent_id}:{session_id or 'default'}", agent)
+            for agent_id, session_id, agent in self.agent_bridge.iter_agent_instances()
+        ]
 
         if not agents:
             return
@@ -799,11 +830,14 @@ class AgentInitializer:
         # Phase 1: flush daily summaries
         flushed = 0
         flush_threads = []
-        dream_candidate = None
+        dream_candidates = {}
         for label, agent in agents:
             try:
                 if not agent.memory_manager:
                     continue
+                dream_candidates.setdefault(
+                    agent.agent_id, agent.memory_manager.flush_manager
+                )
                 with agent.messages_lock:
                     messages = list(agent.messages)
                 if not messages:
@@ -814,8 +848,6 @@ class AgentInitializer:
                     t = agent.memory_manager.flush_manager._last_flush_thread
                     if t:
                         flush_threads.append(t)
-                if dream_candidate is None:
-                    dream_candidate = agent.memory_manager.flush_manager
             except Exception as e:
                 logger.warning(f"[DailyFlush] Failed for session {label}: {e}")
 
@@ -827,10 +859,13 @@ class AgentInitializer:
             t.join(timeout=60)
 
         # Phase 2: Deep Dream — distill daily memories → MEMORY.md + dream diary
-        if dream_candidate:
+        for agent_id, dream_candidate in dream_candidates.items():
             try:
                 result = dream_candidate.deep_dream()
                 if result:
-                    logger.info("[DeepDream] Memory distillation completed successfully")
+                    logger.info(
+                        f"[DeepDream] Memory distillation completed for "
+                        f"agent={agent_id}"
+                    )
             except Exception as e:
-                logger.warning(f"[DeepDream] Failed: {e}")
+                logger.warning(f"[DeepDream] Failed for agent={agent_id}: {e}")

@@ -424,10 +424,9 @@ class CowCliPlugin(Plugin):
         task_store = get_task_store()
         if task_store is None:
             from agent.tools.scheduler.task_store import TaskStore
-            from common.utils import expand_path
+            from common.state_dir import scheduler_file
 
-            workspace = expand_path(conf().get("agent_workspace", "~/cow"))
-            task_store = TaskStore(os.path.join(workspace, "scheduler", "tasks.json"))
+            task_store = TaskStore(str(scheduler_file()))
 
         channel_type = ""
         receiver = ""
@@ -517,9 +516,19 @@ class CowCliPlugin(Plugin):
         if request_id and registry.cancel_request(request_id):
             cancelled = 1
 
-        # Fall back to session-wide cancel
+        # Fall back to session-wide cancel, under the agent-scoped key the run
+        # was registered with.
         if cancelled == 0 and target_session:
-            cancelled = registry.cancel_session(target_session)
+            from bridge.bridge import Bridge
+            agent_bridge = Bridge().get_agent_bridge()
+            agent_id = (
+                agent_bridge.route_context(e_context["context"])
+                if e_context is not None
+                else None
+            )
+            cancelled = registry.cancel_session(
+                agent_bridge.scoped_session_key(target_session, agent_id)
+            )
 
         if cancelled <= 0:
             return _t("当前没有可中止的任务。", "Nothing to cancel.")
@@ -986,7 +995,7 @@ class CowCliPlugin(Plugin):
             from bridge.bridge import Bridge
             bridge = Bridge()
             agent_bridge = bridge.get_agent_bridge()
-            for agent in [agent_bridge.default_agent] + list(agent_bridge.agents.values()):
+            for _agent_id, _session_id, agent in agent_bridge.iter_agent_instances():
                 if agent and hasattr(agent, 'skill_manager') and agent.skill_manager:
                     agent.skill_manager.refresh_skills()
                     break
@@ -1719,13 +1728,12 @@ class CowCliPlugin(Plugin):
         """Create a MemoryFlushManager without a running agent (for pre-init dream)."""
         from pathlib import Path
         from config import conf
-        from common.utils import expand_path
+        from common.state_dir import state_root
         from agent.memory.summarizer import MemoryFlushManager
         from bridge.bridge import Bridge
         from bridge.agent_bridge import AgentLLMModel
 
-        workspace = Path(expand_path(conf().get("agent_workspace", "~/cow")))
-        flush_mgr = MemoryFlushManager(workspace_dir=workspace)
+        flush_mgr = MemoryFlushManager(workspace_dir=state_root())
         flush_mgr.llm_model = AgentLLMModel(Bridge())
         return flush_mgr
 
@@ -1775,11 +1783,8 @@ class CowCliPlugin(Plugin):
 
     def _knowledge_stats(self) -> str:
         from config import conf
-        from common.utils import expand_path
-        knowledge_dir = os.path.join(
-            expand_path(conf().get("agent_workspace", "~/cow")),
-            "knowledge"
-        )
+        from common import state_dir
+        knowledge_dir = str(state_dir.knowledge_dir())
         if not os.path.isdir(knowledge_dir):
             return _t("📚 知识库目录不存在\n\n💡 开启知识库: /knowledge on", "📚 Knowledge base directory not found\n\n💡 Enable it: /knowledge on")
 
@@ -1822,12 +1827,8 @@ class CowCliPlugin(Plugin):
         return "\n".join(lines)
 
     def _knowledge_tree(self) -> str:
-        from config import conf
-        from common.utils import expand_path
-        knowledge_dir = os.path.join(
-            expand_path(conf().get("agent_workspace", "~/cow")),
-            "knowledge"
-        )
+        from common import state_dir
+        knowledge_dir = str(state_dir.knowledge_dir())
         if not os.path.isdir(knowledge_dir):
             return _t("📚 知识库目录不存在\n\n💡 开启知识库: /knowledge on", "📚 Knowledge base directory not found\n\n💡 Enable it: /knowledge on")
 

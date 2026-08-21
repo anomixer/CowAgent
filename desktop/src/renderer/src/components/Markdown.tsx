@@ -2,6 +2,8 @@ import React, { useMemo, useRef, useCallback } from 'react'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 import { t } from '../i18n'
+import { workspaceHrefOf } from '../lib/fileKind'
+import { useWorkspaceStore } from '../store/workspaceStore'
 
 /**
  * Markdown renderer aligned 1:1 with the web console (markdown-it + highlight.js
@@ -29,6 +31,36 @@ const md: MarkdownIt = new MarkdownIt({
     }
   },
 })
+
+// CommonMark's flanking rules treat every Unicode punctuation alike, so
+// `是**"引号"**——` never opens emphasis: the quote after `**` is punctuation
+// while 是 before it is neither punctuation nor space, and the run degrades to
+// literal asterisks. Apply the CJK-friendly amendment
+// (github.com/tats-u/markdown-cjk-friendly): a `*` run with a CJK neighbour and
+// no adjacent whitespace both opens and closes. `_` keeps the stock rules,
+// whose intraword behavior depends on the original classification.
+const _CJK_CHAR =
+  /[\u1100-\u11FF\u2E80-\u303F\u3040-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA960-\uA97F\uAC00-\uD7FF\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/
+const _StateInline = md.inline.State as unknown as {
+  prototype: {
+    scanDelims(start: number, canSplitWord: boolean): { can_open: boolean; can_close: boolean; length: number }
+    src: string
+    posMax: number
+  }
+}
+const _scanDelims = _StateInline.prototype.scanDelims
+_StateInline.prototype.scanDelims = function (start, canSplitWord) {
+  const res = _scanDelims.call(this, start, canSplitWord)
+  if (!canSplitWord) return res
+  const lastCode = start > 0 ? this.src.charCodeAt(start - 1) : 0x20
+  const nextPos = start + res.length
+  const nextCode = nextPos < this.posMax ? this.src.charCodeAt(nextPos) : 0x20
+  if (md.utils.isWhiteSpace(lastCode) || md.utils.isWhiteSpace(nextCode)) return res
+  if (!_CJK_CHAR.test(String.fromCharCode(lastCode)) && !_CJK_CHAR.test(String.fromCharCode(nextCode))) return res
+  res.can_open = true
+  res.can_close = true
+  return res
+}
 
 // Fix greedy linkify: markdown-it's linkify swallows markdown emphasis (`*`)
 // and CJK full-width punctuation glued to a URL (common in LLM output like
@@ -65,8 +97,18 @@ const defaultLinkOpen =
     return self.renderToken(tokens, idx, options)
   }
 md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
-  tokens[idx].attrPush(['target', '_blank'])
-  tokens[idx].attrPush(['rel', 'noopener noreferrer'])
+  const token = tokens[idx]
+  // A workspace-relative href means nothing outside the app: `target=_blank`
+  // would hand it to the OS browser, which resolves it against the renderer's
+  // file:// URL. Tag it so the click handler opens the preview panel instead.
+  const wsPath = workspaceHrefOf(token.attrGet('href') || '')
+  if (wsPath) {
+    token.attrPush(['data-ws-path', wsPath])
+    token.attrJoin('class', 'ws-link')
+  } else {
+    token.attrPush(['target', '_blank'])
+    token.attrPush(['rel', 'noopener noreferrer'])
+  }
   return defaultLinkOpen(tokens, idx, options, env, self)
 }
 
@@ -130,6 +172,14 @@ const Markdown: React.FC<MarkdownProps> = ({ content, onInternalLink }) => {
             return
           }
         }
+      }
+
+      // Links to workspace files open in the preview panel.
+      const wsLink = target.closest('a[data-ws-path]') as HTMLAnchorElement | null
+      if (wsLink) {
+        e.preventDefault()
+        useWorkspaceStore.getState().openLink(wsLink.dataset.wsPath || '')
+        return
       }
 
       const btn = target.closest('.code-copy-btn') as HTMLElement | null

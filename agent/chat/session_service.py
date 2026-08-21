@@ -265,18 +265,25 @@ class SessionService:
         result = svc.dispatch("list", {"channel_type": "web", "page": 1})
     """
 
-    def _get_store(self):
-        from agent.memory import get_conversation_store
-        return get_conversation_store()
+    def __init__(self, agent_id: str = None):
+        self.agent_id = agent_id
 
-    def _remove_agent(self, session_id: str):
+    def _resolve_agent_id(self, agent_id: str = None) -> str:
+        from agent.registry import get_agent_registry
+        return get_agent_registry().get(agent_id or self.agent_id).id
+
+    def _get_store(self, agent_id: str = None):
+        from agent.registry import get_agent_registry
+        from agent.memory import get_conversation_store
+        profile = get_agent_registry().get(agent_id or self.agent_id)
+        return get_conversation_store(profile.workspace)
+
+    def _remove_agent(self, session_id: str, agent_id: str = None):
         """Remove the in-memory Agent instance for a session if it exists."""
         try:
             from bridge.bridge import Bridge
             ab = Bridge().get_agent_bridge()
-            if session_id in ab.agents:
-                del ab.agents[session_id]
-                logger.info(f"[SessionService] Removed agent instance: {session_id}")
+            ab.clear_session(session_id, agent_id=self._resolve_agent_id(agent_id))
         except Exception:
             pass
 
@@ -290,50 +297,62 @@ class SessionService:
     # actions
     # ------------------------------------------------------------------
     def list_sessions(self, channel_type: Optional[str] = None,
-                      page: int = 1, page_size: int = 50) -> dict:
-        store = self._get_store()
+                      page: int = 1, page_size: int = 50,
+                      agent_id: str = None) -> dict:
+        store = self._get_store(agent_id)
         return store.list_sessions(
             channel_type=channel_type,
             page=page,
             page_size=page_size,
         )
 
-    @staticmethod
-    def _cancel_running(session_id: str) -> None:
+    def _cancel_running(self, session_id: str, agent_id: str = None) -> None:
         """Abort any in-flight run of a session before dropping its data."""
         try:
             from agent.protocol import get_cancel_registry
-            cancelled = get_cancel_registry().cancel_session(session_id)
+            from agent.registry import get_agent_registry
+            from bridge.agent_bridge import AgentBridge
+            # Runs are registered under the agent-scoped key, so an unscoped
+            # lookup here would silently cancel nothing.
+            registry = get_agent_registry()
+            scoped = AgentBridge._cancel_key(
+                self._resolve_agent_id(agent_id),
+                session_id,
+                registry.default_agent_id,
+            )
+            cancelled = get_cancel_registry().cancel_session(scoped)
             if cancelled:
                 logger.info(f"[SessionService] Cancelled {cancelled} in-flight "
                             f"request(s) for session {session_id}")
         except Exception as e:
             logger.warning(f"[SessionService] Cancel on delete failed: {e}")
 
-    def delete_session(self, session_id: str) -> None:
+    def delete_session(self, session_id: str, agent_id: str = None) -> None:
         if not session_id:
             raise ValueError("session_id required")
         session_id = self._normalize_sid(session_id)
 
-        self._cancel_running(session_id)
-        store = self._get_store()
+        self._cancel_running(session_id, agent_id)
+        store = self._get_store(agent_id)
         store.clear_session(session_id)
-        self._remove_agent(session_id)
+        self._remove_agent(session_id, agent_id)
         logger.info(f"[SessionService] Session deleted: {session_id}")
 
-    def rename_session(self, session_id: str, title: str) -> None:
+    def rename_session(
+        self, session_id: str, title: str, agent_id: str = None
+    ) -> None:
         if not session_id:
             raise ValueError("session_id required")
         if not title:
             raise ValueError("title required")
         session_id = self._normalize_sid(session_id)
 
-        store = self._get_store()
+        store = self._get_store(agent_id)
         found = store.rename_session(session_id, title)
         if not found:
             raise ValueError("session not found")
 
-    def clear_context(self, session_id: str) -> int:
+    def clear_context(self, session_id: str, agent_id: str = None) -> int:
         """
         Set context boundary. Returns the new context_start_seq value.
         """
@@ -341,13 +360,13 @@ class SessionService:
             raise ValueError("session_id required")
         session_id = self._normalize_sid(session_id)
 
-        store = self._get_store()
+        store = self._get_store(agent_id)
         new_seq = store.clear_context(session_id)
-        self._remove_agent(session_id)
+        self._remove_agent(session_id, agent_id)
         return new_seq
 
     def gen_title(self, session_id: str, user_message: str,
-                  assistant_reply: str = "") -> str:
+                  assistant_reply: str = "", agent_id: str = None) -> str:
         """
         Generate an AI title and persist it. Returns the generated title.
         """
@@ -359,7 +378,7 @@ class SessionService:
 
         title = generate_session_title(user_message, assistant_reply)
 
-        store = self._get_store()
+        store = self._get_store(agent_id)
         updated = store.rename_session(session_id, title)
         logger.info(f"[SessionService] Title set: sid={session_id}, "
                      f"title='{title}', db_updated={updated}")
@@ -389,28 +408,33 @@ class SessionService:
         :return: dict with action, code, message, payload
         """
         payload = payload or {}
+        agent_id = payload.get("agent_id") or self.agent_id
         try:
             if action == "list_sessions":
                 result = self.list_sessions(
                     channel_type=payload.get("channel_type"),
                     page=int(payload.get("page", 1)),
                     page_size=int(payload.get("page_size", 50)),
+                    agent_id=agent_id,
                 )
                 return {"action": action, "code": 200, "message": "success", "payload": result}
 
             elif action == "delete_session":
-                self.delete_session(payload.get("session_id", ""))
+                self.delete_session(payload.get("session_id", ""), agent_id=agent_id)
                 return {"action": action, "code": 200, "message": "success", "payload": None}
 
             elif action == "rename_session":
                 self.rename_session(
                     payload.get("session_id", ""),
                     payload.get("title", "").strip(),
+                    agent_id=agent_id,
                 )
                 return {"action": action, "code": 200, "message": "success", "payload": None}
 
             elif action == "clear_context":
-                new_seq = self.clear_context(payload.get("session_id", ""))
+                new_seq = self.clear_context(
+                    payload.get("session_id", ""), agent_id=agent_id
+                )
                 return {"action": action, "code": 200, "message": "success",
                         "payload": {"context_start_seq": new_seq}}
 
@@ -419,6 +443,7 @@ class SessionService:
                     payload.get("session_id", ""),
                     payload.get("user_message", ""),
                     payload.get("assistant_reply", ""),
+                    agent_id=agent_id,
                 )
                 return {"action": action, "code": 200, "message": "success",
                         "payload": {"title": title}}

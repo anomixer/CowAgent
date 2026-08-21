@@ -192,14 +192,33 @@ class MultiUserDB:
 
     @classmethod
     def get_default_db_path(cls) -> str:
-        """Return the default path to conversations.db under the workspace."""
-        from config import conf
-        data_root = conf().get("data_root", "")
-        if data_root:
-            return os.path.join(data_root, "sessions", "conversations.db")
-        # Fallback: use agent_workspace (統一放在 ~/cow/sessions/)
-        workspace = os.path.expanduser(conf().get("agent_workspace", "~/cow"))
-        return os.path.join(workspace, "sessions", "conversations.db")
+        """Return the default path to the shared conversations database.
+
+        This must be the SAME physical file ConversationStore uses for the
+        ``sessions`` / ``messages`` tables, so the multi-user account tables
+        (``mu_users``, ``mu_teams``, ...) and the conversation ``sessions``
+        table live in one SQLite file. Ownership checks
+        (``get_session_owner``) and the agent's own session history then agree;
+        if they pointed at different files the guard would silently read from
+        one store and write history to another.
+
+        Delegates to the canonical memory-config resolver rather than hardcoding
+        ``~/cow/sessions/conversations.db``: upstream moved per-agent state to
+        ``<workspace>/memory/long-term/index.db``, and the default agent's
+        workspace is the one ``get_default_memory_config()`` resolves.
+        """
+        try:
+            from agent.memory.config import get_default_memory_config
+            return str(get_default_memory_config().get_db_path())
+        except Exception:
+            # Fallback for environments where the memory config is unavailable:
+            # preserve the historical location.
+            from config import conf
+            data_root = conf().get("data_root", "")
+            if data_root:
+                return os.path.join(data_root, "sessions", "conversations.db")
+            workspace = os.path.expanduser(conf().get("agent_workspace", "~/cow"))
+            return os.path.join(workspace, "sessions", "conversations.db")
 
     # -- user CRUD --------------------------------------------------------
 

@@ -29,20 +29,16 @@ class TestMemoryGlobalConfigSync(unittest.TestCase):
         self._orig_agent_workspace = conf().get("agent_workspace")
         conf()["agent_workspace"] = self.workspace
 
-        # Reset the process-wide singletons so earlier tests/imports in the
-        # same run can't leave a stale ~/cow-pointed config behind.
-        import agent.memory.config as memory_config_module
-        import agent.memory.conversation_store as conversation_store_module
-        self._orig_global_memory_config = memory_config_module._global_memory_config
-        self._orig_store_instance = conversation_store_module._store_instance
-        memory_config_module._global_memory_config = None
-        conversation_store_module._store_instance = None
+        # Drop cached configs and stores so earlier tests/imports in the same
+        # run can't leave a stale ~/cow-pointed one behind.
+        from agent.memory import clear_conversation_store_cache, reset_memory_configs
+        reset_memory_configs()
+        clear_conversation_store_cache()
 
     def tearDown(self):
-        import agent.memory.config as memory_config_module
-        import agent.memory.conversation_store as conversation_store_module
-        memory_config_module._global_memory_config = self._orig_global_memory_config
-        conversation_store_module._store_instance = self._orig_store_instance
+        from agent.memory import clear_conversation_store_cache, reset_memory_configs
+        reset_memory_configs()
+        clear_conversation_store_cache()
 
         if self._orig_agent_workspace is None:
             conf().pop("agent_workspace", None)
@@ -79,7 +75,7 @@ class TestMemoryGlobalConfigSync(unittest.TestCase):
 
         store = get_conversation_store()
         self.assertTrue(
-            str(store._db_path).startswith(self.workspace),
+            os.path.realpath(store._db_path).startswith(os.path.realpath(self.workspace)),
             f"ConversationStore db_path {store._db_path} should live under "
             f"the configured workspace {self.workspace}, not ~/cow",
         )
@@ -95,8 +91,11 @@ class TestMemoryGlobalConfigSync(unittest.TestCase):
         from agent.memory import get_conversation_store
 
         store = get_conversation_store()
+        # realpath on both sides: the workspace root is canonicalised so that
+        # prefix-based containment checks are sound, and on macOS the temp dir
+        # reached through /var is really /private/var.
         self.assertTrue(
-            str(store._db_path).startswith(self.workspace),
+            os.path.realpath(store._db_path).startswith(os.path.realpath(self.workspace)),
             f"ConversationStore db_path {store._db_path} should live under "
             f"the configured workspace {self.workspace} even when accessed "
             f"before the first agent init, not ~/cow",
@@ -112,8 +111,8 @@ class TestMemoryGlobalConfigSync(unittest.TestCase):
 
         conf().pop("agent_workspace", None)
         self.assertEqual(
-            MemoryConfig().workspace_root,
-            expand_path("~/cow"),
+            os.path.realpath(MemoryConfig().workspace_root),
+            os.path.realpath(expand_path("~/cow")),
             "an unset agent_workspace should still resolve to the ~/cow default",
         )
 

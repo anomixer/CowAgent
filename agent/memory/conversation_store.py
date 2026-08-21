@@ -7,7 +7,8 @@ Design:
 - Pruning: age-based only (sessions not updated within N days are deleted)
 - Thread-safe via a single in-process lock
 
-Storage path: ~/cow/memory/long-term/index.db (shared with the memory index)
+Storage path: <agent workspace>/memory/long-term/index.db (shared with the
+memory index)
 """
 
 from __future__ import annotations
@@ -1305,32 +1306,58 @@ class ConversationStore:
 # ---------------------------------------------------------------------------
 
 _store_instance: Optional[ConversationStore] = None
-_store_lock = threading.Lock()
+_store_instances: Dict[str, ConversationStore] = {}
+_store_lock = threading.RLock()
 
 
-def get_conversation_store() -> ConversationStore:
+def _resolve_store_path(workspace_root=None) -> Path:
+    if workspace_root is None:
+        try:
+            from agent.memory.config import get_default_memory_config
+            return get_default_memory_config().get_db_path().resolve()
+        except Exception:
+            from common.utils import expand_path
+            return (
+                Path(expand_path("~/cow")) / "memory" / "long-term" / "index.db"
+            ).resolve()
+    from agent.memory.config import MemoryConfig
+    from common.utils import expand_path
+    workspace = Path(expand_path(str(workspace_root))).resolve()
+    return MemoryConfig(workspace_root=str(workspace)).get_db_path().resolve()
+
+def get_conversation_store(workspace_root=None) -> ConversationStore:
     """
-    Return the process-wide ConversationStore singleton.
+    Return the ConversationStore for one complete agent workspace.
 
-    Uses the shared conversations database: ~/cow/sessions/conversations.db
+    Reuses that workspace's long-term memory database, keeping one SQLite file
+    per agent at ``<workspace>/memory/long-term/index.db``.
+    The conversation tables (sessions / messages) are separate from the
+    memory tables (memory_chunks / file_metadata). Omitting ``workspace_root``
+    preserves the original single-agent behaviour.
     """
     global _store_instance
-    if _store_instance is not None:
-        return _store_instance
+    db_path = _resolve_store_path(workspace_root)
+    key = str(db_path)
+    store = _store_instances.get(key)
+    if store is not None:
+        if workspace_root is None:
+            _store_instance = store
+        return store
 
     with _store_lock:
-        if _store_instance is not None:
-            return _store_instance
+        store = _store_instances.get(key)
+        if store is None:
+            store = ConversationStore(db_path)
+            _store_instances[key] = store
+            logger.debug(f"[ConversationStore] Using workspace DB at: {db_path}")
+        if workspace_root is None:
+            _store_instance = store
+        return store
 
-        try:
-            from channel.web.multiuser.db import MultiUserDB
-            db_path = Path(MultiUserDB.get_default_db_path())
-        except Exception:
-            from config import conf
-            workspace = Path(os.path.expanduser(conf().get("agent_workspace", "~/cow")))
-            db_path = workspace / "sessions" / "conversations.db"
 
-        _store_instance = ConversationStore(db_path)
-        logger.debug(f"[ConversationStore] Using DB at: {db_path}")
-        return _store_instance
-
+def clear_conversation_store_cache() -> None:
+    """Forget cached store objects. Intended for config reloads and tests."""
+    global _store_instance
+    with _store_lock:
+        _store_instances.clear()
+        _store_instance = None
