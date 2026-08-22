@@ -504,6 +504,35 @@ class KnowledgeService:
         except Exception as exc:
             logger.warning(f"[KnowledgeService] Failed to load team knowledge trees: {exc}")
 
+        # 3. Knowledge shared with me (other users' personal KBs, per mu_kb_shares).
+        # Surfaces as its own group so the recipient can browse/open it; the
+        # read endpoint honours the same shares via check_read_access.
+        shared_trees = []
+        try:
+            from channel.web.multiuser.db import get_multiuser_db
+            db = get_multiuser_db()
+            if db.user_count() > 0 and role != "admin":
+                owner_ids = db.get_shared_user_ids(user_id)
+                for owner_id in owner_ids:
+                    if not owner_id or int(owner_id) == int(user_id):
+                        continue
+                    owner_dir = os.path.join(self.knowledge_dir, "users", str(owner_id))
+                    if not os.path.isdir(owner_dir):
+                        continue
+                    owner_user = db.get_user_by_id(owner_id)
+                    owner_name = (owner_user or {}).get("username") or f"user_{owner_id}"
+                    s_stats = {"pages": 0, "size": 0}
+                    s_root_files, s_tree = self._scan_dir(owner_dir, s_stats, is_root=True)
+                    shared_trees.append({
+                        "owner_id": int(owner_id),
+                        "owner_name": owner_name,
+                        "root_files": s_root_files,
+                        "tree": s_tree,
+                        "stats": s_stats
+                    })
+        except Exception as exc:
+            logger.warning(f"[KnowledgeService] Failed to load shared knowledge trees: {exc}")
+
         # Fallback legacy tree scan
         legacy_stats = {"pages": 0, "size": 0}
         l_root_files, l_tree = self._scan_dir(self.knowledge_dir, legacy_stats, is_root=True)
@@ -518,6 +547,7 @@ class KnowledgeService:
                 "stats": p_stats
             },
             "team_trees": team_trees,
+            "shared_trees": shared_trees,
             "enabled": conf().get("knowledge", True)
         }
 

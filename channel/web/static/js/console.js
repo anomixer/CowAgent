@@ -90,7 +90,7 @@ const I18N = {
         knowledge_title: '知识库', knowledge_desc: '浏览和探索你的知识库',
         knowledge_tab_docs: '文档', knowledge_tab_graph: '图谱',
         knowledge_loading: '加载知识库中...', knowledge_loading_desc: '知识页面将显示在这里',
-        knowledge_select_hint: '选择一个文档查看', knowledge_empty_hint: '暂无知识页面',
+        knowledge_select_hint: '选择一个文档查看', knowledge_empty_hint: '暂无知识页面', knowledge_shared_with_me: '🔗 分享给我',
         knowledge_empty_guide: '在对话中发送文档、链接或主题给 Agent，它会自动整理到你的知识库中。',
         knowledge_go_chat: '开始对话',
         knowledge_new: '新建',
@@ -455,7 +455,7 @@ const I18N = {
         knowledge_title: '知識庫', knowledge_desc: '瀏覽和探索你的知識庫',
         knowledge_tab_docs: '檔案', knowledge_tab_graph: '圖譜',
         knowledge_loading: '載入知識庫中...', knowledge_loading_desc: '知識頁面將顯示在這裡',
-        knowledge_select_hint: '選擇一個檔案檢視', knowledge_empty_hint: '暫無知識頁面',
+        knowledge_select_hint: '選擇一個檔案檢視', knowledge_empty_hint: '暫無知識頁面', knowledge_shared_with_me: '🔗 分享給我',
         knowledge_empty_guide: '在對話中傳送檔案、連結或主題給 Agent，它會自動整理到你的知識庫中。',
         knowledge_go_chat: '開始對話',
         knowledge_new: '新建',
@@ -815,7 +815,7 @@ const I18N = {
         knowledge_title: 'Knowledge', knowledge_desc: 'Browse and explore your knowledge base',
         knowledge_tab_docs: 'Documents', knowledge_tab_graph: 'Graph',
         knowledge_loading: 'Loading knowledge base...', knowledge_loading_desc: 'Knowledge pages will be displayed here',
-        knowledge_select_hint: 'Select a document to view', knowledge_empty_hint: 'No knowledge pages yet',
+        knowledge_select_hint: 'Select a document to view', knowledge_empty_hint: 'No knowledge pages yet', knowledge_shared_with_me: '🔗 Shared with me',
         knowledge_empty_guide: 'Send documents, links or topics to the agent in chat, and it will automatically organize them into your knowledge base.',
         knowledge_go_chat: 'Start a conversation',
         knowledge_new: 'New',
@@ -9443,6 +9443,7 @@ let _knowledgeTreeData = [];
 let _knowledgeRootFiles = [];
 let _personalKnowledgeTree = null;
 let _teamKnowledgeTrees = [];
+let _sharedKnowledgeTrees = [];
 let _knowledgeCurrentFile = null;
 let _knowledgeGraphLoaded = false;
 const KNOWLEDGE_IMPORT_MAX_FILES = 100;
@@ -9469,13 +9470,14 @@ function loadKnowledgeView(targetPath) {
         _knowledgeRootFiles = rootFiles;
         _personalKnowledgeTree = data.personal_tree || null;
         _teamKnowledgeTrees = data.team_trees || [];
+        _sharedKnowledgeTrees = data.shared_trees || [];
         const stats = data.stats || {};
         const totalPages = stats.pages || 0;
         const sizeStr = stats.size < 1024 ? stats.size + ' B' : (stats.size / 1024).toFixed(1) + ' KB';
 
         statsEl.textContent = totalPages + ' pages · ' + sizeStr;
 
-        if (totalPages === 0 && tree.length === 0 && rootFiles.length === 0 && !_personalKnowledgeTree && (!_teamKnowledgeTrees || !_teamKnowledgeTrees.length)) {
+        if (totalPages === 0 && tree.length === 0 && rootFiles.length === 0 && !_personalKnowledgeTree && (!_teamKnowledgeTrees || !_teamKnowledgeTrees.length) && (!_sharedKnowledgeTrees || !_sharedKnowledgeTrees.length)) {
             emptyEl.querySelector('p').textContent = t('knowledge_empty_hint');
             const guideEl = document.getElementById('knowledge-empty-guide');
             if (guideEl) guideEl.classList.remove('hidden');
@@ -9628,6 +9630,51 @@ function renderKnowledgeTree(tree, rootFilesOrFilter, filter) {
             });
             tdiv.appendChild(titems);
             container.appendChild(tdiv);
+        }
+
+        // 3. Knowledge shared with me (other users' KBs)
+        if (_sharedKnowledgeTrees && _sharedKnowledgeTrees.length > 0) {
+            const sdiv = document.createElement('div');
+            sdiv.className = 'knowledge-tree-group open mb-3';
+            const sbtn = document.createElement('button');
+            sbtn.className = 'knowledge-tree-group-btn font-bold text-slate-800 dark:text-slate-100';
+            sbtn.style.paddingLeft = '8px';
+            sbtn.innerHTML = `<i class="fas fa-chevron-right chevron"></i><i class="fas fa-share-nodes text-sky-500 text-[12px]"></i><span>${t('knowledge_shared_with_me') || '🔗 分享給我'}</span>`;
+            sbtn.onclick = () => sdiv.classList.toggle('open');
+            sdiv.appendChild(sbtn);
+
+            const sitems = document.createElement('div');
+            sitems.className = 'knowledge-tree-group-items';
+
+            _sharedKnowledgeTrees.forEach(st => {
+                const subdiv = document.createElement('div');
+                subdiv.className = 'knowledge-tree-group open';
+                const subbtn = document.createElement('button');
+                subbtn.className = 'knowledge-tree-group-btn font-semibold text-slate-700 dark:text-slate-200';
+                subbtn.style.paddingLeft = '20px';
+                subbtn.innerHTML = `<i class="fas fa-chevron-right chevron"></i><i class="fas fa-folder-closed text-sky-400 text-[11px]"></i><span>${escapeHtml(st.owner_name)}</span>`;
+                subbtn.onclick = () => subdiv.classList.toggle('open');
+                subdiv.appendChild(subbtn);
+
+                const subitems = document.createElement('div');
+                subitems.className = 'knowledge-tree-group-items';
+                (st.root_files || []).forEach(f => {
+                    const fpath = `users/${st.owner_id}/${f.name}`;
+                    if (lowerFilter && !f.title.toLowerCase().includes(lowerFilter) && !f.name.toLowerCase().includes(lowerFilter)) return;
+                    const fbtn = document.createElement('button');
+                    fbtn.className = 'knowledge-tree-file' + (_knowledgeCurrentFile === fpath ? ' active' : '');
+                    fbtn.dataset.path = fpath;
+                    fbtn.style.paddingLeft = '32px';
+                    fbtn.innerHTML = `<i class="fas fa-file-lines text-[10px] text-slate-400"></i><span class="truncate">${escapeHtml(f.title)}</span>`;
+                    fbtn.onclick = () => openKnowledgeFile(fpath, f.title);
+                    subitems.appendChild(fbtn);
+                });
+                _renderKnowledgeGroups(subitems, st.tree || [], `users/${st.owner_id}`, lowerFilter, 2);
+                subdiv.appendChild(subitems);
+                sitems.appendChild(subdiv);
+            });
+            sdiv.appendChild(sitems);
+            container.appendChild(sdiv);
         }
         return;
     }
