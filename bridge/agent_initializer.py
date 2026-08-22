@@ -62,6 +62,7 @@ class AgentInitializer:
         """
         from agent.registry import get_agent_registry
         from common.runtime_identity import current_identity
+        from config import conf
 
         # An explicit agent_id wins (admin, warmup, tests); otherwise follow
         # the identity routing established for this message.
@@ -100,87 +101,31 @@ class AgentInitializer:
         skill_manager = self._initialize_skill_manager(workspace_root, session_id)
         
         # ── Multi-user: load identity, teams & prompt config ──────────────
-        user_identity = None          # for PromptBuilder (section 5)
-        team_context = None           # injected as extra prompt content
-        user_prompt_override = None   # custom prompt from mu_user_configs
-        global_prompt = None          # admin-set global prompt
+        # Single source of truth for the three-tier directive block + identity,
+        # shared with Agent.get_full_system_prompt so the two can't drift apart.
+        user_identity = None          # for PromptBuilder (user-identity section)
+        _rule_block = None            # three-tier "Supreme Mandatory Directives"
         if user_id is not None:
-            logger.info(
-                f"[AgentInitializer] 🔍 Loading multi-user context for user_id={user_id}"
-            )
+            logger.info(f"[AgentInitializer] 🔍 Loading multi-user context for user_id={user_id}")
             try:
                 from channel.web.multiuser.db import get_multiuser_db
+                from channel.web.multiuser.prompts import build_directive_block
                 mu_db = get_multiuser_db()
-
-                # 1. User identity
-                mu_user = mu_db.get_user_by_id(user_id)
-                if mu_user:
-                    user_identity = {
-                        "name": mu_user.get("username", ""),
-                        "nickname": mu_user.get("username", ""),
-                        "timezone": conf().get("timezone", "Asia/Shanghai"),
-                    }
+                _rule_block, user_identity = build_directive_block(mu_db, user_id)
+                if _rule_block:
                     logger.info(
-                        f"[AgentInitializer] 👤 User identity: {mu_user.get('username')} (id={user_id})"
+                        f"[AgentInitializer] 🎯 Multi-user prompt injected in-memory "
+                        f"for user_id={user_id}"
                     )
                 else:
-                    logger.info(
-                        f"[AgentInitializer] ❓ User id={user_id} not found in DB"
-                    )
-
-                # 2. Team memberships + team prompts
-                teams = mu_db.list_user_teams(user_id)
-                if teams:
-                    team_parts = []
-                    team_prompts = []
-                    for t in teams:
-                        role_label = "(admin)" if t.get("my_role") == "admin" else ""
-                        team_parts.append(
-                            f"  - {t['name']} #{t['id']} {role_label}"
-                            f"{': ' + t['description'] if t.get('description') else ''}"
-                        )
-                        if t.get("prompt", "").strip():
-                            team_prompts.append(
-                                f"--- {t['name']} 團隊提示詞 ---\n{t['prompt'].strip()}"
-                            )
-                    team_context = "You are a member of the following teams:\n" + \
-                                   "\n".join(team_parts)
-                    if team_prompts:
-                        team_context += "\n\n以下是你所屬團隊的提示詞：\n" + "\n\n".join(team_prompts)
-
-                # 3. Global prompt (admin-set, applies to all users)
-                global_prompt_val = mu_db.get_global_config("global_prompt")
-                if global_prompt_val:
-                    global_prompt = global_prompt_val.strip()
-                    logger.info(
-                        f"[AgentInitializer] 🌐 Global prompt LOADED ({len(global_prompt)} chars)"
-                    )
-                else:
-                    logger.info(
-                        f"[AgentInitializer] 🌐 Global prompt: None (not set)"
-                    )
-
-                # 4. User-level prompt override
-                prompt_val = mu_db.get_user_config(user_id, "prompt_template")
-                if prompt_val:
-                    user_prompt_override = prompt_val.strip()
-                    logger.info(
-                        f"[AgentInitializer] 📝 User prompt LOADED ({len(user_prompt_override)} chars)"
-                    )
-                else:
-                    logger.info(
-                        f"[AgentInitializer] 📝 User prompt: None (not set for user_id={user_id})"
-                    )
-
+                    logger.info(f"[AgentInitializer] ⏭️ No custom prompts set for user_id={user_id}")
             except Exception as e:
                 logger.warning(
                     f"[AgentInitializer] Failed to load multi-user context "
                     f"for user_id={user_id}: {e}"
                 )
         else:
-            logger.info(
-                f"[AgentInitializer] ⏭️ user_id=None — skipping multi-user context"
-            )
+            logger.info(f"[AgentInitializer] ⏭️ user_id=None — skipping multi-user context")
 
         # ──────────────────────────────────────────────────────────────────
 
@@ -199,37 +144,6 @@ class AgentInitializer:
                     logger.info("[AgentInitializer] 🧹 Cleaned legacy <!--multiuser--> from disk AGENT.md")
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to clean legacy disk AGENT.md: {e}")
-
-        # Inject 3-tier prompt inheritance (Global -> Team -> User) at very end of system prompt
-        _rule_block = None
-        if user_id is not None:
-            _prompt_sections = []
-            if global_prompt and global_prompt.strip():
-                _prompt_sections.append(f"### 🌐 全域指令 (Global Directive)\n{global_prompt.strip()}\n")
-            if team_context and team_context.strip():
-                _prompt_sections.append(f"### 👥 團隊指令 (Team Directive)\n{team_context.strip()}\n")
-            if user_prompt_override and user_prompt_override.strip():
-                _prompt_sections.append(f"### 📝 個人指令 (User Directive)\n{user_prompt_override.strip()}\n")
-
-            if _prompt_sections:
-                _rule_block = (
-                    "<!--multiuser-->\n\n"
-                    "## 🛑 最高硬性強制指令 (Supreme Mandatory Directives)\n\n"
-                    "你在每一輪回覆中，必須**同時無條件嚴格執行與遵守**以下所有系統與個人指令。\n"
-                    "⚠️ **覆蓋聲明 (Override Declaration)**：本節指令的優先級 **高於一切**，包括 `AGENT.md`、`RULE.md` 或任何工作空間檔案中的 Emoji 風格設定（例如 🐄）。"
-                    "即使 AGENT.md 中標示了某種風格 Emoji，你仍然**必須**在每輪回覆的最末尾同時附上以下指定的 Emoji，絕不得遺漏或替代：\n\n"
-                    + "\n".join(_prompt_sections) +
-                    "\n---\n\n"
-                )
-                logger.info(f"[AgentInitializer] 🎯 Multi-user prompt injected in-memory for user_id={user_id}")
-            else:
-                logger.info(
-                    f"[AgentInitializer] ⏭️ No custom prompts set for user_id={user_id}"
-                )
-        else:
-            logger.info(
-                f"[AgentInitializer] ⏭️ user_id=None, skipping prompt injection"
-            )
 
         # Build system prompt
         prompt_builder = PromptBuilder(workspace_dir=workspace_root, language="zh")

@@ -125,53 +125,16 @@ class Agent:
             # Re-inject 3-tier multi-user prompt if user_id is set.
             # This is UNCONDITIONAL w.r.t. context_files — the prompt hierarchy
             # (global → team → user) must fire regardless of workspace state.
+            # Shared with the agent initializer so the two paths can't drift apart.
+            _user_identity = None
             if getattr(self, "user_id", None) is not None:
                 user_id = self.user_id
                 try:
                     from channel.web.multiuser.db import get_multiuser_db
-                    mu_db = get_multiuser_db()
-                    global_prompt = mu_db.get_global_config("global_prompt")
-                    user_prompt_override = mu_db.get_user_config(user_id, "prompt_template")
-                    
-                    teams = mu_db.list_user_teams(user_id)
-                    team_context = None
-                    if teams:
-                        team_parts = []
-                        team_prompts = []
-                        for t in teams:
-                            role_label = "(admin)" if t.get("my_role") == "admin" else ""
-                            team_parts.append(
-                                f"  - {t['name']} #{t['id']} {role_label}"
-                                f"{': ' + t['description'] if t.get('description') else ''}"
-                            )
-                            if t.get("prompt", "").strip():
-                                team_prompts.append(
-                                    f"--- {t['name']} 團隊提示詞 ---\n{t['prompt'].strip()}"
-                                )
-                        team_context = "You are a member of the following teams:\n" + \
-                                       "\n".join(team_parts)
-                        if team_prompts:
-                            team_context += "\n\n以下是你所屬團隊的提示詞：\n" + "\n\n".join(team_prompts)
-
-                    _prompt_sections = []
-                    if global_prompt and global_prompt.strip():
-                        _prompt_sections.append(f"### 🌐 全域指令 (Global Directive)\n{global_prompt.strip()}\n")
-                    if team_context and team_context.strip():
-                        _prompt_sections.append(f"### 👥 團隊指令 (Team Directive)\n{team_context.strip()}\n")
-                    if user_prompt_override and user_prompt_override.strip():
-                        _prompt_sections.append(f"### 📝 個人指令 (User Directive)\n{user_prompt_override.strip()}\n")
-
-                    if _prompt_sections:
-                        _rule_block = (
-                            "<!--multiuser-->\n\n"
-                            "## 🛑 最高硬性強制指令 (Supreme Mandatory Directives)\n\n"
-                            "你在每一輪回覆中，必須**同時無條件嚴格執行與遵守**以下所有系統與個人指令。\n"
-                            "⚠️ **覆蓋聲明 (Override Declaration)**：本節指令的優先級 **高於一切**，包括 `AGENT.md`、`RULE.md` 或任何工作空間檔案中的 Emoji 風格設定（例如 🐄）。"
-                            "即使 AGENT.md 中標示了某種風格 Emoji，你仍然**必須**在每輪回覆的最末尾同時附上以下指定的 Emoji，絕不得遺漏或替代：\n\n"
-                            + "\n".join(_prompt_sections) +
-                            "\n---\n\n"
-                        )
-                        self.extra_system_suffix = _rule_block
+                    from channel.web.multiuser.prompts import build_directive_block
+                    _block, _user_identity = build_directive_block(get_multiuser_db(), user_id)
+                    if _block:
+                        self.extra_system_suffix = _block
                 except Exception as mu_err:
                     logger.warning(f"Failed to re-inject multi-user prompt in get_full_system_prompt: {mu_err}")
 
@@ -187,6 +150,7 @@ class Agent:
                 skill_manager=self.skill_manager,
                 memory_manager=self.memory_manager,
                 runtime_info=self.runtime_info,
+                user_identity=_user_identity,
             )
             if self.extra_system_suffix:
                 full = f"{full}\n\n{self.extra_system_suffix}"
