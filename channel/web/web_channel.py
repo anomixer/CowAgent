@@ -6592,7 +6592,10 @@ class KnowledgeGraphHandler:
         try:
             from agent.knowledge.service import KnowledgeService
             svc = KnowledgeService(_get_workspace_root())
-            return json.dumps(svc.build_graph(), ensure_ascii=False)
+            user = get_current_user()
+            user_id = user["id"] if user else 0
+            user_role = user["role"] if user else "admin"
+            return json.dumps(svc.build_graph(user_id=user_id, role=user_role), ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Knowledge graph error: {e}")
             return json.dumps({"nodes": [], "links": []})

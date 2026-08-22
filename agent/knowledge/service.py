@@ -665,30 +665,64 @@ class KnowledgeService:
         # Legacy / shared root knowledge (not under users/ or teams/): visible to all.
         return True
 
+    def _allowed_namespaces(self, user_id: int) -> dict:
+        """The caller's accessible knowledge namespaces: their own user id, the
+        owners who shared a KB with them, and the team ids they belong to.
+        Shared with ``build_graph``'s scoping so the two agree with
+        ``check_read_access`` / ``list_scoped_tree``."""
+        owners = {str(user_id)}
+        teams = set()
+        try:
+            from channel.web.multiuser.db import get_multiuser_db
+            db = get_multiuser_db()
+            if db.user_count() > 0:
+                for o in db.get_shared_user_ids(user_id):
+                    if o and int(o) != int(user_id):
+                        owners.add(str(o))
+                for t in db.get_user_team_ids(user_id):
+                    teams.add(str(t))
+        except Exception:
+            pass
+        return {"owners": owners, "teams": teams}
+
 
     # ------------------------------------------------------------------
     # graph — nodes and links for visualization
     # ------------------------------------------------------------------
-    def build_graph(self) -> dict:
+    def build_graph(self, user_id: int = 0, role: str = "admin") -> dict:
         """
-        Parse all knowledge pages and extract cross-reference links.
+        Parse knowledge pages and extract cross-reference links.
 
-        Returns::
-
-            {
-                "nodes": [
-                    {"id": "concepts/moe.md", "label": "MoE", "category": "concepts"},
-                    ...
-                ],
-                "links": [
-                    {"source": "concepts/moe.md", "target": "entities/deepseek.md"},
-                    ...
-                ]
-            }
+        ``user_id``/``role`` scope the graph to what the caller may see (their
+        own personal KB, their teams, KBs shared with them, plus the legacy
+        shared root) — mirroring ``list_scoped_tree`` / ``check_read_access``.
+        Without this, the graph leaked every user's KB *structure* (file names
+        and links) to any authenticated caller. Admins / single-user are
+        unrestricted.
         """
         knowledge_path = Path(self.knowledge_dir)
         if not knowledge_path.is_dir():
             return {"nodes": [], "links": []}
+
+        # Precompute the caller's allowed namespaces (None = unrestricted).
+        allowed = None
+        if role != "admin":
+            allowed = self._allowed_namespaces(user_id)
+
+        def _ok(rel: str) -> bool:
+            if allowed is None:
+                return True
+            rel = rel.replace("\\", "/").strip("/")
+            parts = [s for s in rel.split("/") if s]
+            if not parts:
+                return True
+            if parts[0] not in ("users", "teams"):
+                return True  # legacy / shared root
+            if len(parts) < 2:
+                return False
+            if parts[0] == "users":
+                return parts[1] == str(user_id) or parts[1] in allowed["owners"]
+            return parts[1] in allowed["teams"]
 
         nodes = {}
         links = []
@@ -698,6 +732,8 @@ class KnowledgeService:
         for md_file in knowledge_path.rglob("*.md"):
             rel = str(md_file.relative_to(knowledge_path))
             if rel in ("index.md", "log.md"):
+                continue
+            if not _ok(rel):
                 continue
             parts = rel.split("/")
             category = parts[0] if len(parts) > 1 else "root"
