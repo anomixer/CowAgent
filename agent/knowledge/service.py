@@ -757,7 +757,11 @@ class KnowledgeService:
         link_re = re.compile(r'\[([^\]]*)\]\(([^)#]+\.md)(?:#[^)]*)?\)')
 
         for md_file in knowledge_path.rglob("*.md"):
-            rel = str(md_file.relative_to(knowledge_path))
+            # as_posix(): keep the graph platform-neutral. On Windows the
+            # relative path otherwise carries backslashes, which breaks both
+            # the category split below and any comparison against markdown
+            # links (which are always forward-slash).
+            rel = md_file.relative_to(knowledge_path).as_posix()
             if rel in ("index.md", "log.md"):
                 continue
             if not _ok(rel):
@@ -777,7 +781,7 @@ class KnowledgeService:
                     # they must be decoded to match a path on disk.
                     resolved = (md_file.parent / unquote(link_target)).resolve()
                     try:
-                        target_rel = str(resolved.relative_to(knowledge_path))
+                        target_rel = resolved.relative_to(knowledge_path).as_posix()
                     except ValueError:
                         continue
                     if target_rel != rel:
