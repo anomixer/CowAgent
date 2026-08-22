@@ -17,7 +17,12 @@ def test_knowledge_action_handler_delegates_to_dispatch(tmp_path):
          patch("agent.knowledge.service.KnowledgeService.dispatch", return_value=dispatched) as dispatch:
         response = json.loads(KnowledgeActionHandler().POST())
 
-    dispatch.assert_called_once_with("create_category", {"path": "research"})
+    dispatch.assert_called_once_with(
+        "create_category",
+        # The handler now tags the payload with the caller's scope so the
+        # service can enforce per-user WRITE authorization (own KB / teams).
+        {"path": "research", "_user_id": 0, "_role": "admin"},
+    )
     assert response["status"] == "success"
     assert response["payload"]["created"] is True
 

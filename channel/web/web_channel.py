@@ -244,6 +244,19 @@ def _require_team_admin(team_id: int) -> Dict:
     )
 
 
+def _current_user_scope() -> Dict:
+    """``{"_user_id": .., "_role": ..}`` for the current request, to scope
+    knowledge WRITE actions to the caller. ``get_current_user()`` needs a web
+    request context (``web.ctx``); when absent (single-user / unit tests) it
+    degrades to the unrestricted default (id 0, role "admin")."""
+    try:
+        user = get_current_user()
+    except Exception:
+        user = None
+    return {"_user_id": user["id"] if user else 0,
+            "_role": user["role"] if user else "admin"}
+
+
 # Localized text for /cancel system replies. Web is the only channel that
 # honors a per-request `lang`; other channels reply in Chinese by default.
 def _cancel_reply_text(cancelled: int, lang: str) -> str:
@@ -6611,9 +6624,7 @@ class KnowledgeActionHandler:
             payload = dict(body.get("payload") or {})
             # Pass the caller so the service can scope writes (own KB / teams
             # only; shared-with-me is read-only, legacy root is admin-only).
-            user = get_current_user()
-            payload["_user_id"] = user["id"] if user else 0
-            payload["_role"] = user["role"] if user else "admin"
+            payload.update(_current_user_scope())
             from agent.knowledge.service import KnowledgeService
             result = KnowledgeService(_get_workspace_root()).dispatch(action, payload)
             return json.dumps({
@@ -6681,8 +6692,9 @@ class KnowledgeImportHandler:
                 "conflict_strategy": conflict_strategy,
                 "files": files,
                 # Caller, so the write is scoped to their own KB / their teams.
-                "_user_id": (get_current_user() or {}).get("id", 0),
-                "_role": (get_current_user() or {}).get("role", "admin"),
+                # get_current_user() needs a web context; degrade to the
+                # unrestricted default when absent (single-user / unit tests).
+                **_current_user_scope(),
             })
             return json.dumps({
                 "status": "success" if result["code"] < 300 else "error",
