@@ -577,6 +577,65 @@ class KnowledgeService:
             content = f.read()
         return {"content": content, "path": rel_path}
 
+    def check_read_access(self, rel_path: str, user_id: int = 0, role: str = "admin") -> bool:
+        """
+        Whether ``user_id`` may read the knowledge file at ``rel_path``.
+
+        The list endpoint scopes what a user *sees* to their own personal
+        tree, their teams' trees, and the shared root — but ``read_file`` is a
+        raw path reader, so without this check any authenticated user could
+        read another user's private ``users/<other>/...`` file by crafting the
+        path (the list would hide it, the read would still serve it). This
+        mirrors ``list_scoped_tree``'s scoping so the two agree.
+
+        Allowed for a non-admin:
+          - ``users/<own_id>/...``                       (own personal KB)
+          - ``users/<owner>/...``  where ``owner`` shared with them (directly or via team)
+          - ``teams/<tid>/...``   where the user is a member of team ``tid``
+          - anything else at the knowledge root          (legacy / shared KB, visible to all)
+
+        Admins and single-user mode (``role == "admin"``) are unrestricted,
+        preserving the pre-multi-user behaviour.
+        """
+        if role == "admin":
+            return True
+        rel = rel_path.replace("\\", "/").strip("/")
+        segs = [s for s in rel.split("/") if s]
+        if not segs:
+            return True
+        first = segs[0]
+        try:
+            from channel.web.multiuser.db import get_multiuser_db
+            db = get_multiuser_db()
+        except Exception:
+            # DB unavailable: fail safe for private namespaces, allow shared root.
+            return first not in ("users", "teams")
+
+        if first == "users" and len(segs) >= 2:
+            owner = segs[1]
+            if owner == str(user_id):
+                return True
+            if owner.isdigit():
+                try:
+                    shared = db.get_shared_user_ids(user_id)
+                except Exception:
+                    shared = []
+                return int(owner) in shared
+            return False
+
+        if first == "teams" and len(segs) >= 2:
+            tid = segs[1]
+            if not tid.isdigit():
+                return False
+            try:
+                return tid in [str(t) for t in db.get_user_team_ids(user_id)]
+            except Exception:
+                return False
+
+        # Legacy / shared root knowledge (not under users/ or teams/): visible to all.
+        return True
+
+
     # ------------------------------------------------------------------
     # graph — nodes and links for visualization
     # ------------------------------------------------------------------

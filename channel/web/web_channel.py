@@ -6515,6 +6515,10 @@ class KnowledgeReadHandler:
             from agent.knowledge.service import KnowledgeService
             params = web.input(path='')
             svc = KnowledgeService(_get_workspace_root())
+            user = get_current_user()
+            if not svc.check_read_access(params.path, user_id=user["id"] if user else 0,
+                                        role=user["role"] if user else "admin"):
+                return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
             result = svc.read_file(params.path)
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except (ValueError, FileNotFoundError) as e:
