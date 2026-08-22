@@ -248,6 +248,7 @@ class MultiUserDB:
 
         # Create user's knowledge directory after successful registration
         if user:
+            user.pop("password_hash", None)
             self._ensure_user_knowledge_dir(user["id"])
         return user
 
@@ -267,17 +268,23 @@ class MultiUserDB:
         with self._lock:
             conn = self._get_conn()
             try:
-                return self._get_user_by_id(conn, user_id)
+                user = self._get_user_by_id(conn, user_id)
             finally:
                 conn.close()
+        if user:
+            user.pop("password_hash", None)
+        return user
 
     def get_user_by_username(self, username: str) -> Optional[Dict]:
         with self._lock:
             conn = self._get_conn()
             try:
-                return self._get_user_by_username(conn, username)
+                user = self._get_user_by_username(conn, username)
             finally:
                 conn.close()
+        if user:
+            user.pop("password_hash", None)
+        return user
 
     def authenticate(self, username: str, password: str) -> Optional[Dict]:
         """Verify credentials. Returns user dict on success, None on failure."""
@@ -286,6 +293,7 @@ class MultiUserDB:
             try:
                 user = self._get_user_by_username(conn, username)
                 if user and _verify_password(password, user["password_hash"]):
+                    user.pop("password_hash", None)
                     return user
                 return None
             finally:
@@ -753,6 +761,20 @@ class MultiUserDB:
             try:
                 row = conn.execute(
                     "SELECT 1 FROM mu_team_members WHERE team_id = ? AND user_id = ?",
+                    (team_id, user_id),
+                ).fetchone()
+                return row is not None
+            finally:
+                conn.close()
+
+    def is_team_admin(self, team_id: int, user_id: int) -> bool:
+        """Check if user_id is an admin member of team_id."""
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM mu_team_members "
+                    "WHERE team_id = ? AND user_id = ? AND role = 'admin'",
                     (team_id, user_id),
                 ).fetchone()
                 return row is not None
