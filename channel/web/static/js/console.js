@@ -11676,6 +11676,8 @@ function showEditTeamForm(teamId) {
         .then(data => {
             if (data.status !== 'success' || !data.team) return;
             const team = data.team;
+            const existing = document.getElementById('edit-team-overlay');
+            if (existing) existing.remove();
             const overlay = document.createElement('div');
             overlay.id = 'edit-team-overlay';
             overlay.className = 'fixed inset-0 bg-black/50 z-[200] flex items-center justify-center';
@@ -11948,6 +11950,12 @@ let _addMemberUsers = [];
 let _addMemberSelectedUser = null;
 
 function showAddMemberForm(teamId) {
+    // G4: never stack a second modal with the same id — closeAddMemberForm()
+    // and the status/button lookups below all use getElementById, so a stray
+    // instance would leave an unclosable overlay and mis-target the controls.
+    const existing = document.getElementById('add-member-modal');
+    if (existing) existing.remove();
+
     const overlay = document.createElement('div');
     overlay.id = 'add-member-modal';
     overlay.className = 'fixed inset-0 bg-black/50 z-[200] flex items-center justify-center';
@@ -12846,6 +12854,8 @@ window.toggleShareTargetType = toggleShareTargetType;
 function showAddShareDialog() {
     const container = document.getElementById('knowledge-panel-shares');
     if (!container) return;
+    const existing = document.getElementById('share-add-overlay');
+    if (existing) existing.remove();
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 bg-black/50 z-[200] flex items-center justify-center';
     overlay.id = 'share-add-overlay';
