@@ -355,16 +355,55 @@ class MultiUserDB:
                 conn.close()
 
     def delete_user(self, user_id: int) -> bool:
-        """Delete a user and all their sessions. Returns True if found."""
+        """Delete a user and ALL data owned by them. Returns True if found.
+
+        Cascades to: login sessions, team memberships, per-user configs,
+        knowledge shares they own or were granted, their personal knowledge
+        directory on disk, and their personal (non-team) conversation history.
+        Team threads are left intact — they belong to the team, not the user.
+        """
         with self._lock:
             conn = self._get_conn()
             try:
                 conn.execute("DELETE FROM mu_sessions WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM mu_team_members WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM mu_user_configs WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM mu_kb_shares WHERE owner_id = ?", (user_id,))
+                conn.execute("DELETE FROM mu_kb_shares WHERE shared_with_id = ?", (user_id,))
+                # Personal (non-team) conversation history + its messages.
+                # These tables live in the same file (index.db) but are owned by
+                # ConversationStore, so guard the deletes: a user who never chatted
+                # may not have them yet.
+                try:
+                    for sid in [r[0] for r in conn.execute(
+                            "SELECT session_id FROM sessions WHERE user_id = ? AND session_id NOT LIKE 'team_%'",
+                            (user_id,)).fetchall()]:
+                        conn.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
+                    conn.execute("DELETE FROM sessions WHERE user_id = ? AND session_id NOT LIKE 'team_%'", (user_id,))
+                except sqlite3.OperationalError:
+                    pass  # sessions/messages table not present yet
                 cur = conn.execute("DELETE FROM mu_users WHERE id = ?", (user_id,))
                 conn.commit()
-                return cur.rowcount > 0
+                deleted = cur.rowcount > 0
             finally:
                 conn.close()
+        # Remove the user's personal knowledge directory (knowledge/users/<id>/).
+        if deleted:
+            self._ensure_user_knowledge_dir_cleanup(user_id)
+        return deleted
+
+    def _ensure_user_knowledge_dir_cleanup(self, user_id: int) -> None:
+        """Remove a user's personal knowledge directory on deletion."""
+        try:
+            from config import conf
+            import shutil
+            workspace = os.path.expanduser(conf().get("agent_workspace", "~/cow"))
+            user_kb_dir = os.path.join(workspace, "knowledge", "users", str(user_id))
+            if os.path.isdir(user_kb_dir):
+                shutil.rmtree(user_kb_dir, ignore_errors=True)
+                logger.debug(f"[MultiUserDB] Removed knowledge directory for user {user_id}")
+        except Exception as e:
+            logger.warning(f"[MultiUserDB] Failed to cleanup knowledge dir for user {user_id}: {e}")
 
     def user_count(self) -> int:
         with self._lock:
@@ -683,18 +722,33 @@ class MultiUserDB:
                 conn.close()
 
     def delete_team(self, team_id: int) -> bool:
-        """Delete a team and all memberships."""
+        """Delete a team, its memberships, shares, threads, and knowledge dir."""
         with self._lock:
             conn = self._get_conn()
             try:
                 conn.execute("DELETE FROM mu_team_members WHERE team_id = ?", (team_id,))
+                conn.execute("DELETE FROM mu_kb_shares WHERE team_id = ?", (team_id,))
+                # Remove the team's threads (team_-prefixed sessions) + messages
+                # from the shared conversation tables.
+                try:
+                    sids = [r[0] for r in conn.execute(
+                        "SELECT session_id FROM sessions WHERE session_id = ? OR session_id LIKE ?",
+                        (f"team_{team_id}", f"team_{team_id}_%")).fetchall()]
+                    for sid in sids:
+                        conn.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
+                    if sids:
+                        conn.execute("DELETE FROM sessions WHERE session_id IN (%s)" % ",".join("?" * len(sids)), sids)
+                except sqlite3.OperationalError:
+                    pass  # sessions/messages table not present yet
                 cur = conn.execute("DELETE FROM mu_teams WHERE id = ?", (team_id,))
                 conn.commit()
-                # Remove team knowledge directory
-                self._ensure_team_knowledge_dir_cleanup(team_id)
-                return cur.rowcount > 0
+                deleted = cur.rowcount > 0
             finally:
                 conn.close()
+        # Remove team knowledge directory
+        if deleted:
+            self._ensure_team_knowledge_dir_cleanup(team_id)
+        return deleted
 
     def get_team(self, team_id: int) -> Optional[Dict]:
         with self._lock:
