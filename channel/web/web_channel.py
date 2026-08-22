@@ -206,11 +206,11 @@ def _check_session_owner(session_id: str) -> bool:
                     return True
                 if db.is_team_member(team_id, user["id"]):
                     return True
-                team = db.get_team(team_id)
-                if team:
-                    db.add_team_member(team_id, user["id"], role="member")
-                    return True
-                return True
+                # Non-member, non-admin: deny. (Previously this auto-joined the
+                # user to the team, so any logged-in account could gain
+                # membership — and thus team knowledge / team-prompt context —
+                # simply by touching a team session id.)
+                return False
         except Exception:
             pass
         return True
