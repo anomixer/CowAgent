@@ -28,7 +28,7 @@
 13. [Phase 3 — Team Scope & 三層 Prompt 繼承](#13-phase-3--team-scope--三層-prompt-繼承)
 14. [Phase 3.5 — 團聊 IM 即時訊息系統](#14-phase-35--團聊-im-即時訊息系統)
 15. [Phase 3.5 擴充 — 團隊工作區 (Team Workspace)、記憶與知識庫隔離](#15-phase-35-擴充--團隊工作區-team-workspace記憶與知識庫隔離)
-16. [Phase 4 — Desktop 多人登入 & 每人獨立上傳目錄](#16-phase-4--desktop-多人登入--每人獨立上傳目錄)
+16. [Phase 3.6 — Desktop 多人登入 & 每人獨立上傳目錄](#16-phase-36--desktop-多人登入--每人獨立上傳目錄)
 
 ---
 
@@ -1057,7 +1057,7 @@ SSE `done` 事件後，將 `user_seq` 和 `bot_seq` 加入 `_teamRenderedSeqs`�
 
 ---
 
-## 16. Phase 4 — Desktop 多人登入 & 每人獨立上傳目錄 (✅ 已完成)
+## 16. Phase 3.6 — Desktop 多人登入 & 每人獨立上傳目錄 (✅ 已完成)
 
 > 2026-08-23 — 把 multi-user 能力補齊到 **Desktop (Electron)** 端，並讓每個登入者擁有**獨立的上傳目錄**。
 
@@ -1106,5 +1106,5 @@ SSE `done` 事件後，將 `user_seq` 和 `bot_seq` 加入 `_teamRenderedSeqs`�
 > **Date**: 2026-08-23  \
 > **Base**: `anomixer/CowAgent`  \
 > **Branch**: `feat-multiuser`  \
-> **Status**: Phase 1 ✅ + Phase 2 ✅ + Phase 3 ✅ + Phase 3.5 ✅ + **Phase 4 ✅ (Desktop 多人登入 + 每人獨立上傳目錄)** 🎉
+> **Status**: Phase 1 ✅ + Phase 2 ✅ + Phase 3 ✅ + Phase 3.5 ✅ + **Phase 3.6 ✅ (Desktop 多人登入 + 每人獨立上傳目錄)** 🎉
 
