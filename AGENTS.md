@@ -28,6 +28,7 @@
 13. [Phase 3 — Team Scope & 三層 Prompt 繼承](#13-phase-3--team-scope--三層-prompt-繼承)
 14. [Phase 3.5 — 團聊 IM 即時訊息系統](#14-phase-35--團聊-im-即時訊息系統)
 15. [Phase 3.5 擴充 — 團隊工作區 (Team Workspace)、記憶與知識庫隔離](#15-phase-35-擴充--團隊工作區-team-workspace記憶與知識庫隔離)
+16. [Phase 4 — Desktop 多人登入 & 每人獨立上傳目錄](#16-phase-4--desktop-多人登入--每人獨立上傳目錄)
 
 ---
 
@@ -1056,9 +1057,54 @@ SSE `done` 事件後，將 `user_seq` 和 `bot_seq` 加入 `_teamRenderedSeqs`�
 
 ---
 
+## 16. Phase 4 — Desktop 多人登入 & 每人獨立上傳目錄 (✅ 已完成)
+
+> 2026-08-23 — 把 multi-user 能力補齊到 **Desktop (Electron)** 端，並讓每個登入者擁有**獨立的上傳目錄**。
+
+### 16.1 Desktop 多人登入畫面
+
+**問題**：Desktop renderer 從 `file://` origin 跑，**cookie 不可靠**，所以 Desktop 一直用 `Authorization: Bearer <token>` header 認證。但 multi-user 模式的登入**只發 `mu_session` cookie、不發 token** → Desktop 在 multi-user 後端上根本登入不了。
+
+**解法**（讓 Desktop 與 Web 走同一套 session，用 bearer 載體）：
+
+| 檔案 | 變更 |
+|------|------|
+| `channel/web/multiuser/auth.py` | `get_current_user()` 除了讀 `mu_session` cookie，**也接受 `Authorization: Bearer <session_id>`**（bearer 值就是同一個 session id，命中同一個 server-side session）。cookie 與 header 兩種載體互通。 |
+| `channel/web/web_channel.py` | `AuthLoginHandler`（multi-user 分支）與 `RegisterHandler` 的回應**加回 `token` 欄位 = `session_id`**。Desktop 的 `authLogin`/`authRegister` 存下它、之後用 header 帶回 → 後端認得出。 |
+| `desktop/src/renderer/src/api/client.ts` | `authLogin(password, username?)` 支援帶 username；新增 `authRegister(username, password)`（`POST /api/auth/register`，第一人 = admin）；`authCheck()` 型別補上 `multiuser` / `user`。兩者成功都把 `res.token` 存成 bearer。 |
+| `desktop/src/renderer/src/App.tsx` | 從 `authCheck()` 讀 `multiuser` 存入 state，決定顯示哪種登入表單。 |
+| `desktop/src/renderer/src/components/LoginGate.tsx` | 重寫：`multiuser` prop → 帳號 + 密碼 + **登入/註冊切換**（含確認密碼）；legacy 維持純密碼。註冊成功第一人自動 admin。 |
+| `desktop/src/renderer/src/i18n.ts` | 補 zh / en 多字串（`login_username` / `login_confirm` / `login_confirm_mismatch` / `login_switch_to_*` / `register_*`）。 |
+
+**安全**：bearer 只是既有 session id 的另一種載體，不是新憑證；`get_current_user()` 仍走 `db.get_session()` 查 server-side session，session 過期/撤銷照樣生效。
+
+### 16.2 每人獨立上傳目錄
+
+**問題**：上傳檔（圖片附件、麥克風錄音、目錄上傳）全部落進**單一共用** `<workspace>/tmp/`，多人共用、無隔離。
+
+**解法**（per-user 子目錄 + URL 帶 user + 讀回不變）：
+
+| 檔案 | 變更 |
+|------|------|
+| `channel/web/web_channel.py` | 新增三個 helper：<br>• `_upload_user_prefix()` → multi-user + 已登入時回傳 `users/<uid>`，否則 `''`（legacy 不變）。<br>• `_user_upload_dir()` → 該使用者的上傳目錄（`<root>/users/<uid>`，自動 mkdir；legacy = 共用 root）。<br>• `_upload_url(name)` → 產生 `/uploads/users/<uid>/<name>`（legacy = `/uploads/<name>`）。<br>把 `upload_file()`（單檔 + 目錄兩分支）、ASR 錄音的**寫入**改成 `_user_upload_dir()`、**URL** 改成 `_upload_url()`。 |
+
+**設計重點（不炸 read-back / 不破坏團隊共用）**：
+- 讀回 handler `UploadsHandler`（route `/uploads/(.*)`）**完全不動** — 它仍對**共用 root** 做 path-containment 檢查，而 `users/<uid>/...` 就在 root 底下 → owner 能看、**團隊成員看共用附件也能看**（URL 帶的是「上傳者」的 uid，不是「查看者」，所以跨用戶解析不會 404）。
+- **legacy / 未登入**：prefix = `''`，行為與舊版**完全一致**（零 regression）。
+- **TTS 語音、啟動清場**：仍在共用 root — 它是系統產生、且在**背景執行緒**（無可靠 user context），不該綁到特定用戶。
+- Agent 讀檔用回傳的**絕對路徑**（`save_path`），自動跟著 per-user 走，不需改。
+
+### 16.3 驗證
+
+- `python -m py_compile` web_channel.py / auth.py 通過；multiuser 核心測試（prompt layers / runtime / knowledge_web / registry / routing）**全綠**。
+- 上傳 helper 實測：非 multi-user → prefix `''`、URL `/uploads/a.png`（legacy 不變）；`users/1/a.png` 通過 `UploadsHandler` 的 containment 檢查 → 讀回 OK。
+- Desktop 端：`client.ts` / `App.tsx` / `LoginGate.tsx` / `i18n.ts` 花括號與反引號平衡檢查通過（`node_modules` 未安裝，未跑完整 tsc build — 待有環境時 `npm i && npm run build` 驗證）。
+
+---
+
 > **Author**: CowAgent 🐮  \
-> **Date**: 2026-07-24  \
+> **Date**: 2026-08-23  \
 > **Base**: `anomixer/CowAgent`  \
 > **Branch**: `feat-multiuser`  \
-> **Status**: Phase 1 ✅ + Phase 2 ✅ + Phase 3 ✅ + Phase 3.5 ✅ (團隊空間、子對話串、記憶與知識庫隔離完整實現) 🎉
+> **Status**: Phase 1 ✅ + Phase 2 ✅ + Phase 3 ✅ + Phase 3.5 ✅ + **Phase 4 ✅ (Desktop 多人登入 + 每人獨立上傳目錄)** 🎉
 

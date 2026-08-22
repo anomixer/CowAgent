@@ -387,8 +387,56 @@ def _steer_reply_text(status, lang: str) -> str:
 
 
 def _get_upload_dir() -> str:
+    """Shared upload root.
+
+    This is the base the read-back handler (``UploadsHandler``) resolves
+    against and the root of its path-containment check. Per-user files live
+    under ``users/<uid>/`` inside this root, so a ``users/<uid>/...`` URL
+    still passes the containment check and both the owner and (for team
+    attachments) other members can fetch it.
+    """
     from common.state_dir import tmp_dir
     return str(tmp_dir())
+
+
+def _upload_user_prefix() -> str:
+    """URL prefix for the current user's private upload subdirectory.
+
+    Multi-user + logged in: ``users/<uid>`` — each account's uploads are stored
+    under their own directory. Legacy mode / not logged in: ``""`` (files stay
+    at the shared upload root, exactly as before).
+    """
+    try:
+        from channel.web.multiuser.auth import is_multiuser_enabled, get_current_user
+        if is_multiuser_enabled():
+            user = get_current_user()
+            if user and user.get("id"):
+                return "users/%d" % int(user["id"])
+    except Exception:
+        pass
+    return ""
+
+
+def _user_upload_dir() -> str:
+    """The current user's upload directory (absolute), created on demand.
+
+    Legacy: the shared upload root. Multi-user: ``<root>/users/<uid>``.
+    """
+    prefix = _upload_user_prefix()
+    base = _get_upload_dir()
+    target = os.path.join(base, prefix) if prefix else base
+    os.makedirs(target, exist_ok=True)
+    return target
+
+
+def _upload_url(name: str) -> str:
+    """Browser-facing URL for an uploaded file, scoped to the current user.
+
+    ``name`` is the file name relative to the upload dir (may be a quoted
+    subpath). Legacy: ``/uploads/<name>``. Multi-user: ``/uploads/users/<uid>/<name>``.
+    """
+    prefix = _upload_user_prefix()
+    return f"/uploads/{prefix}/{name}" if prefix else f"/uploads/{name}"
 
 
 def _get_workspace_root(session_id: str = None, agent_id: str = None) -> str:
@@ -1426,7 +1474,9 @@ class WebChannel(ChatChannel):
 
             is_directory_upload = bool(directory_files) or bool(directory_rel_paths) or bool(relative_path) or bool(upload_id)
 
-            upload_dir = _get_upload_dir()
+            # Per-user isolation: the user's own uploads go under their own
+            # directory (legacy mode: the shared upload root, unchanged).
+            upload_dir = _user_upload_dir()
             if is_directory_upload:
                 if not upload_id:
                     return _reject("Missing upload_id for directory upload")
@@ -1497,7 +1547,7 @@ class WebChannel(ChatChannel):
                 file_type = "file"
 
             from urllib.parse import quote
-            preview_url = f"/uploads/{quote(public_path, safe='/')}"
+            preview_url = _upload_url(quote(public_path, safe='/'))
 
             logger.info(f"[WebChannel] File uploaded: {original_name} -> {save_path} ({file_type})")
 
@@ -2375,6 +2425,11 @@ class AuthLoginHandler:
                 "user": user_obj,
                 "multiuser": True,
                 "default_password": default_pwd,
+                # Also return the session id as a bearer token: the desktop
+                # renderer (file:// origin) can't rely on the mu_session cookie
+                # and echoes it back via an Authorization header. get_current_user()
+                # accepts either the cookie or the bearer value (same session id).
+                "token": result["session_id"],
             })
 
         # Legacy mode: single password
@@ -2445,6 +2500,9 @@ class RegisterHandler:
             "user": user,
             "role": role,
             "message": "Registration successful",
+            # Bearer token for cookie-unreliable clients (the desktop file://
+            # origin): same session id the auto-login cookie carries.
+            "token": result["session_id"] if result else None,
         })
 
 
@@ -3128,7 +3186,7 @@ class VoiceAsrHandler:
             if ext not in (".webm", ".ogg", ".opus", ".mp4", ".m4a", ".mp3", ".wav"):
                 ext = ".webm"
 
-            upload_dir = _get_upload_dir()
+            upload_dir = _user_upload_dir()
             os.makedirs(upload_dir, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
             saved_name = f"voice_input_{ts}_{random.randint(0, 9999)}{ext}"
@@ -3136,7 +3194,7 @@ class VoiceAsrHandler:
             with open(saved_path, "wb") as f:
                 f.write(file_obj.file.read() if hasattr(file_obj, "file") else file_obj.value)
 
-            audio_url = f"/uploads/{saved_name}"
+            audio_url = _upload_url(saved_name)
 
             from bridge.bridge import Bridge
             reply = Bridge().fetch_voice_to_text(saved_path)

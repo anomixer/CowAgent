@@ -488,6 +488,15 @@ const translations: Record<string, Record<string, string>> = {
     login_submit: '进入',
     login_error: '密码错误，请重试',
     login_checking: '验证中...',
+    // multi-user login / register
+    login_username: '用户名',
+    login_confirm: '确认密码',
+    login_confirm_mismatch: '两次输入的密码不一致',
+    login_switch_to_login: '已有账号？去登录',
+    login_switch_to_register: '没有账号？去注册（第一个账号将成为管理员）',
+    register_title: '创建账号',
+    register_desc: '注册一个账号以继续（第一个账号将成为管理员）',
+    register_submit: '注册并进入',
     // slash command descriptions
     slash_menu_title: '命令',
     slash_new: '新建对话',
@@ -1002,6 +1011,15 @@ const translations: Record<string, Record<string, string>> = {
     login_submit: 'Enter',
     login_error: 'Wrong password, please try again',
     login_checking: 'Verifying...',
+    // multi-user login / register
+    login_username: 'Username',
+    login_confirm: 'Confirm password',
+    login_confirm_mismatch: 'Passwords do not match',
+    login_switch_to_login: 'Have an account? Sign in',
+    login_switch_to_register: 'No account? Register (the first account becomes admin)',
+    register_title: 'Create account',
+    register_desc: 'Register an account to continue (the first account becomes admin)',
+    register_submit: 'Register & continue',
     // slash command descriptions
     slash_menu_title: 'Commands',
     slash_new: 'New chat',

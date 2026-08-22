@@ -40,10 +40,12 @@ const App: React.FC = () => {
   const onboardingOpen = useOnboardingStore((s) => s.open)
   const maybeOpenOnboarding = useOnboardingStore((s) => s.maybeOpen)
   const [, forceUpdate] = useState(0)
-  // Auth gate for web_password-protected backends. 'checking' until we know
-  // whether login is needed; 'need_login' shows the password screen; 'ok' lets
-  // the main UI render.
+  // Auth gate. 'checking' until we know whether login is needed; 'need_login'
+  // shows the login screen; 'ok' lets the main UI render.
   const [authState, setAuthState] = useState<'checking' | 'need_login' | 'ok'>('checking')
+  // Whether the backend is in multi-user mode (username + password + register)
+  // vs. legacy single-password mode. Drives which login form is shown.
+  const [authMultiuser, setAuthMultiuser] = useState(false)
   const [productAuthed, setProductAuthed] = useState(false)
   // Optional gate provided by '@product'. `product.auth` is constant for the
   // whole build, so calling its hook conditionally is stable across renders.
@@ -81,6 +83,7 @@ const App: React.FC = () => {
       .authCheck()
       .then((res) => {
         if (cancelled) return
+        setAuthMultiuser(Boolean(res.multiuser))
         const needLogin = res.auth_required && !res.authenticated
         setAuthState(needLogin ? 'need_login' : 'ok')
       })
@@ -178,7 +181,7 @@ const App: React.FC = () => {
   }
 
   if (authState === 'need_login') {
-    return <LoginGate onAuthenticated={() => setAuthState('ok')} />
+    return <LoginGate multiuser={authMultiuser} onAuthenticated={() => setAuthState('ok')} />
   }
 
   // Optional gate from '@product', shown after the local auth check passes.

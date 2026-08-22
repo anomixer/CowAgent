@@ -614,17 +614,45 @@ class ApiClient {
   }
 
   // ---------------------------------------------------------
-  // Auth (web_password) — placeholder for future use
+  // Auth — legacy web_password (single password) and multi-user
+  // (username + password, first user becomes admin) both work here.
   // ---------------------------------------------------------
 
-  async authCheck(): Promise<{ status: string; auth_required: boolean; authenticated?: boolean }> {
+  async authCheck(): Promise<{
+    status: string
+    auth_required: boolean
+    authenticated?: boolean
+    multiuser?: boolean
+    user?: { id: number; username: string; role: string } | null
+  }> {
     return this.request('/auth/check')
   }
 
-  async authLogin(password: string): Promise<ApiResult & { token?: string }> {
-    const res = await this.request<ApiResult & { token?: string }>('/auth/login', {
+  async authLogin(
+    password: string,
+    username?: string,
+  ): Promise<ApiResult & { token?: string; user?: { id: number; username: string; role: string }; default_password?: boolean }> {
+    const body = username ? { username, password } : { password }
+    const res = await this.request<ApiResult & { token?: string; user?: unknown; default_password?: boolean }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify(body),
+    })
+    // Both modes return the session as `token`; legacy additionally relies on
+    // the cookie. Storing the token is what makes the desktop (file:// origin)
+    // authenticate — the backend accepts it via the Authorization header.
+    if (res.status === 'success' && res.token) {
+      this.setAuthToken(res.token)
+    }
+    return res
+  }
+
+  async authRegister(
+    username: string,
+    password: string,
+  ): Promise<ApiResult & { token?: string; user?: { id: number; username: string; role: string }; role?: string }> {
+    const res = await this.request<ApiResult & { token?: string; user?: unknown; role?: string }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
     })
     if (res.status === 'success' && res.token) {
       this.setAuthToken(res.token)

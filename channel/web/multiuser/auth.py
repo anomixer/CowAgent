@@ -47,9 +47,17 @@ def is_multiuser_enabled() -> bool:
 def get_current_user() -> Optional[Dict]:
     """Return the currently logged-in user dict, or None.
 
-    Reads the mu_session cookie and looks up the server-side session.
+    The session id is read from the ``mu_session`` cookie, or — for clients
+    that can't rely on cookies (the desktop renderer runs from a ``file://``
+    origin) — from an ``Authorization: Bearer <session_id>`` header. The bearer
+    value is the same opaque session id the cookie carries, so both paths hit
+    the identical server-side session lookup.
     """
-    session_id = web.cookies().get(_SESSION_COOKIE, "")
+    session_id = web.cookies().get(_SESSION_COOKIE, "") or ""
+    if not session_id:
+        auth = web.ctx.env.get("HTTP_AUTHORIZATION", "") or web.ctx.env.get("HTTP_X_AUTHORIZATION", "")
+        if auth.startswith("Bearer "):
+            session_id = auth[len("Bearer "):].strip()
     if not session_id:
         return None
     db = get_multiuser_db()
