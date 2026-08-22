@@ -685,6 +685,33 @@ class KnowledgeService:
             pass
         return {"owners": owners, "teams": teams}
 
+    def _can_write(self, rel_path: str, user_id: int, role: str) -> bool:
+        """Whether the caller may WRITE (create/delete/rename/move/import) at
+        ``rel_path``. Writable scope is narrower than the read scope: only the
+        caller's own personal KB and their teams (collaborative). Shared-with-me
+        KBs are read-only, and the legacy shared root is left to admins — so a
+        user cannot delete/rewrite another user's files via the action API.
+        Admins and single-user (``role == "admin"``) are unrestricted."""
+        if role == "admin":
+            return True
+        rel = rel_path.replace("\\", "/").strip("/")
+        segs = [s for s in rel.split("/") if s]
+        if not segs:
+            return False  # writing at the shared root requires admin
+        first = segs[0]
+        if first == "users":
+            return len(segs) >= 2 and segs[1] == str(user_id)
+        if first == "teams":
+            if not (len(segs) >= 2 and segs[1].isdigit()):
+                return False
+            try:
+                from channel.web.multiuser.db import get_multiuser_db
+                return segs[1] in [str(t) for t in get_multiuser_db().get_user_team_ids(user_id)]
+            except Exception:
+                return False
+        return False
+
+
 
     # ------------------------------------------------------------------
     # graph — nodes and links for visualization
@@ -783,6 +810,23 @@ class KnowledgeService:
         :return: protocol-compatible response dict
         """
         payload = payload or {}
+        user_id = int(payload.pop("_user_id", 0) or 0)
+        role = str(payload.pop("_role", "admin") or "admin")
+
+        # Writable scope: non-admins may only write to their own personal KB or
+        # their teams. Enforced once, here, for every mutating action below.
+        WRITE_ACTIONS = {
+            "create_category", "rename_category", "delete_category",
+            "delete_documents", "move_documents", "create_document",
+            "import_documents",
+        }
+
+        def _deny_write(rel: str) -> Optional[dict]:
+            """Return a 403 response dict if the caller may not write to ``rel``."""
+            if role != "admin" and not self._can_write(rel, user_id, role):
+                return {"action": action, "code": 403,
+                        "message": "無權限寫入此知識庫 / Not authorized to write here", "payload": None}
+            return None
         try:
             if action == "list":
                 result = self.list_tree()
@@ -800,19 +844,36 @@ class KnowledgeService:
                 return {"action": action, "code": 200, "message": "success", "payload": result}
 
             elif action == "create_category":
+                den = _deny_write(payload.get("path") or "")
+                if den: return den
                 result = self.create_category(payload.get("path"))
             elif action == "rename_category":
+                for p in (payload.get("path"), payload.get("new_path")):
+                    den = _deny_write(p or "")
+                    if den: return den
                 result = self.rename_category(payload.get("path"), payload.get("new_path"))
             elif action == "delete_category":
+                den = _deny_write(payload.get("path") or "")
+                if den: return den
                 result = self.delete_category(payload.get("path"), payload.get("confirm", False))
             elif action == "delete_documents":
+                for p in (payload.get("paths") or []):
+                    den = _deny_write(p)
+                    if den: return den
                 result = self.delete_documents(payload.get("paths") or [])
             elif action == "move_documents":
+                for p in (payload.get("paths") or []) + [payload.get("target_category")]:
+                    den = _deny_write(p or "")
+                    if den: return den
                 result = self.move_documents(payload.get("paths") or [], payload.get("target_category"))
             elif action == "create_document":
+                den = _deny_write(payload.get("path") or "")
+                if den: return den
                 result = self.create_document(payload.get("path"), payload.get("content", ""),
                                               payload.get("overwrite", False))
             elif action == "import_documents":
+                den = _deny_write(payload.get("target_category") or "")
+                if den: return den
                 result = self.import_documents(
                     payload.get("target_category"),
                     payload.get("files") or [],

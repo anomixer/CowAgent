@@ -6608,7 +6608,12 @@ class KnowledgeActionHandler:
         try:
             body = json.loads(web.data() or b"{}")
             action = body.get("action", "")
-            payload = body.get("payload") or {}
+            payload = dict(body.get("payload") or {})
+            # Pass the caller so the service can scope writes (own KB / teams
+            # only; shared-with-me is read-only, legacy root is admin-only).
+            user = get_current_user()
+            payload["_user_id"] = user["id"] if user else 0
+            payload["_role"] = user["role"] if user else "admin"
             from agent.knowledge.service import KnowledgeService
             result = KnowledgeService(_get_workspace_root()).dispatch(action, payload)
             return json.dumps({
@@ -6675,6 +6680,9 @@ class KnowledgeImportHandler:
                 "target_category": target_category,
                 "conflict_strategy": conflict_strategy,
                 "files": files,
+                # Caller, so the write is scoped to their own KB / their teams.
+                "_user_id": (get_current_user() or {}).get("id", 0),
+                "_role": (get_current_user() or {}).get("role", "admin"),
             })
             return json.dumps({
                 "status": "success" if result["code"] < 300 else "error",
