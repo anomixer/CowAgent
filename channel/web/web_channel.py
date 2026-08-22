@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from queue import Queue, Empty
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from urllib.parse import quote
 
 import web
@@ -219,6 +219,29 @@ def _check_session_owner(session_id: str) -> bool:
         return False
     return True
 
+
+def _require_team_admin(team_id: int) -> Dict:
+    """Authorize an action that manages a team: a global admin, or that
+    team's own admin (Phase 4 self-service). Raises 403 otherwise.
+
+    The "last admin" safety (can't remove/demote the only admin) is enforced
+    by the DB layer, not here, so a team admin can manage their team without
+    ever orphaning it.
+    """
+    if not is_multiuser_enabled():
+        _require_auth()
+        return {"id": 0, "username": "admin", "role": "admin"}
+    user = require_login()
+    if user.get("role") == "admin":
+        return user
+    from channel.web.multiuser.db import get_multiuser_db
+    if get_multiuser_db().is_team_admin(team_id, user["id"]):
+        return user
+    raise web.HTTPError(
+        "403 Forbidden",
+        {"Content-Type": "application/json; charset=utf-8"},
+        json.dumps({"status": "error", "message": "需要團隊管理員權限 / Team admin required"}),
+    )
 
 
 # Localized text for /cancel system replies. Web is the only channel that
@@ -2567,13 +2590,13 @@ class TeamMembersHandler:
         return json.dumps({"status": "success", "members": members})
 
     def POST(self, team_id: str):
-        """Add a member to the team. Admin only for now (Phase 4 adds team admin)."""
+        """Add a member to the team. A global admin or a team admin may do this."""
         web.header('Content-Type', 'application/json; charset=utf-8')
-        admin = self._auth_admin()
         try:
             tid = int(team_id)
         except (ValueError, TypeError):
             return json.dumps({"status": "error", "message": "Invalid team ID"})
+        actor = _require_team_admin(tid)
         try:
             data = json.loads(web.data())
         except Exception:
@@ -2601,19 +2624,22 @@ class TeamMembersHandler:
                 return json.dumps({"status": "error", "message": "user_id or username required"})
             user = db.get_user_by_username(username)
             if not user:
-                # Auto-provision: admin can add users who don't exist yet
+                # Auto-provision: admin can add users who don't exist yet.
+                # The new account is always a global "user" — the team role
+                # (admin/member) is separate. Passing the team role here would
+                # make a "team admin" a GLOBAL admin (privilege escalation).
                 tmp_pwd = "123456"
-                user = db.create_user(username, tmp_pwd, role=role)
+                user = db.create_user(username, tmp_pwd, role="user")
                 if not user:
                     return json.dumps({"status": "error", "message": "Failed to create user"})
                 db.set_user_config(user["id"], "password_changed", "false")
-                logger.info(f"[WebChannel] Auto-provisioned user '{username}' (id={user['id']}) with role={role} via team add")
+                logger.info(f"[WebChannel] Auto-provisioned user '{username}' (id={user['id']}) as global user, team role={role}")
             else:
                 tmp_pwd = None
             target_uid = user["id"]
 
         if db.add_team_member(tid, target_uid, role=role):
-            logger.info(f"[WebChannel] Admin '{admin['username']}' added user id={target_uid} to team id={tid} as {role}")
+            logger.info(f"[WebChannel] '{actor['username']}' added user id={target_uid} to team id={tid} as {role}")
             result = {"status": "success"}
             if tmp_pwd:
                 result["generated_password"] = tmp_pwd
@@ -2632,20 +2658,51 @@ class TeamMemberDetailHandler:
             return {"id": 0, "username": "admin", "role": "admin"}
 
     def DELETE(self, team_id: str, user_id: str):
-        """Remove a member from the team."""
+        """Remove a member from the team. A global admin or a team admin may do this."""
         web.header('Content-Type', 'application/json; charset=utf-8')
-        admin = self._auth_admin()
         try:
             tid = int(team_id)
             uid = int(user_id)
         except (ValueError, TypeError):
             return json.dumps({"status": "error", "message": "Invalid ID"})
 
+        actor = _require_team_admin(tid)
         db = get_multiuser_db()
         if db.remove_team_member(tid, uid):
-            logger.info(f"[WebChannel] Admin '{admin['username']}' removed user id={uid} from team id={tid}")
+            logger.info(f"[WebChannel] '{actor['username']}' removed user id={uid} from team id={tid}")
             return json.dumps({"status": "success"})
         return json.dumps({"status": "error", "message": "Member not found or last admin in team"})
+
+    def PUT(self, team_id: str, user_id: str):
+        """Change a member's role (member/admin). A global admin or a team admin
+        may do this. The last-admin safety is enforced by the DB layer."""
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            tid = int(team_id)
+            uid = int(user_id)
+        except (ValueError, TypeError):
+            return json.dumps({"status": "error", "message": "Invalid ID"})
+
+        actor = _require_team_admin(tid)
+        try:
+            data = json.loads(web.data() or b"{}")
+        except Exception:
+            return json.dumps({"status": "error", "message": "Invalid request"})
+
+        new_role = str(data.get("role", "") or "").strip()
+        if new_role not in ("admin", "member"):
+            return json.dumps({"status": "error", "message": "Role must be 'admin' or 'member'"})
+
+        db = get_multiuser_db()
+        # A team admin cannot promote a member above themselves to a role that
+        # would let that member remove them: only a global admin may create new
+        # team admins. (Prevents a team admin handing out the keys.)
+        if new_role == "admin" and actor.get("role") != "admin":
+            return json.dumps({"status": "error", "message": "Only a global admin can promote a team admin"}, ensure_ascii=False)
+        if db.update_team_member_role(tid, uid, new_role):
+            logger.info(f"[WebChannel] '{actor['username']}' set user id={uid} role={new_role} in team id={tid}")
+            return json.dumps({"status": "success"})
+        return json.dumps({"status": "error", "message": "Member not found or cannot demote last admin"}, ensure_ascii=False)
 
 class TeamMemberLeaveHandler:
     """POST → self-service leave team."""

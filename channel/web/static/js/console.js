@@ -11874,6 +11874,12 @@ function renderTeamMemberList(teamId, members) {
 
     const currentUserId = currentUser ? currentUser.id : null;
     const adminCount = members.filter(m => m.role === 'admin').length;
+    // A global admin, or this team's own admin, may manage members (Phase 4).
+    const isTeamAdmin = !!(currentUser && currentUser.id !== null &&
+        members.some(m => m.user_id === currentUser.id && m.role === 'admin'));
+    const canManage = isAdmin || isTeamAdmin;
+    // Only a global admin may promote a member to team-admin.
+    const canPromote = isAdmin;
 
     if (!members.length) {
         listEl.innerHTML = `
@@ -11921,7 +11927,14 @@ function renderTeamMemberList(teamId, members) {
                                 ${isSelf && !isOwner ? '<span class="text-xs text-slate-400 ml-1">(you)</span>' : ''}
                             </td>
                             <td class="px-5 py-3 text-right">
-                                ${(!isOwner && !isSelf && isAdmin && m.role !== 'admin') ? `
+                                ${canManage && !isOwner ? `
+                                    <select onchange="changeTeamMemberRole(${teamId}, ${m.user_id}, this.value)"
+                                            class="mr-2 text-xs px-2 py-1 rounded-md border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 text-slate-600 dark:text-slate-300 cursor-pointer" title="${t('team_member_role')}">
+                                        <option value="member" ${m.role === 'member' ? 'selected' : ''}>${t('team_role_member')}</option>
+                                        <option value="admin" ${m.role === 'admin' ? 'selected' : ''} ${!canPromote ? 'disabled' : ''}>${t('team_role_admin')}</option>
+                                    </select>
+                                ` : ''}
+                                ${(!isOwner && !isSelf && canManage && m.role !== 'admin') ? `
                                     <button onclick="removeTeamMember(${teamId}, ${m.user_id}, '${escapeHtml(m.username || '')}')"
                                             class="text-xs text-red-400 hover:text-red-500 cursor-pointer transition-colors px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-500/10" title="${t('team_remove_member')}">
                                         <i class="fas fa-user-minus"></i>
@@ -12136,6 +12149,36 @@ function removeTeamMember(teamId, userId, username) {
     });
 }
 window.removeTeamMember = removeTeamMember;
+
+function changeTeamMemberRole(teamId, userId, newRole) {
+    if (newRole === 'admin') {
+        const confirmMsg = currentLang === 'en'
+            ? 'Make this member a team admin? Only a global admin can do this.'
+            : currentLang === 'zh-Hant'
+                ? '將此成員設為團隊管理員？只有全域管理員可以新增團隊管理員。'
+                : '将此成员设为团队管理员？只有全局管理员可以新增团队管理员。';
+        showConfirmModal(t('team_member_role'), confirmMsg, function() {
+            _doChangeTeamMemberRole(teamId, userId, newRole);
+        });
+        return;
+    }
+    _doChangeTeamMemberRole(teamId, userId, newRole);
+}
+function _doChangeTeamMemberRole(teamId, userId, role) {
+    fetch('/api/teams/' + teamId + '/members/' + userId, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({role: role})
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'success') {
+            fetchTeamMembers(teamId);
+            showStatus('team-members-status', 'member_role_updated', false);
+        } else if (data.message) {
+            showStatus('team-members-status', data.message, true);
+        }
+    }).catch(function() {});
+}
+window.changeTeamMemberRole = changeTeamMemberRole;
 
 function leaveTeam(teamId) {
     const msg = currentLang === 'en' ? 'Are you sure you want to leave this team?' : currentLang === 'zh-Hant' ? '確定要退出此團隊？' : '确定要退出此团队？';
