@@ -23,13 +23,19 @@ export const Card: React.FC<{ icon: React.ReactNode; title: string; subtitle?: s
   </div>
 )
 
-export const Field: React.FC<{ label: string; hint?: string; children: React.ReactNode }> = ({
-  label,
-  hint,
-  children,
-}) => (
+export const Field: React.FC<{
+  label: string
+  hint?: string
+  // Optional trailing element on the label row (right-aligned), e.g. a helper
+  // link. Kept generic so any build can attach an action next to a field.
+  labelAction?: React.ReactNode
+  children: React.ReactNode
+}> = ({ label, hint, labelAction, children }) => (
   <div>
-    <label className="block text-sm font-medium text-content-secondary mb-1.5">{label}</label>
+    <div className="mb-1.5 flex items-center justify-between gap-2">
+      <label className="block text-sm font-medium text-content-secondary">{label}</label>
+      {labelAction}
+    </div>
     {children}
     {hint && <p className="text-xs text-content-tertiary mt-1">{hint}</p>}
   </div>
@@ -54,13 +60,35 @@ export const Dropdown: React.FC<{
   const menuRef = useRef<HTMLDivElement>(null)
   // The menu is rendered in a portal with fixed positioning so it's never
   // clipped by an ancestor's `overflow` (e.g. a modal's scroll container).
-  const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null)
+  // `top` is used when opening downward, `bottom` when the menu flips upward.
+  const [rect, setRect] = useState<{
+    left: number
+    width: number
+    maxHeight: number
+    top?: number
+    bottom?: number
+  } | null>(null)
 
   const place = () => {
     const el = ref.current
     if (!el) return
     const r = el.getBoundingClientRect()
-    setRect({ left: r.left, top: r.bottom + 4, width: r.width })
+    const gap = 4
+    const margin = 8 // keep the menu off the very edge of the viewport
+    const below = window.innerHeight - r.bottom - gap - margin
+    const above = r.top - gap - margin
+    // Flip upward when there isn't enough room below AND there's more above,
+    // so a trigger near the bottom edge doesn't drop its options off-screen.
+    const flipUp = below < 240 && above > below
+    const maxHeight = Math.max(120, Math.floor(flipUp ? above : below))
+    setRect({
+      left: r.left,
+      width: r.width,
+      maxHeight,
+      ...(flipUp
+        ? { bottom: window.innerHeight - r.top + gap }
+        : { top: r.bottom + gap }),
+    })
   }
 
   useLayoutEffect(() => {
@@ -108,8 +136,14 @@ export const Dropdown: React.FC<{
         createPortal(
           <div
             ref={menuRef}
-            style={{ position: 'fixed', left: rect.left, top: rect.top, width: rect.width }}
-            className="z-[100] max-h-64 overflow-y-auto rounded-btn border border-default bg-elevated shadow-lg py-1"
+            style={{
+              position: 'fixed',
+              left: rect.left,
+              width: rect.width,
+              maxHeight: rect.maxHeight,
+              ...(rect.bottom !== undefined ? { bottom: rect.bottom } : { top: rect.top }),
+            }}
+            className="z-[100] overflow-y-auto rounded-btn border border-default bg-elevated shadow-lg py-1"
           >
             {options.length === 0 && (
               <div className="px-3 py-2 text-sm text-content-tertiary">{t('models_no_options')}</div>
@@ -117,7 +151,15 @@ export const Dropdown: React.FC<{
             {options.map((o) => (
               <div
                 key={o.value}
-                onClick={() => {
+                // Select on mousedown, not click: the document-level mousedown
+                // listener that closes the menu can otherwise fire first (e.g.
+                // on the very first open, before menuRef is populated) and swallow
+                // the click, which made the first option look unselectable.
+                // preventDefault keeps focus stable; stopPropagation stops the
+                // outside-close handler from also running for this same event.
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
                   onChange(o.value)
                   setOpen(false)
                 }}

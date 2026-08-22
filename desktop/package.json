@@ -1,6 +1,6 @@
 {
   "name": "cowagent-desktop",
-  "version": "2.1.3",
+  "version": "2.1.6",
   "description": "CowAgent Desktop Client - AI Agent on your desktop",
   "main": "dist/main/index.js",
   "author": "CowAgent",
@@ -25,6 +25,7 @@
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.21.0",
     "markdown-it": "^14.2.0",
+    "png-to-ico": "^3.0.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
@@ -78,6 +79,9 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "notarize": false,
       "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Used for voice input in chat: record a short clip and transcribe it via the configured speech recognition provider."
+      },
       "target": [
         "dmg",
         "zip"
@@ -106,5 +110,9 @@
       "provider": "generic",
       "url": "https://cowagent.ai/update/"
     }
+  },
+  "overrides": {
+    "js-yaml": "4.3.1",
+    "linkify-it": "5.0.2"
   }
 }

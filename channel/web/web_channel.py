@@ -14,8 +14,10 @@ import threading
 import time
 import uuid
 from queue import Queue, Empty
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 from urllib.parse import quote
+from collections import OrderedDict, deque
+from dataclasses import dataclass, field
 
 import web
 
@@ -23,12 +25,23 @@ from bridge.context import *
 from bridge.reply import Reply, ReplyType
 from channel.chat_channel import ChatChannel, check_prefix
 from channel.chat_message import ChatMessage
-from collections import OrderedDict
 from common import const
 from common import i18n
 from common.log import logger
 from common.singleton import singleton
-from config import conf, get_data_root, get_weixin_credentials_path, read_config_template
+from config import (
+    conf,
+    get_data_root,
+    get_weixin_credentials_path,
+    read_config_template,
+    sync_image_generation_custom_provider_env,
+)
+from models.reasoning_capabilities import provider_reasoning_metadata
+from agent.permission import (
+    MODES as PERMISSION_MODES,
+    global_mode as permission_global_mode,
+    normalize_mode as permission_normalize_mode,
+)
 
 # Multi-user auth (optional; gracefully degrades when no users registered)
 from channel.web.multiuser.auth import (
@@ -46,6 +59,33 @@ from channel.web.multiuser.db import get_multiuser_db
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
+
+
+@dataclass
+class SSEStreamState:
+    """Bounded, replayable event log for one web request."""
+
+    condition: threading.Condition = field(default_factory=threading.Condition)
+    events: deque = field(default_factory=deque)
+    next_seq: int = 1
+    total_bytes: int = 0
+    last_active: float = field(default_factory=time.time)
+    main_done: bool = False
+    main_done_at: Optional[float] = None
+    stream_complete: bool = False
+    completed_at: Optional[float] = None
+    closed: bool = False
+
+
+def _parse_sse_cursor(*values) -> int:
+    cursors = []
+    for value in values:
+        try:
+            cursors.append(max(0, int(value or 0)))
+        except (TypeError, ValueError):
+            cursors.append(0)
+    return max(cursors, default=0)
+
 
 def _read_config_file_for_write() -> dict:
     """Baseline dict for a partial write to config.json.
@@ -72,6 +112,56 @@ def _get_web_password() -> str:
 
 def _is_password_enabled():
     return bool(_get_web_password())
+
+
+# Set once the console owns its socket. The desktop watchdog waits on this to
+# tell "still starting" apart from "wedged and never going to answer".
+SERVING = threading.Event()
+
+_BIND_ERROR_CODE_RE = re.compile(r"\[(WinError|Errno) (\d+)\]")
+
+
+def _bind_error_codes(err: OSError):
+    """Return ``(winerror, errno)`` for a bind failure.
+
+    cheroot swallows the original exception: it re-raises a bare
+    ``socket.error(msg)`` with neither errno nor ``__cause__`` set, so on the
+    path we actually care about the code only survives inside the message text.
+    """
+    winerror = getattr(err, "winerror", None)
+    err_no = err.errno
+    if winerror is None and err_no is None:
+        for kind, code in _BIND_ERROR_CODE_RE.findall(str(err)):
+            if kind == "WinError":
+                winerror = int(code)
+            else:
+                err_no = int(code)
+    return winerror, err_no
+
+
+def _log_bind_failure(host: str, port: int, err: OSError):
+    """Explain a failed bind in terms the user can act on.
+
+    Windows needs its own branch: a port can be permanently unbindable because
+    Hyper-V/WSL2/Docker reserved the range it falls in (WinError 10013), and
+    nothing is listening on it, so the usual "kill the stale process" advice
+    sends people looking for a process that doesn't exist.
+    """
+    winerror, err_no = _bind_error_codes(err)
+    if winerror == 10013:
+        logger.error(
+            f"[WebChannel] 端口 {port} 被系统保留，无法绑定（WinError 10013）。"
+            f"通常是 Hyper-V/WSL2/Docker 占用了该端口段，可执行 "
+            f"`netsh interface ipv4 show excludedportrange protocol=tcp` 查看，"
+            f"或在 config.json 中把 web_port 改成区间外的端口"
+        )
+    elif winerror == 10048 or err_no in (48, 98):  # WSAEADDRINUSE / macOS / Linux
+        logger.error(
+            f"[WebChannel] 端口 {port} 已被占用，可执行 `cow restart` 清理残留进程，"
+            f"或在 config.json 中修改 web_port"
+        )
+    else:
+        logger.error(f"[WebChannel] 无法在 {host}:{port} 上启动服务: {err}")
 
 
 def _session_expire_seconds():
@@ -301,8 +391,22 @@ def _get_upload_dir() -> str:
     return str(tmp_dir())
 
 
-def _get_workspace_root() -> str:
-    """Resolve the workspace of the Agent this request is routed to."""
+def _get_workspace_root(session_id: str = None, agent_id: str = None) -> str:
+    """Resolve the working directory for this request.
+
+    When a session has opened a project directory, that project is the working
+    directory the file panel / preview / ``@`` picker operate in. Otherwise it
+    is the Agent's workspace (``state_root``, e.g. ``~/cow``). Memory and skills
+    always stay in ``state_root`` regardless; only the working root moves.
+    """
+    if session_id:
+        try:
+            from agent.workspace import project_store
+            project_dir = project_store.get_project_dir(session_id, agent_id)
+            if project_dir:
+                return project_dir
+        except Exception as e:
+            logger.debug(f"[WebChannel] project_dir resolve failed: {e}")
     from common.state_dir import state_root_str
     return state_root_str()
 
@@ -371,12 +475,25 @@ def _decode_dir_token(token: str) -> str:
 
 
 def _serve_allowed_roots() -> list:
-    """Roots that /api/file and /preview may read from (symlinks resolved)."""
+    """Roots that /api/file and /preview may read from (symlinks resolved).
+
+    Includes the configured serve root, the Agent workspace, and any project
+    directory a session has opened. Project dirs may live outside the serve
+    root (e.g. ``/tmp/foo``), so previewing files in an opened project would
+    otherwise be denied.
+    """
     serve_root = conf().get("web_file_serve_root", "~") or "~"
-    return [
+    roots = [
         os.path.realpath(os.path.expanduser(serve_root)),
         os.path.realpath(_get_workspace_root()),
     ]
+    try:
+        from agent.workspace import project_store
+        for rec in project_store.list_recents():
+            roots.append(os.path.realpath(rec["path"]))
+    except Exception:
+        pass
+    return roots
 
 
 def _is_path_allowed(real_path: str) -> bool:
@@ -420,14 +537,42 @@ def _build_artifact_payload(data: dict) -> dict:
     }
 
 
-def _artifacts_from_steps(steps) -> list:
+def _paths_written_by_step(step: dict) -> list:
+    """Files a persisted tool step produced, if any.
+
+    `write`/`edit` name theirs in the arguments. A `subagent` step lists the
+    ones its sub agents wrote in its result: those files never passed through
+    a tool call of this agent's own, so nothing else records them.
+    """
+    name = step.get("name")
+    if name in ("write", "edit"):
+        args = step.get("arguments")
+        path = str((args or {}).get("path") or "").strip() if isinstance(args, dict) else ""
+        return [path] if path else []
+    if name != "subagent":
+        return []
+    try:
+        results = json.loads(step.get("result") or "{}").get("results") or []
+    except (ValueError, TypeError, AttributeError):
+        return []
+    return [
+        path
+        for item in results if isinstance(item, dict)
+        for path in (item.get("files") or [])
+    ]
+
+
+def _artifacts_from_steps(steps, session_id: str = None, agent_id: str = None) -> list:
     """
     Rebuild the artifact cards of a persisted assistant message.
 
-    History replay has no SSE events, so the `write`/`edit` tool calls are the
-    only record. Doing this server-side keeps one implementation of the
-    workspace-internal filter — and lets absolute paths inside the workspace be
-    recognised, which a client mirroring the rules can't do.
+    History replay has no SSE events, so the tool calls are the only record.
+    Doing this server-side keeps one implementation of the workspace-internal
+    filter — and lets absolute paths inside the workspace be recognised, which
+    a client mirroring the rules can't do.
+
+    ``session_id`` anchors detection to the session's working dir (the project
+    dir when one is open), matching the live SSE path; otherwise state_root.
     """
     from agent.protocol.artifact import get_workspace_root, safe_build_artifact
 
@@ -435,24 +580,39 @@ def _artifacts_from_steps(steps) -> list:
     seen = set()
     root = None
     for step in steps or []:
-        if not isinstance(step, dict) or step.get("type") != "tool":
+        if not isinstance(step, dict) or step.get("type") != "tool" or step.get("is_error"):
             continue
-        if step.get("is_error") or step.get("name") not in ("write", "edit"):
-            continue
-        args = step.get("arguments")
-        path = str((args or {}).get("path") or "").strip() if isinstance(args, dict) else ""
-        if not path:
-            continue
-        if root is None:
-            root = get_workspace_root()
-        info = safe_build_artifact(path, root)
-        if not info or info["path"] in seen:
-            continue
-        seen.add(info["path"])
-        payload = _build_artifact_payload(info)
-        if payload:
-            out.append(payload)
+        for path in _paths_written_by_step(step):
+            if root is None:
+                root = _get_workspace_root(session_id, agent_id) if session_id else get_workspace_root()
+            info = safe_build_artifact(path, root)
+            if not info or info["path"] in seen:
+                continue
+            seen.add(info["path"])
+            payload = _build_artifact_payload(info)
+            if payload:
+                out.append(payload)
     return out
+
+
+def _add_subagent_displays(steps) -> None:
+    """Give persisted `subagent` steps the same readable form they had live.
+
+    `display` is deliberately kept out of the model's context, so it is not in
+    the stored conversation either. Rebuilding it here means a reloaded page
+    shows the sub agents' reports rather than the JSON the model was handed.
+    """
+    from agent.tools.subagent import format_results
+
+    for step in steps or []:
+        if not isinstance(step, dict) or step.get("name") != "subagent":
+            continue
+        try:
+            results = json.loads(step.get("result") or "{}").get("results")
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if isinstance(results, list) and results:
+            step["display"] = format_results(results)
 
 
 def _sanitize_upload_relative_path(relative_path: str) -> str:
@@ -595,6 +755,11 @@ class WebMessage(ChatMessage):
 class WebChannel(ChatChannel):
     NOT_SUPPORT_REPLYTYPE = [ReplyType.VOICE]
     _instance = None
+    SSE_REPLAY_MAX_EVENTS = 5000
+    SSE_REPLAY_MAX_BYTES = 4 * 1024 * 1024
+    SSE_POST_DONE_TAIL_SECONDS = 60
+    SSE_COMPLETED_TTL_SECONDS = 60
+    SSE_IDLE_TIMEOUT_SECONDS = 1800
 
     # def __new__(cls):
     #     if cls._instance is None:
@@ -607,12 +772,11 @@ class WebChannel(ChatChannel):
         self.session_queues = {}  # session_id -> Queue (fallback polling)
         self.request_to_session = {}  # request_id -> session_id
         self.request_to_agent = {}  # request_id -> agent_id
-        self.sse_queues = {}  # request_id -> Queue (SSE streaming)
-        # request_id -> last-active timestamp. Refreshed while the SSE
-        # generator is being consumed (client still connected). The janitor
-        # only reclaims queues whose generator stopped refreshing this, so a
-        # long-running but still-streaming reply is never wrongly killed.
-        self.sse_last_active = {}
+        # Upstream SSE rework (per-request stream state + lock).
+        self.sse_streams = {}  # request_id -> SSEStreamState
+        self._sse_streams_lock = threading.RLock()
+        # Multi-user: which username is driving each session (used to build the
+        # per-user prompt). request_id bookkeeping is kept for compatibility.
         self.active_session_requests = {}  # session_id -> request_id
         self.active_session_users = {}     # session_id -> username
         self._http_server = None
@@ -626,6 +790,55 @@ class WebChannel(ChatChannel):
     def _generate_request_id(self):
         """生成唯一的请求ID"""
         return str(uuid.uuid4())
+
+    def _publish_sse_event(self, request_id: str, event: dict) -> bool:
+        """Append one sequenced event and wake every connected reader."""
+        with self._sse_streams_lock:
+            state = self.sse_streams.get(request_id)
+        if state is None:
+            logger.warning(
+                f"[WebChannel] dropped SSE event for unknown request "
+                f"{request_id}: type={event.get('type')}"
+            )
+            return False
+
+        with state.condition:
+            if state.closed or state.stream_complete:
+                reason = "closed" if state.closed else "complete"
+                logger.warning(
+                    f"[WebChannel] dropped SSE event for {reason} stream "
+                    f"{request_id}: type={event.get('type')}"
+                )
+                return False
+            item = dict(event)
+            item["seq"] = state.next_seq
+            state.next_seq += 1
+            encoded_size = len(json.dumps(
+                item, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8"))
+            state.events.append((item, encoded_size))
+            state.total_bytes += encoded_size
+            state.last_active = time.time()
+
+            # Keep at least the newest event even if it alone exceeds the byte
+            # budget. Cursor expiry is reported explicitly by stream_response.
+            while len(state.events) > 1 and (
+                len(state.events) > self.SSE_REPLAY_MAX_EVENTS
+                or state.total_bytes > self.SSE_REPLAY_MAX_BYTES
+            ):
+                _, removed_size = state.events.popleft()
+                state.total_bytes -= removed_size
+
+            event_type = item.get("type")
+            if event_type == "done":
+                state.main_done = True
+                if state.main_done_at is None:
+                    state.main_done_at = state.last_active
+            elif event_type == "stream_end":
+                state.stream_complete = True
+                state.completed_at = state.last_active
+            state.condition.notify_all()
+        return True
 
     @staticmethod
     def _session_queue_key(session_id: str, agent_id: str = None) -> str:
@@ -679,14 +892,14 @@ class WebChannel(ChatChannel):
             agent_id = context.get("agent_id") or self.request_to_agent.get(request_id)
             session_queue_key = self._session_queue_key(session_id, agent_id)
 
-            # SSE mode: push events to SSE queue
-            if request_id in self.sse_queues:
+            # SSE mode: append events to the replay log.
+            if request_id in self.sse_streams:
                 content = reply.content if reply.content is not None else ""
 
                 # Intermediate status lines (e.g. /install-browser phases) must NOT use "done",
                 # or the frontend closes EventSource and drops subsequent events.
                 if getattr(reply, "sse_phase", False):
-                    self.sse_queues[request_id].put({
+                    self._publish_sse_event(request_id, {
                         "type": "phase",
                         "content": content,
                         "request_id": request_id,
@@ -699,11 +912,20 @@ class WebChannel(ChatChannel):
                 # Skip duplicate file pushes here; just let the done event through.
                 if reply.type in (ReplyType.IMAGE_URL, ReplyType.FILE) and content.startswith("file://"):
                     text_content = getattr(reply, 'text_content', '')
-                    if text_content:
+                    with self._sse_streams_lock:
+                        state = self.sse_streams.get(request_id)
+                    already_done = False
+                    if state is not None:
+                        with state.condition:
+                            already_done = state.main_done
+                    # A preceding TEXT reply may already have published done
+                    # and deliberately left the stream open for auto-TTS. In
+                    # that case this duplicate media reply must not end it.
+                    if text_content and not already_done:
                         seqs = self._fetch_latest_pair_seqs(
                             session_id, context.get("agent_id")
                         )
-                        self.sse_queues[request_id].put({
+                        published = self._publish_sse_event(request_id, {
                             "type": "done",
                             "content": text_content,
                             "request_id": request_id,
@@ -711,6 +933,10 @@ class WebChannel(ChatChannel):
                             "user_seq": seqs.get("user_seq"),
                             "bot_seq": seqs.get("bot_seq"),
                         })
+                        if published:
+                            self._publish_sse_event(
+                                request_id, {"type": "stream_end"}
+                            )
                     logger.debug(f"SSE skipped duplicate file for request {request_id}")
                     return
 
@@ -724,7 +950,7 @@ class WebChannel(ChatChannel):
                 seqs = self._fetch_latest_pair_seqs(
                     session_id, context.get("agent_id")
                 )
-                self.sse_queues[request_id].put({
+                self._publish_sse_event(request_id, {
                     "type": "done",
                     "content": content,
                     "request_id": request_id,
@@ -738,8 +964,13 @@ class WebChannel(ChatChannel):
                 # synthesis runs in the background so the chat stream is never
                 # blocked; the resulting audio URL is pushed via a follow-up
                 # `voice_attach` SSE event and persisted to messages.extras.
+                tts_pending = False
                 if reply.type == ReplyType.TEXT and content.strip():
-                    self._maybe_dispatch_auto_tts(request_id, session_id, content, context)
+                    tts_pending = self._maybe_dispatch_auto_tts(
+                        request_id, session_id, content, context
+                    )
+                if not tts_pending:
+                    self._publish_sse_event(request_id, {"type": "stream_end"})
                 return
 
             # Fallback: polling mode
@@ -749,7 +980,7 @@ class WebChannel(ChatChannel):
                 # request: they were already pushed via the `file_to_send` event during
                 # agent execution. By the time the chat_channel sends the IMAGE_URL reply,
                 # the SSE stream has typically closed (after the text "done") and the
-                # request_id is gone from sse_queues, so we'd otherwise duplicate the file
+                # request_id is gone from sse_streams, so we'd otherwise duplicate the file
                 # as a polling bubble. Scheduler/push tasks have no on_event and must
                 # still go through polling normally.
                 if (
@@ -787,7 +1018,7 @@ class WebChannel(ChatChannel):
             self.active_session_users.pop(sid, None)
 
     def _make_sse_callback(self, request_id: str):
-        """Build an on_event callback that pushes agent stream events into the SSE queue."""
+        """Build a callback that publishes agent events to the SSE replay log."""
 
         # Cap reasoning bytes pushed to the frontend per request to avoid
         # browser stalls / crashes on very long chains-of-thought. Anything
@@ -796,6 +1027,9 @@ class WebChannel(ChatChannel):
         # Keep aligned with frontend REASONING_RENDER_CAP and backend
         # MAX_STORED_REASONING_CHARS.
         MAX_REASONING_STREAM_CHARS = 4 * 1024  # 4 KB
+        # A tool's human-readable outcome (ToolResult.display). Reasoning is a
+        # trace worth capping hard; this is the deliverable, so it gets room.
+        MAX_DISPLAY_STREAM_CHARS = 32 * 1024
         # Use a single-element list as a mutable counter accessible from closure.
         reasoning_chars_sent = [0]
         reasoning_capped_notified = [False]
@@ -805,9 +1039,9 @@ class WebChannel(ChatChannel):
         streamed_error: List[str] = []
 
         def on_event(event: dict):
-            if request_id not in self.sse_queues:
+            if request_id not in self.sse_streams:
                 return
-            q = self.sse_queues[request_id]
+            publish = lambda item: self._publish_sse_event(request_id, item)
             event_type = event.get("type")
             data = event.get("data", {})
 
@@ -819,7 +1053,7 @@ class WebChannel(ChatChannel):
                 if remaining <= 0:
                     if not reasoning_capped_notified[0]:
                         reasoning_capped_notified[0] = True
-                        q.put({
+                        publish({
                             "type": "reasoning",
                             "content": "\n\n... [reasoning truncated for display] ...",
                         })
@@ -827,20 +1061,20 @@ class WebChannel(ChatChannel):
                 if len(delta) > remaining:
                     delta = delta[:remaining]
                 reasoning_chars_sent[0] += len(delta)
-                q.put({"type": "reasoning", "content": delta})
+                publish({"type": "reasoning", "content": delta})
 
             elif event_type == "message_update":
                 delta = data.get("delta", "")
                 if delta:
-                    q.put({"type": "delta", "content": delta})
+                    publish({"type": "delta", "content": delta})
 
             elif event_type == "tool_execution_start":
                 tool_name = data.get("tool_name", "tool")
                 arguments = data.get("arguments", {})
-                q.put({"type": "tool_start", "tool_call_id": data.get("tool_call_id"), "tool": tool_name, "arguments": arguments})
+                publish({"type": "tool_start", "tool_call_id": data.get("tool_call_id"), "tool": tool_name, "arguments": arguments})
 
             elif event_type == "tool_execution_progress":
-                q.put({
+                publish({
                     "type": "tool_progress",
                     "tool_call_id": data.get("tool_call_id"),
                     "tool": data.get("tool_name", "tool"),
@@ -856,19 +1090,50 @@ class WebChannel(ChatChannel):
                 result_str = str(result)
                 if len(result_str) > 2000:
                     result_str = result_str[:2000] + "…"
-                q.put({
+                payload = {
                     "type": "tool_end",
                     "tool_call_id": data.get("tool_call_id"),
                     "tool": tool_name,
                     "status": status,
                     "result": result_str,
                     "execution_time": round(exec_time, 2)
+                }
+                # Carry the permission-refusal marker so the UI can offer a
+                # one-click "switch permission" hint rather than a generic error.
+                if data.get("permission_denied"):
+                    payload["permission_denied"] = True
+                    payload["permission_mode"] = data.get("permission_mode")
+                # A tool that wrote its outcome for a person sends that
+                # instead. It gets a far larger budget than `result`: this is
+                # the report itself, not a trace of how it was produced.
+                display = data.get("display")
+                if display:
+                    display = str(display)
+                    if len(display) > MAX_DISPLAY_STREAM_CHARS:
+                        display = display[:MAX_DISPLAY_STREAM_CHARS] + "…"
+                    payload["display"] = display
+                publish(payload)
+
+            elif event_type == "subagent_step":
+                # A tool call made by a sub agent, relayed so the card for
+                # that sub agent can show what it is doing instead of
+                # spinning for minutes.
+                publish({
+                    "type": "subagent_step",
+                    "card_id": data.get("card_id"),
+                    "step_id": data.get("step_id"),
+                    "phase": data.get("phase"),
+                    "tool": data.get("tool_name", "tool"),
+                    "arguments": data.get("arguments") or {},
+                    "status": data.get("status"),
+                    "error": data.get("error"),
+                    "execution_time": data.get("execution_time", 0),
                 })
 
             elif event_type == "message_end":
                 tool_calls = data.get("tool_calls", [])
                 if tool_calls:
-                    q.put({"type": "message_end", "has_tool_calls": True})
+                    publish({"type": "message_end", "has_tool_calls": True})
 
             elif event_type == "error":
                 # Agent raised an exception (LLM 401/timeout/etc). Surface the
@@ -882,19 +1147,20 @@ class WebChannel(ChatChannel):
                 # Remember it so the agent_end handler below knows not to
                 # rewrite the message into a generic empty-response notice.
                 streamed_error.append(err_msg)
-                q.put({
+                publish({
                     "type": "done",
                     "content": f"❌ {err_msg}",
                     "request_id": request_id,
                     "timestamp": time.time(),
                 })
+                publish({"type": "stream_end"})
 
             elif event_type == "agent_cancelled":
                 # Push an explicit cancelled SSE event so the frontend
                 # marks the bubble as stopped. A trailing "done" still
                 # arrives with the partial answer.
                 final_response = data.get("final_response", "")
-                q.put({
+                publish({
                     "type": "cancelled",
                     "content": final_response,
                     "request_id": request_id,
@@ -918,7 +1184,7 @@ class WebChannel(ChatChannel):
                             f"[WebChannel] agent_end with empty final_response for "
                             f"request {request_id}, sending fallback done"
                         )
-                        q.put({
+                        publish({
                             "type": "done",
                             "content": i18n.t(
                                 "(模型未返回任何内容，请重试或换一种方式描述你的需求)",
@@ -927,6 +1193,7 @@ class WebChannel(ChatChannel):
                             "request_id": request_id,
                             "timestamp": time.time(),
                         })
+                        publish({"type": "stream_end"})
 
             elif event_type == "file_to_send":
                 file_path = data.get("path", "")
@@ -954,12 +1221,12 @@ class WebChannel(ChatChannel):
                 # the file directly (Finder / default app) instead of the browser.
                 if not is_remote and file_path:
                     payload["abs_path"] = file_path
-                q.put(payload)
+                publish(payload)
 
             elif event_type == "artifact":
                 payload = _build_artifact_payload(data)
                 if payload:
-                    q.put(payload)
+                    publish(payload)
 
         return on_event
 
@@ -1007,22 +1274,24 @@ class WebChannel(ChatChannel):
         session_id: str,
         text: str,
         context: dict,
-    ) -> None:
+    ) -> bool:
         try:
             mode = self._resolve_voice_reply_mode()
             if mode == "off":
-                return
+                return False
             if mode == "voice_if_voice" and not context.get("is_voice_input"):
-                return
+                return False
             if not self._tts_provider_ready():
-                return
+                return False
             threading.Thread(
                 target=self._synthesize_tts_async,
                 args=(request_id, session_id, text, context.get("agent_id")),
                 daemon=True,
             ).start()
+            return True
         except Exception as e:
             logger.debug(f"[WebChannel] auto-tts dispatch skipped: {e}")
+            return False
 
     def _synthesize_tts_async(
         self,
@@ -1054,14 +1323,13 @@ class WebChannel(ChatChannel):
                 ).attach_extras_to_last_assistant(session_id, payload)
             except Exception as e:
                 logger.debug(f"[WebChannel] tts persist skipped: {e}")
-            q = self.sse_queues.get(request_id)
-            if q is None:
+            if request_id not in self.sse_streams:
                 logger.warning(
-                    f"[WebChannel] TTS ready but SSE queue already closed "
+                    f"[WebChannel] TTS ready but SSE stream already closed "
                     f"for request {request_id} (url={url})"
                 )
                 return
-            q.put({
+            self._publish_sse_event(request_id, {
                 "type": "voice_attach",
                 "url": url,
                 "request_id": request_id,
@@ -1071,6 +1339,8 @@ class WebChannel(ChatChannel):
         except Exception as e:
             # TTS failures are intentionally silent (no user-facing error).
             logger.warning(f"[WebChannel] TTS synthesis failed: {e}")
+        finally:
+            self._publish_sse_event(request_id, {"type": "stream_end"})
 
     @staticmethod
     def _publish_tts_audio(src_path: str) -> str:
@@ -1347,8 +1617,12 @@ class WebChannel(ChatChannel):
                         # or picked with @); reference it in place so the agent opens
                         # the original instead of an uploaded copy. Naming the kind
                         # tells the agent whether to `read` it or `ls` into it.
+                        # Resolve relative to the session's working root (project
+                        # dir when opened, else the workspace).
                         is_dir = os.path.isdir(
-                            os.path.join(_get_workspace_root(), fpath)
+                            os.path.join(
+                                _get_workspace_root(session_id, resolved_agent_id), fpath
+                            )
                         )
                         label = (
                             i18n.t('工作空间目录', 'Workspace directory') if is_dir
@@ -1404,8 +1678,8 @@ class WebChannel(ChatChannel):
                 self.session_queues[session_queue_key] = Queue()
 
             if use_sse:
-                self.sse_queues[request_id] = Queue()
-                self.sse_last_active[request_id] = time.time()
+                with self._sse_streams_lock:
+                    self.sse_streams[request_id] = SSEStreamState()
 
             trigger_prefixs = conf().get("single_chat_prefix", [""])
             if check_prefix(prompt, trigger_prefixs) is None:
@@ -1452,54 +1726,78 @@ class WebChannel(ChatChannel):
             return json.dumps({"status": "error", "message": str(e)})
 
     def _drop_sse_request(self, request_id: str):
-        """Reclaim all state tied to an SSE request to prevent fd/memory leaks.
+        """Reclaim all state tied to an SSE request."""
+        with self._sse_streams_lock:
+            state = self.sse_streams.pop(request_id, None)
+            self.request_to_session.pop(request_id, None)
+            self.request_to_agent.pop(request_id, None)
+        if state is not None:
+            with state.condition:
+                state.closed = True
+                state.condition.notify_all()
 
-        Removing the queue lets the WSGI generator and its socket be released,
-        and dropping request_to_session avoids unbounded map growth.
-        """
-        self.sse_queues.pop(request_id, None)
-        self.sse_last_active.pop(request_id, None)
-        self.request_to_agent.pop(request_id, None)
-        sid = self.request_to_session.pop(request_id, None)
-        if sid and self.active_session_requests.get(sid) == request_id:
-            self.active_session_requests.pop(sid, None)
+    def _sweep_sse_streams(self, now: Optional[float] = None) -> int:
+        """Finalize overdue tails and reclaim expired SSE replay logs."""
+        now = time.time() if now is None else now
+        with self._sse_streams_lock:
+            states = list(self.sse_streams.items())
+
+        overdue = []
+        for request_id, state in states:
+            with state.condition:
+                if (
+                    state.main_done
+                    and not state.stream_complete
+                    and state.main_done_at is not None
+                    and now - state.main_done_at
+                    >= self.SSE_POST_DONE_TAIL_SECONDS
+                ):
+                    overdue.append(request_id)
+        for request_id in overdue:
+            self._publish_sse_event(request_id, {"type": "stream_end"})
+
+        with self._sse_streams_lock:
+            states = list(self.sse_streams.items())
+        stale = []
+        for request_id, state in states:
+            with state.condition:
+                if state.stream_complete and state.completed_at is not None:
+                    expired = (
+                        now - state.completed_at
+                        >= self.SSE_COMPLETED_TTL_SECONDS
+                    )
+                else:
+                    expired = (
+                        now - state.last_active
+                        >= self.SSE_IDLE_TIMEOUT_SECONDS
+                    )
+            if expired:
+                stale.append(request_id)
+
+        for request_id in stale:
+            self._drop_sse_request(request_id)
+        return len(stale)
 
     def _start_sse_janitor(self):
-        """Start a background thread that reclaims orphaned SSE queues.
+        """Start a background thread that reclaims orphaned SSE logs.
 
-        When a client disconnects before the "done" event arrives (browser
-        closed, session switched, network drop), the generator may keep the
-        queue around to allow reconnection. Without a sweep these orphans
-        accumulate, leaking file descriptors until cheroot raises
-        "[Errno 24] Too many open files".
-
-        Reclamation is based on idle time, not total age: an active stream
-        refreshes ``sse_last_active`` every second while its generator is being
-        consumed, so a long-running reply (even hours long) is never killed
-        while the client stays connected. Only queues that stopped refreshing
-        (client gone) past SSE_IDLE_TIMEOUT are reclaimed.
+        Completed logs remain replayable for a short grace period. Abandoned
+        unfinished logs use the longer idle timeout.
         """
         if self._sse_janitor_started:
             return
         self._sse_janitor_started = True
 
-        SSE_IDLE_TIMEOUT = 1800  # 30 minutes with no client consumption
         SWEEP_INTERVAL = 60
 
         def _sweep():
             while True:
                 time.sleep(SWEEP_INTERVAL)
                 try:
-                    now = time.time()
-                    stale = [
-                        rid for rid, ts in list(self.sse_last_active.items())
-                        if now - ts > SSE_IDLE_TIMEOUT
-                    ]
-                    for rid in stale:
-                        self._drop_sse_request(rid)
-                    if stale:
+                    reclaimed = self._sweep_sse_streams()
+                    if reclaimed:
                         logger.info(
-                            f"[WebChannel] SSE janitor reclaimed {len(stale)} "
+                            f"[WebChannel] SSE janitor reclaimed {reclaimed} "
                             f"idle stream(s)"
                         )
                 except Exception as e:
@@ -1508,91 +1806,108 @@ class WebChannel(ChatChannel):
         t = threading.Thread(target=_sweep, name="sse-janitor", daemon=True)
         t.start()
 
-    def stream_response(self, request_id: str):
+    def stream_response(self, request_id: str, after_seq: int = 0):
         """
         SSE generator for a given request_id.
         Yields UTF-8 encoded bytes to avoid WSGI Latin-1 mangling.
-        Supports client reconnection: the queue is only removed after a
-        "done" event is consumed, so a new GET /stream with the same
-        request_id can resume reading remaining events.
+        Each connection reads the request's event log using its own cursor.
         """
-        if request_id not in self.sse_queues:
+        with self._sse_streams_lock:
+            state = self.sse_streams.get(request_id)
+        if state is None:
             yield b"data: {\"type\": \"error\", \"message\": \"invalid request_id\"}\n\n"
             return
-
-        q = self.sse_queues[request_id]
+        try:
+            cursor = max(0, int(after_seq))
+        except (TypeError, ValueError):
+            cursor = 0
         idle_timeout = 600  # 10 minutes without any real event
         deadline = time.time() + idle_timeout
-        # After the main reply is done we keep the stream open for a short
-        # tail so async post-processing (TTS auto-synthesis) can deliver a
-        # `voice_attach` event before the client disconnects.
-        POST_DONE_TAIL_SECONDS = 60
         # A cancel only takes effect at the agent's next checkpoint, so the run
         # keeps emitting events (tool results, the partial reply) for a while
         # after the user presses Stop. Stay open for them, just not for the
         # full idle timeout.
         CANCEL_GRACE_SECONDS = 60
-        POST_CANCEL_TAIL_SECONDS = 3
-        post_done = False
-        post_deadline = 0.0
         cancelled = False
 
         try:
             while time.time() < deadline:
-                # Mark the stream alive on every loop. While the client keeps
-                # consuming, the generator runs and refreshes this, so the
-                # janitor won't reclaim a long-running but active stream.
-                self.sse_last_active[request_id] = time.time()
-                try:
-                    item = q.get(timeout=1)
-                except Empty:
-                    if post_done and time.time() >= post_deadline:
+                resync_payload = None
+                force_stream_end = False
+                with state.condition:
+                    now = time.time()
+                    state.last_active = now
+                    force_stream_end = (
+                        state.main_done
+                        and not state.stream_complete
+                        and state.main_done_at is not None
+                        and now - state.main_done_at
+                        >= self.SSE_POST_DONE_TAIL_SECONDS
+                    )
+                    if state.events:
+                        first_seq = state.events[0][0]["seq"]
+                        latest_seq = state.events[-1][0]["seq"]
+                        if cursor < first_seq - 1:
+                            resync_payload = {
+                                "type": "resync_required",
+                                "reason": "event_cursor_expired",
+                                "after_seq": cursor,
+                                "first_available_seq": first_seq,
+                            }
+                        elif cursor > latest_seq:
+                            resync_payload = {
+                                "type": "resync_required",
+                                "reason": "event_cursor_ahead",
+                                "after_seq": cursor,
+                                "latest_available_seq": latest_seq,
+                            }
+                    pending = [
+                        event for event, _ in state.events
+                        if event["seq"] > cursor
+                    ]
+                    complete = state.stream_complete
+                    closed = state.closed
+                    if (
+                        resync_payload is None
+                        and not pending and not complete and not closed
+                    ):
+                        state.condition.wait(timeout=1)
+
+                if force_stream_end:
+                    self._publish_sse_event(
+                        request_id, {"type": "stream_end"}
+                    )
+                    continue
+
+                if resync_payload is not None:
+                    payload = json.dumps(resync_payload, ensure_ascii=False)
+                    yield f"data: {payload}\n\n".encode("utf-8")
+                    return
+
+                if not pending:
+                    if complete or closed:
                         break
                     yield b": keepalive\n\n"
                     continue
 
-                deadline = time.time() + (
-                    CANCEL_GRACE_SECONDS if cancelled else idle_timeout
-                )
-                payload = json.dumps(item, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode("utf-8")
-
-                itype = item.get("type")
-                if itype == "done":
-                    post_done = True
-                    post_deadline = time.time() + (
-                        POST_CANCEL_TAIL_SECONDS if cancelled
-                        else POST_DONE_TAIL_SECONDS
+                for item in pending:
+                    deadline = time.time() + (
+                        CANCEL_GRACE_SECONDS if cancelled else idle_timeout
                     )
-                elif itype == "cancelled":
-                    # Wait for the run to actually wind down and send its
-                    # partial reply as "done"; closing on a blind timer here
-                    # strands in-flight tool bubbles and makes the client
-                    # reconnect onto a dropped queue.
-                    cancelled = True
-                    deadline = time.time() + CANCEL_GRACE_SECONDS
-                elif itype == "voice_attach":
-                    # WSGI buffers the previous chunk until the next yield;
-                    # shrink the tail so the generator wakes up quickly to
-                    # emit a couple of keepalive comments that push the
-                    # voice_attach payload through to the browser.
-                    post_done = True
-                    post_deadline = time.time() + 2  # 2s post-attach tail
+                    payload = json.dumps(item, ensure_ascii=False)
+                    yield (
+                        f"id: {item['seq']}\n"
+                        f"data: {payload}\n\n"
+                    ).encode("utf-8")
+                    cursor = item["seq"]
+                    if item.get("type") == "cancelled":
+                        cancelled = True
+                        deadline = time.time() + CANCEL_GRACE_SECONDS
+                    if item.get("type") == "stream_end":
+                        return
         except GeneratorExit:
-            # Client disconnected (WSGI closed the generator). If the reply is
-            # already complete there is nothing to resume, so reclaim now to
-            # release the socket fd. Otherwise keep the queue briefly so a
-            # reconnect with the same request_id can resume; the janitor will
-            # reclaim it if no reconnect happens.
-            if post_done:
-                self._drop_sse_request(request_id)
+            # The event log is deliberately retained for reconnection.
             raise
-        finally:
-            # Drop the queue once the reply is actually complete or the idle
-            # deadline has passed. Early client disconnects are handled by the
-            # GeneratorExit branch above and the background janitor.
-            if post_done or time.time() >= deadline:
-                self._drop_sse_request(request_id)
 
     def cancel_request(self):
         """
@@ -1640,8 +1955,8 @@ class WebChannel(ChatChannel):
                 )
                 cancelled = registry.cancel_session(scoped_session_id)
 
-            if request_id and request_id in self.sse_queues:
-                self.sse_queues[request_id].put({
+            if request_id and request_id in self.sse_streams:
+                self._publish_sse_event(request_id, {
                     "type": "cancelled",
                     "content": "🛑 Cancelled" if lang.startswith("en") else "🛑 已中止",
                     "request_id": request_id,
@@ -1723,52 +2038,56 @@ class WebChannel(ChatChannel):
 
         self._cleanup_stale_voice_recordings()
 
-        # Print available channel types (ordered by language: prioritize
-        # locally-popular channels for the current UI language)
-        logger.info(
-            "[WebChannel] Available channels (edit `channel_type` in config.json to switch, separate multiple with commas):")
-        zh_channels = [
-            ("web", "Web"),
-            ("terminal", "Terminal"),
-            ("weixin", "WeChat"),
-            ("feishu", "Feishu"),
-            ("dingtalk", "DingTalk"),
-            ("wecom_bot", "WeCom Bot"),
-            ("wechatcom_app", "WeCom App"),
-            ("wechat_kf", "WeChat Customer Service"),
-            ("wechatmp", "WeChat Official Account"),
-            ("wechatmp_service", "WeChat Official Account (Service)"),
-            ("telegram", "Telegram"),
-            ("slack", "Slack"),
-            ("discord", "Discord"),
-        ]
-        en_channels = [
-            ("web", "Web"),
-            ("terminal", "Terminal"),
-            ("telegram", "Telegram"),
-            ("slack", "Slack"),
-            ("discord", "Discord"),
-            ("weixin", "WeChat"),
-            ("feishu", "Feishu"),
-            ("dingtalk", "DingTalk"),
-            ("wecom_bot", "WeCom Bot"),
-            ("wechatcom_app", "WeCom App"),
-            ("wechat_kf", "WeChat Customer Service"),
-            ("wechatmp", "WeChat Official Account"),
-            ("wechatmp_service", "WeChat Official Account (Service)"),
-        ]
-        channels = en_channels if i18n.get_language() == "en" else zh_channels
-        name_width = max(len(name) for name, _ in channels)
-        for idx, (name, label) in enumerate(channels, 1):
-            logger.info(f"[WebChannel]  {idx:>2}. {name:<{name_width}} - {label}")
-        logger.info("[WebChannel] ✅ Web console is running")
-        logger.info(f"[WebChannel] 🌐 Local access: http://localhost:{port}")
-        if is_public_bind:
-            logger.info(f"[WebChannel] 🌍 Server access: http://YOUR_IP:{port} (replace YOUR_IP with your server IP)")
-            if not _is_password_enabled():
-                logger.info("[WebChannel] ⚠️  Listening on 0.0.0.0 without web_password set; set an access password in config.json for public deployment")
-        else:
-            logger.info(f"[WebChannel] 🔒 Listening on {host} only (local access). For public access, set web_host to 0.0.0.0 and configure web_password")
+        def _log_startup_banner():
+            """Announce the console. Only called once the socket is actually
+            bound — printing it up front made a failed bind look like a
+            successful startup in the logs."""
+            # Print available channel types (ordered by language: prioritize
+            # locally-popular channels for the current UI language)
+            logger.info(
+                "[WebChannel] Available channels (edit `channel_type` in config.json to switch, separate multiple with commas):")
+            zh_channels = [
+                ("web", "Web"),
+                ("terminal", "Terminal"),
+                ("weixin", "WeChat"),
+                ("feishu", "Feishu"),
+                ("dingtalk", "DingTalk"),
+                ("wecom_bot", "WeCom Bot"),
+                ("wechatcom_app", "WeCom App"),
+                ("wechat_kf", "WeChat Customer Service"),
+                ("wechatmp", "WeChat Official Account"),
+                ("wechatmp_service", "WeChat Official Account (Service)"),
+                ("telegram", "Telegram"),
+                ("slack", "Slack"),
+                ("discord", "Discord"),
+            ]
+            en_channels = [
+                ("web", "Web"),
+                ("terminal", "Terminal"),
+                ("telegram", "Telegram"),
+                ("slack", "Slack"),
+                ("discord", "Discord"),
+                ("weixin", "WeChat"),
+                ("feishu", "Feishu"),
+                ("dingtalk", "DingTalk"),
+                ("wecom_bot", "WeCom Bot"),
+                ("wechatcom_app", "WeCom App"),
+                ("wechat_kf", "WeChat Customer Service"),
+                ("wechatmp", "WeChat Official Account"),
+                ("wechatmp_service", "WeChat Official Account (Service)"),
+            ]
+            channels = en_channels if i18n.get_language() == "en" else zh_channels
+            name_width = max(len(name) for name, _ in channels)
+            for idx, (name, label) in enumerate(channels, 1):
+                logger.info(f"[WebChannel]  {idx:>2}. {name:<{name_width}} - {label}")
+            logger.info("[WebChannel] ✅ Web console is running")
+            logger.info(f"[WebChannel] 🌐 Local access: http://localhost:{port}")
+            if is_public_bind:
+                logger.info(f"[WebChannel] 🌍 Server access: http://YOUR_IP:{port} (replace YOUR_IP with your server IP)")
+                if not _is_password_enabled():
+                    logger.info("[WebChannel] ⚠️  Listening on 0.0.0.0 without web_password set; set an access password in config.json for public deployment")
+            else:
+                logger.info(f"[WebChannel] 🔒 Listening on {host} only (local access). For public access, set web_host to 0.0.0.0 and configure web_password")
 
         # In desktop mode the Electron shell renders the UI, so don't pop a
         # browser window (also avoids issues when running detached/headless).
@@ -1830,6 +2149,12 @@ class WebChannel(ChatChannel):
             '/api/workspace/search', 'WorkspaceSearchHandler',
             '/api/workspace/resolve', 'WorkspaceResolveHandler',
             '/api/workspace/meta', 'WorkspaceMetaHandler',
+            '/api/projects', 'ProjectsHandler',
+            '/api/projects/select', 'ProjectSelectHandler',
+            '/api/projects/create', 'ProjectCreateHandler',
+            '/api/projects/browse', 'ProjectBrowseHandler',
+            '/api/projects/order', 'ProjectOrderHandler',
+            '/api/projects/manage', 'ProjectManageHandler',
             '/api/voice/asr', 'VoiceAsrHandler',
             '/api/voice/tts', 'VoiceTtsHandler',
             '/poll', 'PollHandler',
@@ -1861,9 +2186,11 @@ class WebChannel(ChatChannel):
             '/api/sessions/(.*)/generate_title', 'SessionTitleHandler',
             '/api/prompt/optimize', 'PromptOptimizeHandler',
             '/api/sessions/(.*)/clear_context', 'SessionClearContextHandler',
+            '/api/sessions/(.*)/settings', 'SessionSettingsHandler',
             '/api/sessions/(.*)', 'SessionDetailHandler',
             '/api/history', 'HistoryHandler',
             '/api/messages/delete', 'MessageDeleteHandler',
+            '/api/logs/download', 'LogsDownloadHandler',
             '/api/logs', 'LogsHandler',
             '/api/version', 'VersionHandler',
             '/mcp/oauth/callback', 'McpOAuthCallbackHandler',
@@ -1890,20 +2217,32 @@ class WebChannel(ChatChannel):
         server.timeout = 300
         server.requests.min = 20
         server.requests.max = 80
-        self._http_server = server
-        # Reclaim orphaned SSE queues so disconnected clients don't leak fds.
-        self._start_sse_janitor()
+        # Allow large attachments (screenshots, PDFs, short videos). cheroot's
+        # default is unlimited (0), but pin an explicit, generous cap so an
+        # oversized body fails with a clean 413 instead of a connection reset
+        # that surfaces in the client as an opaque "Failed to fetch".
         try:
-            server.start()
+            server.max_request_body_size = 512 * 1024 * 1024  # 512 MB
+        except Exception:
+            pass
+        self._http_server = server
+        # Reclaim orphaned SSE logs so disconnected clients don't leak memory.
+        self._start_sse_janitor()
+        # prepare() binds the socket, serve() runs the accept loop. Splitting
+        # start() into the two lets us report a bind failure with the port in
+        # hand, and keeps the "console is running" banner honest: it now only
+        # prints once we really own the port.
+        try:
+            server.prepare()
+        except OSError as e:
+            _log_bind_failure(host, port, e)
+            raise
+        SERVING.set()
+        _log_startup_banner()
+        try:
+            server.serve()
         except (KeyboardInterrupt, SystemExit):
             server.stop()
-        except OSError as e:
-            if e.errno in (48, 98):  # macOS/Linux EADDRINUSE
-                logger.error(
-                    f"[WebChannel] 端口 {port} 已被占用，可执行 `cow restart` 清理残留进程，"
-                    f"或在 config.json 中修改 web_port"
-                )
-            raise
 
     def stop(self):
         if self._http_server:
@@ -2924,6 +3263,36 @@ class FileServeHandler:
             raise web.notfound()
 
 
+# Injected into previewed HTML so the iframe's scrollbars match the app chrome
+# instead of falling back to the platform default (wide, opaque track).
+# Placed at the top of <head> so a page that styles its own scrollbars still wins.
+_PREVIEW_SCROLLBAR_CSS = (
+    "<style>"
+    "html{scrollbar-width:thin;scrollbar-color:rgba(128,128,128,.45) transparent}"
+    "::-webkit-scrollbar{width:8px;height:8px}"
+    "::-webkit-scrollbar-track{background:transparent}"
+    "::-webkit-scrollbar-corner{background:transparent}"
+    "::-webkit-scrollbar-thumb{background:rgba(128,128,128,.45);border-radius:4px;"
+    "border:2px solid transparent;background-clip:padding-box}"
+    "::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,.7);"
+    "background-clip:padding-box}"
+    "</style>"
+)
+
+_HEAD_OPEN_RE = re.compile(rb"<head\b[^>]*>", re.IGNORECASE)
+_HTML_OPEN_RE = re.compile(rb"<html\b[^>]*>", re.IGNORECASE)
+
+
+def _inject_preview_chrome(raw: bytes) -> bytes:
+    """Insert the scrollbar stylesheet into a previewed HTML document."""
+    css = _PREVIEW_SCROLLBAR_CSS.encode("utf-8")
+    for pattern in (_HEAD_OPEN_RE, _HTML_OPEN_RE):
+        m = pattern.search(raw)
+        if m:
+            return raw[: m.end()] + css + raw[m.end():]
+    return css + raw
+
+
 class PreviewHandler:
     """
     Directory-mounted file server for the preview panel: /preview/<token>/<relpath>
@@ -2960,7 +3329,8 @@ class PreviewHandler:
             web.header('Content-Type', content_type)
             web.header('Cache-Control', 'no-cache')
             web.header('X-Content-Type-Options', 'nosniff')
-            if content_type.startswith("text/html"):
+            is_html = content_type.startswith("text/html")
+            if is_html:
                 # Agent-generated pages are untrusted. The CSP sandbox forces an
                 # opaque origin even when the page is opened as a top-level tab,
                 # so it can't read the console's localStorage auth token; the
@@ -2975,7 +3345,8 @@ class PreviewHandler:
                     "sandbox allow-scripts allow-popups allow-forms allow-modals",
                 )
             with open(full_path, 'rb') as f:
-                return f.read()
+                data = f.read()
+            return _inject_preview_chrome(data) if is_html else data
         except web.HTTPError:
             raise
         except Exception as e:
@@ -2998,17 +3369,25 @@ class CancelHandler:
 class StreamHandler:
     def GET(self):
         _require_auth()
-        params = web.input(request_id='')
+        params = web.input(request_id='', after_seq='')
         request_id = params.request_id
         if not request_id:
             raise web.badrequest()
+
+        # Explicit query cursors are used by the frontend's manually-created
+        # EventSource. Native EventSource reconnects remain compatible via the
+        # standard Last-Event-ID request header.
+        after_seq = _parse_sse_cursor(
+            params.after_seq,
+            web.ctx.env.get('HTTP_LAST_EVENT_ID', '0'),
+        )
 
         web.header('Content-Type', 'text/event-stream; charset=utf-8')
         web.header('Cache-Control', 'no-cache')
         web.header('X-Accel-Buffering', 'no')
         web.header('Access-Control-Allow-Origin', '*')
 
-        return WebChannel().stream_response(request_id)
+        return WebChannel().stream_response(request_id, after_seq)
 
 
 class ChatHandler:
@@ -3033,10 +3412,10 @@ class ConfigHandler:
         const.MINIMAX_M3, const.MINIMAX_M2_7_HIGHSPEED, const.MINIMAX_M2_7,
         # claude-opus-5 is the Claude default; claude-sonnet-5 / claude-fable-5 follow right after it.
         const.CLAUDE_OPUS_5, const.CLAUDE_SONNET_5, const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS,
-        const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE,
+        const.GEMINI_37_FLASH, const.GEMINI_36_FLASH, const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE,
         const.GPT_56_LUNA, const.GPT_56_TERRA, const.GPT_56_SOL, const.GPT_55, const.GPT_54, const.GPT_54_MINI, const.GPT_54_NANO, const.GPT_5, const.GPT_41, const.GPT_4o,
-        const.GLM_5_2, const.GLM_5_1, const.GLM_5_TURBO, const.GLM_5, const.GLM_4_7,
-        const.QWEN37_PLUS, const.QWEN37_MAX, const.QWEN36_PLUS,
+        const.GLM_5_3, const.GLM_5_2, const.GLM_5_1, const.GLM_5_TURBO, const.GLM_5, const.GLM_4_7,
+        const.QWEN38_MAX, const.QWEN37_PLUS, const.QWEN37_MAX, const.QWEN36_PLUS,
         const.DOUBAO_SEED_2_1_PRO, const.DOUBAO_SEED_2_1_TURBO, const.DOUBAO_SEED_2_CODE,
         const.KIMI_K3, const.KIMI_K2_7_CODE, const.KIMI_K2_7_CODE_HIGHSPEED, const.KIMI_K2_6, const.KIMI_K2_5, const.KIMI_K2,
         const.ERNIE_5_1, const.ERNIE_5, const.ERNIE_X1_1, const.ERNIE_45_TURBO_128K, const.ERNIE_45_TURBO_32K,
@@ -3061,15 +3440,7 @@ class ConfigHandler:
             "api_base_key": "deepseek_api_base",
             "api_base_default": "https://api.deepseek.com/v1",
             "api_base_placeholder": _PLACEHOLDER_V1,
-            "models": [const.DEEPSEEK_V4_FLASH, const.DEEPSEEK_V4_PRO, const.DEEPSEEK_CHAT, const.DEEPSEEK_REASONER],
-        }),
-        ("minimax", {
-            "label": "MiniMax",
-            "api_key_field": "minimax_api_key",
-            "api_base_key": None,
-            "api_base_default": None,
-            "api_base_placeholder": "",
-            "models": [const.MINIMAX_M3, const.MINIMAX_M2_7, const.MINIMAX_M2_7_HIGHSPEED],
+            "models": [const.DEEPSEEK_V4_FLASH, const.DEEPSEEK_V4_PRO],
         }),
         ("claudeAPI", {
             "label": "Claude",
@@ -3079,14 +3450,6 @@ class ConfigHandler:
             "api_base_placeholder": _PLACEHOLDER_V1,
             "models": [const.CLAUDE_OPUS_5, const.CLAUDE_SONNET_5, const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS],
         }),
-        ("gemini", {
-            "label": "Gemini",
-            "api_key_field": "gemini_api_key",
-            "api_base_key": "gemini_api_base",
-            "api_base_default": "https://generativelanguage.googleapis.com",
-            "api_base_placeholder": _PLACEHOLDER_GEMINI,
-            "models": [const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE],
-        }),
         ("openai", {
             "label": "OpenAI",
             "api_key_field": "open_ai_api_key",
@@ -3095,13 +3458,29 @@ class ConfigHandler:
             "api_base_placeholder": _PLACEHOLDER_V1,
             "models": [const.GPT_56_LUNA, const.GPT_56_TERRA, const.GPT_56_SOL, const.GPT_55, const.GPT_54, const.GPT_54_MINI, const.GPT_54_NANO, const.GPT_5, const.GPT_41, const.GPT_4o],
         }),
+        ("gemini", {
+            "label": "Gemini",
+            "api_key_field": "gemini_api_key",
+            "api_base_key": "gemini_api_base",
+            "api_base_default": "https://generativelanguage.googleapis.com",
+            "api_base_placeholder": _PLACEHOLDER_GEMINI,
+            "models": [const.GEMINI_37_FLASH, const.GEMINI_36_FLASH, const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE],
+        }),
+        ("minimax", {
+            "label": "MiniMax",
+            "api_key_field": "minimax_api_key",
+            "api_base_key": None,
+            "api_base_default": None,
+            "api_base_placeholder": "",
+            "models": [const.MINIMAX_M3, const.MINIMAX_M2_7, const.MINIMAX_M2_7_HIGHSPEED],
+        }),
         ("zhipu", {
             "label": {"zh": "智谱AI", "en": "GLM"},
             "api_key_field": "zhipu_ai_api_key",
             "api_base_key": "zhipu_ai_api_base",
             "api_base_default": "https://open.bigmodel.cn/api/paas/v4",
             "api_base_placeholder": _PLACEHOLDER_ZHIPU,
-            "models": [const.GLM_5_2, const.GLM_5_1, const.GLM_5_TURBO, const.GLM_5, const.GLM_4_7],
+            "models": [const.GLM_5_3, const.GLM_5_2, const.GLM_5_1, const.GLM_5_TURBO, const.GLM_5, const.GLM_4_7],
         }),
         ("dashscope", {
             "label": {"zh": "通义千问", "en": "Qwen"},
@@ -3109,15 +3488,7 @@ class ConfigHandler:
             "api_base_key": None,
             "api_base_default": None,
             "api_base_placeholder": "",
-            "models": [const.QWEN37_PLUS, const.QWEN37_MAX, const.QWEN36_PLUS],
-        }),
-        ("doubao", {
-            "label": {"zh": "豆包", "en": "Doubao"},
-            "api_key_field": "ark_api_key",
-            "api_base_key": "ark_base_url",
-            "api_base_default": "https://ark.cn-beijing.volces.com/api/v3",
-            "api_base_placeholder": _PLACEHOLDER_DOUBAO,
-            "models": [const.DOUBAO_SEED_2_1_PRO, const.DOUBAO_SEED_2_1_TURBO, const.DOUBAO_SEED_2_PRO, const.DOUBAO_SEED_2_CODE],
+            "models": [const.QWEN38_MAX, const.QWEN37_PLUS, const.QWEN37_MAX, const.QWEN36_PLUS],
         }),
         ("moonshot", {
             "label": "Kimi",
@@ -3126,6 +3497,14 @@ class ConfigHandler:
             "api_base_default": "https://api.moonshot.cn/v1",
             "api_base_placeholder": _PLACEHOLDER_V1,
             "models": [const.KIMI_K3, const.KIMI_K2_7_CODE, const.KIMI_K2_7_CODE_HIGHSPEED, const.KIMI_K2_6, const.KIMI_K2_5, const.KIMI_K2],
+        }),
+        ("doubao", {
+            "label": {"zh": "豆包", "en": "Doubao"},
+            "api_key_field": "ark_api_key",
+            "api_base_key": "ark_base_url",
+            "api_base_default": "https://ark.cn-beijing.volces.com/api/v3",
+            "api_base_placeholder": _PLACEHOLDER_DOUBAO,
+            "models": [const.DOUBAO_SEED_2_1_PRO, const.DOUBAO_SEED_2_1_TURBO, const.DOUBAO_SEED_2_PRO, const.DOUBAO_SEED_2_CODE],
         }),
         ("qianfan", {
             "label": {"zh": "百度千帆", "en": "ERNIE"},
@@ -3171,7 +3550,14 @@ class ConfigHandler:
         "ark_api_key", "minimax_api_key", "linkai_api_key", "custom_api_key", "mimo_api_key",
         "custom_providers",
         "agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps",
-        "enable_thinking", "self_evolution_enabled", "web_password",
+        "enable_thinking", "reasoning_effort", "reasoning_effort_by_model", "self_evolution_enabled", "web_password",
+        "agent_permission_mode",
+    }
+
+    # Switches the API exposes flat - one key, one control - while the config
+    # file keeps a feature's settings together under one object.
+    NESTED_BOOLS = {
+        "subagent_enabled": ("subagent", "enabled"),
     }
 
     @staticmethod
@@ -3185,6 +3571,9 @@ class ConfigHandler:
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
+            from agent.subagent import SubagentSettings
+            from agent.evolution.config import get_evolution_config
+
             local_config = conf()
             use_agent = local_config.get("agent", True)
             title = "CowAgent" if use_agent else "AI Assistant"
@@ -3201,7 +3590,12 @@ class ConfigHandler:
                     api_keys_masked[key_field] = self._mask_key(raw) if raw else ""
 
             providers = {}
+            provider_model = local_config.get("model", "")
             for pid, p in self.PROVIDER_MODELS.items():
+                reasoning_by_model = {
+                    model: provider_reasoning_metadata(pid, model)
+                    for model in p["models"]
+                }
                 providers[pid] = {
                     "label": p["label"],
                     "models": p["models"],
@@ -3209,6 +3603,8 @@ class ConfigHandler:
                     "api_base_default": p["api_base_default"],
                     "api_base_placeholder": p.get("api_base_placeholder", ""),
                     "api_key_field": p.get("api_key_field"),
+                    "reasoning": provider_reasoning_metadata(pid, provider_model),
+                    "reasoning_by_model": reasoning_by_model,
                 }
 
             # Expose user-defined custom providers as "custom:<id>" entries so
@@ -3233,6 +3629,11 @@ class ConfigHandler:
                         "api_base_default": None,
                         "api_base_placeholder": "",
                         "api_key_field": None,
+                        "reasoning": provider_reasoning_metadata(cid, cp.get("model") or ""),
+                        "reasoning_by_model": (
+                            {cp["model"]: provider_reasoning_metadata(cid, cp["model"])}
+                            if cp.get("model") else {}
+                        ),
                     }
             except Exception as cp_err:
                 logger.warning(f"[ConfigHandler] failed to expand custom providers: {cp_err}")
@@ -3252,7 +3653,15 @@ class ConfigHandler:
                 "agent_max_context_turns": local_config.get("agent_max_context_turns", 20),
                 "agent_max_steps": local_config.get("agent_max_steps", 20),
                 "enable_thinking": bool(local_config.get("enable_thinking", False)),
-                "self_evolution_enabled": bool(local_config.get("self_evolution_enabled", False)),
+                "reasoning_effort": local_config.get("reasoning_effort", "high"),
+                "reasoning_effort_by_model": local_config.get("reasoning_effort_by_model", {}),
+                # Read through the feature's own loader so the default it
+                # applies to an absent setting is the one shown here.
+                "self_evolution_enabled": get_evolution_config().enabled,
+                "subagent_enabled": SubagentSettings.from_config().enabled,
+                # Default permission mode for sessions that have not pinned one.
+                "agent_permission_mode": permission_global_mode(),
+                "permission_modes": list(PERMISSION_MODES),
                 "api_bases": api_bases,
                 "api_keys": api_keys_masked,
                 "providers": providers,
@@ -3284,17 +3693,42 @@ class ConfigHandler:
 
             local_config = conf()
             applied = {}
+            nested = {}
             for key, value in updates.items():
+                if key in self.NESTED_BOOLS:
+                    section, leaf = self.NESTED_BOOLS[key]
+                    nested.setdefault(section, {})[leaf] = bool(value)
+                    continue
                 if key not in self.EDITABLE_KEYS:
                     continue
                 if key in ("agent_max_context_tokens", "agent_max_context_turns", "agent_max_steps"):
                     value = int(value)
                 if key in ("use_linkai", "enable_thinking", "self_evolution_enabled"):
                     value = bool(value)
+                # Never persist an unknown mode: every later read would silently
+                # fall back and the UI would show a setting that does nothing.
+                if key == "agent_permission_mode":
+                    value = permission_normalize_mode(value)
+                # reasoning_effort_by_model is a dict that must be *merged* with
+                # the persisted map, not replaced. A frontend submits only the
+                # entries it changed (merged locally), so whole-key replacement
+                # here would drop other models' saved efforts on a concurrent or
+                # sequential save (or a second open settings page).
+                if key == "reasoning_effort_by_model":
+                    if not isinstance(value, dict):
+                        # Reject malformed payloads explicitly instead of
+                        # persisting a non-dict that the resolver would choke on.
+                        return json.dumps({
+                            "status": "error",
+                            "message": "reasoning_effort_by_model must be a JSON object",
+                        })
+                    merged = dict(local_config.get("reasoning_effort_by_model") or {})
+                    merged.update(value)
+                    value = merged
                 local_config[key] = value
                 applied[key] = value
 
-            if not applied:
+            if not applied and not nested:
                 return json.dumps({"status": "error", "message": "no valid keys to update"})
 
             config_path = os.path.join(get_data_root(), "config.json")
@@ -3302,6 +3736,14 @@ class ConfigHandler:
             # Capture old password before updating
             old_password = file_cfg.get("web_password", "") if "web_password" in applied else ""
             file_cfg.update(applied)
+            # Merged rather than assigned: the UI sends the one switch it owns,
+            # and the rest of the section is the user's to keep.
+            for section, values in nested.items():
+                merged = dict(file_cfg.get(section) or {})
+                merged.update(values)
+                file_cfg[section] = merged
+                local_config[section] = merged
+                applied[section] = merged
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(file_cfg, f, indent=4, ensure_ascii=False)
 
@@ -3690,7 +4132,7 @@ class ModelsHandler:
         # entry is the auto-picked vision model, and image understanding does
         # not justify the Opus price.
         "claudeAPI": [const.CLAUDE_SONNET_5, const.CLAUDE_OPUS_5, const.CLAUDE_FABLE_5, const.CLAUDE_4_8_OPUS, const.CLAUDE_4_7_OPUS, const.CLAUDE_4_6_SONNET, const.CLAUDE_4_6_OPUS],
-        "gemini":    [const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE],
+        "gemini":    [const.GEMINI_37_FLASH, const.GEMINI_36_FLASH, const.GEMINI_35_FLASH, const.GEMINI_31_FLASH_LITE_PRE, const.GEMINI_31_PRO_PRE, const.GEMINI_3_FLASH_PRE],
         "qianfan":   [const.ERNIE_45_TURBO_VL],
         # Zhipu's bot hard-codes the call to glm-5v-turbo regardless of what
         # name is passed in (see models/zhipuai/zhipuai_bot.py::call_vision),
@@ -3751,6 +4193,7 @@ class ModelsHandler:
             {"value": "gemini-3-pro-image-preview",     "hint": "Nano Banana Pro"},
             "seedream-5.0-lite",
         ],
+        "custom": [],
     }
 
     @staticmethod
@@ -3896,6 +4339,65 @@ class ModelsHandler:
         items.sort(key=_sort_key)
         return items
 
+    # Map a chat `model` name to a provider id in PROVIDER_MODELS. Mirrors the
+    # inference in bridge.py::Bridge.__init__ so that a config with an empty
+    # `bot_type` (valid at runtime, since the bridge derives the provider from
+    # `model`) is still recognized as "configured" by the models handler and
+    # doesn't wrongly trigger the onboarding wizard. Prefix rules are ordered
+    # most-specific first; the returned ids are the PROVIDER_MODELS keys.
+    @staticmethod
+    def _infer_provider_from_model(model: str) -> str:
+        """Best-effort provider id from a model name. Returns "" when unknown.
+
+        Kept deliberately tolerant: any unexpected input yields "" rather than
+        raising, so callers can treat "no inference" and "bad input" the same.
+        """
+        try:
+            if not model or not isinstance(model, str):
+                return ""
+            m = model.strip().lower()
+            if not m:
+                return ""
+            # Exact matches first (models whose name isn't a clean prefix).
+            exact = {
+                "wenxin": "qianfan",
+                "wenxin-4": "qianfan",
+                "abab6.5": "minimax",
+                "abab6.5-chat": "minimax",
+            }
+            if m in exact:
+                return exact[m]
+            # Prefix rules — order matters where prefixes could overlap.
+            prefix_rules = (
+                ("deepseek", "deepseek"),
+                ("gemini", "gemini"),
+                ("glm", "zhipu"),
+                ("claude", "claudeAPI"),
+                ("kimi", "moonshot"),
+                ("moonshot", "moonshot"),
+                ("doubao", "doubao"),
+                ("mimo-", "mimo"),
+                ("qwen", "dashscope"),
+                ("qwq", "dashscope"),
+                ("qvq", "dashscope"),
+                ("ernie", "qianfan"),
+                ("minimax", "minimax"),
+                ("gpt", "openai"),
+                ("o1", "openai"),
+                ("o3", "openai"),
+                ("o4", "openai"),
+            )
+            for prefix, pid in prefix_rules:
+                if m.startswith(prefix):
+                    return pid
+            # `qianfan` is sometimes used directly as the model name.
+            if m == "qianfan":
+                return "qianfan"
+            return ""
+        except Exception:
+            # Never let inference break the models endpoint / startup.
+            return ""
+
     @classmethod
     def _chat_capability(cls, local_config: dict) -> dict:
         """Main chat model — drives the agent. bot_type maps to a provider id."""
@@ -3905,6 +4407,18 @@ class ModelsHandler:
         if (provider_id not in ConfigHandler.PROVIDER_MODELS and not is_custom_id
                 and local_config.get("use_linkai")):
             provider_id = "linkai"
+        # When `bot_type` doesn't resolve to a known provider (e.g. it was
+        # left empty by a config edit, which the runtime bridge tolerates by
+        # inferring from `model`), fall back to the same model-based inference
+        # here. Otherwise the wizard would treat a working setup as unconfigured
+        # and re-open on every launch. Guarded so a failure can't affect startup.
+        if provider_id not in ConfigHandler.PROVIDER_MODELS and not is_custom_id:
+            try:
+                inferred = cls._infer_provider_from_model(local_config.get("model", ""))
+                if inferred in ConfigHandler.PROVIDER_MODELS:
+                    provider_id = inferred
+            except Exception:
+                pass
         # In multi-provider mode, replace the single "custom" entry with the
         # expanded "custom:<id>" ids so the chat dropdown matches the cards.
         # The legacy "custom" entry stays when its flat config is still used.
@@ -3939,7 +4453,7 @@ class ModelsHandler:
         ("doubao",    "ark_api_key",       const.DOUBAO_SEED_2_PRO),
         ("dashscope", "dashscope_api_key", const.QWEN37_PLUS),
         ("claudeAPI", "claude_api_key",    const.CLAUDE_SONNET_5),
-        ("gemini",    "gemini_api_key",    const.GEMINI_35_FLASH),
+        ("gemini",    "gemini_api_key",    const.GEMINI_37_FLASH),
         ("qianfan",   "qianfan_api_key",   const.ERNIE_45_TURBO_VL),
         ("zhipu",     "zhipu_ai_api_key",  const.GLM_5V_TURBO),
         ("minimax",   "minimax_api_key",   const.MINIMAX_TEXT_01),
@@ -4084,21 +4598,31 @@ class ModelsHandler:
                 if key_field and cls._is_real_key(local_config.get(key_field, "")):
                     suggested = pid
                     break
+        # Custom (OpenAI-compatible) vendors are selectable too — same pattern
+        # as _vision_capability: each expanded custom:<id> gets an entry.
+        providers = list(cls._ASR_PROVIDERS)
+        custom_cards = cls._custom_provider_cards(local_config)
+        if custom_cards:
+            providers.extend(c["id"] for c in custom_cards)
         return {
             "editable": True,
             "current_provider": explicit,
             "suggested_provider": suggested,
             "current_model": (local_config.get("voice_to_text_model") or "") if explicit else "",
-            "providers": cls._ASR_PROVIDERS,
+            "providers": providers,
             "provider_models": cls._ASR_PROVIDER_MODELS,
         }
 
     @classmethod
     def _tts_capability(cls, local_config: dict) -> dict:
         explicit = (local_config.get("text_to_voice") or "").strip().lower()
-        # Providers outside the white-list don't drive the picker, but their
-        # underlying runtime config is preserved so bridge still routes them.
-        ui_provider = explicit if explicit in cls._TTS_PROVIDERS else ""
+        # Custom (OpenAI-compatible) vendors are selectable too; accept them
+        # (expanded custom:<id> or legacy flat "custom") as the current
+        # provider so the card shows the saved selection. Other providers
+        # outside the white-list don't drive the picker, but their underlying
+        # runtime config is preserved so bridge still routes them.
+        is_custom_id = explicit.startswith("custom:") or explicit == "custom"
+        ui_provider = explicit if (explicit in cls._TTS_PROVIDERS or is_custom_id) else ""
         suggested = ""
         if not ui_provider:
             for pid in cls._TTS_PROVIDERS:
@@ -4107,13 +4631,17 @@ class ModelsHandler:
                 if key_field and cls._is_real_key(local_config.get(key_field, "")):
                     suggested = pid
                     break
+        providers = list(cls._TTS_PROVIDERS)
+        custom_cards = cls._custom_provider_cards(local_config)
+        if custom_cards:
+            providers.extend(c["id"] for c in custom_cards)
         return {
             "editable": True,
             "current_provider": ui_provider,
             "suggested_provider": suggested,
             "current_model": (local_config.get("text_to_voice_model") or "") if ui_provider else "",
             "current_voice": (local_config.get("tts_voice_id") or "") if ui_provider else "",
-            "providers": cls._TTS_PROVIDERS,
+            "providers": providers,
             "provider_models": cls._TTS_PROVIDER_MODELS,
             "provider_voices": cls._TTS_PROVIDER_VOICES,
             "reply_mode": cls._tts_reply_mode(local_config),
@@ -4236,13 +4764,23 @@ class ModelsHandler:
         explicit_model = (img_node.get("model") or "").strip()
         explicit_provider = (img_node.get("provider") or "").strip()
 
+        providers = []
+        custom_cards = cls._custom_provider_cards(local_config)
+        for provider_id in cls._IMAGE_PROVIDER_MODELS:
+            if provider_id == "custom":
+                providers.extend(
+                    card["id"] for card in custom_cards
+                )
+            else:
+                providers.append(provider_id)
+
         # Provider resolution priority:
         #   1. Explicit `skills.image-generation.provider` (persisted via UI;
         #      supports custom model names that prefix-inference can't catch).
         #   2. Scan per-provider model catalog by model name.
         # Empty provider keeps the dropdown on "auto" when we can't tell.
         inferred_provider = ""
-        if explicit_provider and explicit_provider in cls._IMAGE_PROVIDER_MODELS:
+        if explicit_provider and explicit_provider in providers:
             inferred_provider = explicit_provider
         elif explicit_model:
             for pid, models in cls._IMAGE_PROVIDER_MODELS.items():
@@ -4267,13 +4805,9 @@ class ModelsHandler:
             "current_model": explicit_model,
             "fallback_provider": predicted["provider"],
             "fallback_model": predicted["model"],
-            "providers": list(cls._IMAGE_PROVIDER_MODELS.keys()),
+            "providers": providers,
             "provider_models": cls._IMAGE_PROVIDER_MODELS,
-            # The dispatcher that honors a pinned provider isn't wired up
-            # yet; advertise this so the UI can show a "saved but not active"
-            # banner until the runtime catches up.
-            "runtime_active": False,
-            "note": "router_pending",
+            "runtime_active": True,
         }
 
     # Canonical search provider order. Mirrors PROVIDER_ORDER in
@@ -4522,6 +5056,51 @@ class ModelsHandler:
                 if provider and provider.get("model"):
                     local_config["model"] = provider["model"]
                     file_cfg["model"] = provider["model"]
+
+        skills = local_config.get("skills") or {}
+        image_config = (
+            skills.get("image-generation")
+            if isinstance(skills, dict)
+            else {}
+        )
+        image_provider = (
+            image_config.get("provider", "")
+            if isinstance(image_config, dict)
+            else ""
+        )
+        if image_provider.startswith("custom:"):
+            image_provider_id = image_provider[len("custom:"):]
+            if not any(
+                provider.get("id") == image_provider_id
+                for provider in providers
+            ):
+                for target in (local_config, file_cfg):
+                    self._set_nested_namespace_value(
+                        target,
+                        "skills",
+                        "image-generation",
+                        "provider",
+                        "",
+                    )
+                    self._set_nested_namespace_value(
+                        target,
+                        "skills",
+                        "image-generation",
+                        "model",
+                        "",
+                    )
+                os.environ.pop(
+                    "SKILL_IMAGE_GENERATION_PROVIDER",
+                    None,
+                )
+                os.environ.pop(
+                    "SKILL_IMAGE_GENERATION_MODEL",
+                    None,
+                )
+        sync_image_generation_custom_provider_env(
+            local_config,
+            overwrite=True,
+        )
         self._write_file_config(file_cfg)
         self._reset_bridge()
 
@@ -4674,6 +5253,45 @@ class ModelsHandler:
         # a specific vendor still get routed there — runtime falls back to
         # model-name prefix inference only when provider is empty.
         local_config = conf()
+        if provider_id.startswith("custom:"):
+            custom_id = provider_id[len("custom:"):]
+            providers = self._normalize_custom_providers(
+                local_config.get("custom_providers")
+            )
+            custom_provider = next(
+                (
+                    provider
+                    for provider in providers
+                    if provider.get("id") == custom_id
+                ),
+                None,
+            )
+            if custom_provider is None:
+                return json.dumps({
+                    "status": "error",
+                    "message": (
+                        "unknown custom provider id: {}".format(custom_id)
+                    ),
+                })
+            if not model:
+                model = custom_provider.get("model") or ""
+        elif (
+            provider_id
+            and provider_id not in self._IMAGE_PROVIDER_MODELS
+        ):
+            return json.dumps({
+                "status": "error",
+                "message": "unknown image provider: {}".format(provider_id),
+            })
+
+        if provider_id and not model:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    "image model is required when a provider is selected"
+                ),
+            })
+
         file_cfg = self._read_file_config()
 
         self._set_nested_namespace_value(local_config, "skills", "image-generation", "model", model or "")
@@ -4698,13 +5316,16 @@ class ModelsHandler:
             os.environ[provider_env] = provider_id
         else:
             os.environ.pop(provider_env, None)
+        sync_image_generation_custom_provider_env(
+            local_config,
+            overwrite=True,
+        )
 
         logger.info(f"[ModelsHandler] image updated: provider={provider_id!r} model={model!r}")
         return json.dumps({
             "status": "success",
             "provider": provider_id,
             "model": model,
-            "router_pending": True,
         })
 
     def _set_chat(self, provider_id: str, model: str) -> str:
@@ -5096,6 +5717,26 @@ class ChannelsHandler:
         }),
     ])
 
+    # Channels that lead the list in English. Everything defined above them
+    # needs a mainland-China account, so an English user scrolling past those
+    # to reach Telegram is scrolling past options they cannot use.
+    EN_FIRST_CHANNELS = ("telegram", "discord", "slack")
+
+    @classmethod
+    def _ordered_channel_defs(cls, lang=None):
+        """
+        Channel definitions ordered for `lang`, defaulting to the configured UI
+        language. Callers pass the language of the interface they are drawing:
+        the desktop client keeps its own language in localStorage, so the global
+        setting is not always what the user is looking at.
+        """
+        from common import i18n
+        if (lang or i18n.get_language()) != i18n.EN:
+            return list(cls.CHANNEL_DEFS.items())
+        lead = [(k, cls.CHANNEL_DEFS[k]) for k in cls.EN_FIRST_CHANNELS if k in cls.CHANNEL_DEFS]
+        rest = [(k, v) for k, v in cls.CHANNEL_DEFS.items() if k not in cls.EN_FIRST_CHANNELS]
+        return lead + rest
+
     @staticmethod
     def _get_weixin_login_status() -> str:
         try:
@@ -5137,7 +5778,12 @@ class ChannelsHandler:
             active_channels = self._active_channel_set()
             channels = []
             is_hant = i18n.get_language() == i18n.ZH_HANT
-            for ch_name, ch_def in self.CHANNEL_DEFS.items():
+            # The caller may be rendering in a different language than the
+            # global setting; honour it when it sends one.
+            req_lang = web.input().get("lang") or None
+            if req_lang not in (i18n.EN, i18n.ZH, i18n.ZH_HANT):
+                req_lang = None
+            for ch_name, ch_def in self._ordered_channel_defs(req_lang):
                 fields_out = []
                 for f in ch_def["fields"]:
                     raw_val = local_config.get(f["key"], f.get("default", ""))
@@ -6078,12 +6724,58 @@ class SchedulerDeleteHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
 
+def _annotate_sessions_with_projects(store, result: dict, agent_id: Optional[str]) -> None:
+    """Attach each session's project space, and say how to group the list.
+
+    ``group_mode`` is decided here rather than in the browser because the client
+    only ever holds one page: whether more than one space is in play is a fact
+    about all sessions, not about the fifty currently on screen.
+
+    - ``time``    one space in use (the common case) - group by 今天/昨天/更早,
+                  exactly as before projects existed.
+    - ``project`` several spaces in use - group by project, so multi-project
+                  users can find a conversation by where it belongs.
+    """
+    from agent.workspace import project_store
+    from common.state_dir import state_root_str
+
+    project_map = project_store.get_project_map(agent_id)
+    default_workspace = state_root_str()
+
+    for session in result.get("sessions") or []:
+        path = project_map.get(session["session_id"])
+        session["project"] = (
+            {"path": path, "name": project_store.display_name_for(path)}
+            if path else None
+        )
+
+    # Distinct spaces across every web session, default workspace included as
+    # one space when any session is still using it.
+    space_paths = set()
+    uses_default = False
+    for sid in store.list_session_ids(channel_type="web"):
+        path = project_map.get(sid)
+        if path:
+            space_paths.add(path)
+        else:
+            uses_default = True
+
+    result["space_count"] = len(space_paths) + (1 if uses_default else 0)
+    result["group_mode"] = "project" if result["space_count"] > 1 else "time"
+    result["default_workspace"] = default_workspace
+    # The user's chosen sidebar order of spaces (project paths + the default
+    # sentinel). The client uses it to sort project groups; unspecified spaces
+    # fall back after the ordered ones.
+    result["project_order"] = project_store.get_order()
+
+
 class SessionsHandler:
     def GET(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
-            params = web.input(page='1', page_size='50')
+            params = web.input(page='1', page_size='50', agent='')
+            agent_id = params.agent or None
             from agent.memory import get_conversation_store
             store = get_conversation_store()
 
@@ -6107,6 +6799,7 @@ class SessionsHandler:
                 page=int(params.page),
                 page_size=int(params.page_size),
             )
+            _annotate_sessions_with_projects(store, result, agent_id)
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Sessions API error: {e}")
@@ -6143,6 +6836,16 @@ class SessionDetailHandler:
             store = get_conversation_store()
             store.clear_session(session_id)
 
+            # Drop the session's side stores too. Left behind, a stale project
+            # binding would keep inflating the "how many spaces are in use"
+            # count that decides how the session list is grouped.
+            try:
+                from agent.workspace import project_store, session_prefs
+                project_store.forget_session(session_id)
+                session_prefs.forget_session(session_id)
+            except Exception as e:
+                logger.debug(f"[WebChannel] Session side-store cleanup skipped: {e}")
+
             # Also remove the Agent instance from AgentBridge if exists
             try:
                 from bridge.bridge import Bridge
@@ -6167,6 +6870,7 @@ class SessionDetailHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
     def PUT(self, session_id: str):
+        """Update a session's title and/or its pinned flag."""
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
@@ -6175,18 +6879,220 @@ class SessionDetailHandler:
             if not _check_session_owner(session_id):
                 return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
             body = json.loads(web.data())
-            title = body.get("title", "").strip()
-            if not title:
-                return json.dumps({"status": "error", "message": "title required"})
+            title = (body.get("title") or "").strip()
+            pinned = body.get("pinned")
+            if not title and pinned is None:
+                return json.dumps({"status": "error", "message": "title or pinned required"})
 
             from agent.memory import get_conversation_store
             store = get_conversation_store()
-            found = store.rename_session(session_id, title)
+
+            found = True
+            if title:
+                found = store.rename_session(session_id, title)
+            if pinned is not None:
+                found = store.set_pinned(session_id, bool(pinned)) and found
             if not found:
+                # A session only gets a row once its first message is stored, so
+                # this is also what a pin on a brand-new empty chat looks like.
                 return json.dumps({"status": "error", "message": "session not found"})
             return json.dumps({"status": "success"})
         except Exception as e:
-            logger.error(f"[WebChannel] Session rename error: {e}")
+            logger.error(f"[WebChannel] Session update error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+def _session_model_catalog() -> List[dict]:
+    """Providers a session may switch to, newest-first within each provider.
+
+    Only providers with a credential on file are offered: listing one without an
+    API key would let the user pick a model that fails on the next message.
+    The globally active provider is always included, even if its key lives in
+    the environment rather than in config.json.
+    """
+    local_config = conf()
+    active_bot_type = local_config.get("bot_type") or ""
+    active_provider = "openai" if active_bot_type == const.CHATGPT else active_bot_type
+    if local_config.get("use_linkai") and local_config.get("linkai_api_key"):
+        active_provider = "linkai"
+    active_model = str(local_config.get("model") or "").strip()
+
+    catalog: List[dict] = []
+    for pid, pinfo in ConfigHandler.PROVIDER_MODELS.items():
+        if pid == "custom" or not pinfo.get("models"):
+            continue
+        key_field = pinfo.get("api_key_field")
+        has_key = bool(key_field and str(local_config.get(key_field) or "").strip())
+        if not has_key and pid != active_provider:
+            continue
+        models = list(pinfo["models"])
+        # The user can pin a custom model name to a built-in provider (via the
+        # global config / capability "custom model" field). That model won't be
+        # in the preset list, so surface it here for the active provider so the
+        # chat picker can both display and re-select it.
+        if pid == active_provider and active_model and active_model not in models:
+            models.insert(0, active_model)
+        catalog.append({
+            "id": pid,
+            "label": pinfo["label"],
+            "models": models,
+        })
+
+    # User-defined OpenAI-compatible providers carry their own credentials, so
+    # offer any that have a key on file (or are the active provider). Their model
+    # list combines the provider's configured default with the globally active
+    # model when this custom provider is the one in use — otherwise a custom
+    # provider added without a preset model would be unselectable in chat.
+    try:
+        from models.custom_provider import get_custom_providers
+        for cp in get_custom_providers():
+            cid = cp.get("id")
+            if not cid:
+                continue
+            pid = f"custom:{cid}"
+            is_active = pid == active_provider
+            has_key = bool(str(cp.get("api_key") or "").strip())
+            if not has_key and not is_active:
+                continue
+            models = []
+            cp_model = str(cp.get("model") or "").strip()
+            if cp_model:
+                models.append(cp_model)
+            if is_active and active_model and active_model not in models:
+                models.insert(0, active_model)
+            if not models:
+                # Nothing concrete to select yet (no default model and not the
+                # active provider) — skip rather than render an empty group.
+                continue
+            name = cp.get("name") or cid
+            catalog.append({
+                "id": pid,
+                "label": {"zh": name, "en": name},
+                "models": models,
+            })
+    except Exception as e:
+        logger.debug(f"[WebChannel] custom providers unavailable: {e}")
+
+    return catalog
+
+
+def _session_settings_state(session_id: str, agent_id: Optional[str]) -> dict:
+    """Effective model + permission for a session, and what it can be changed to.
+
+    ``source`` tells the UI whether a value is this conversation's own choice or
+    inherited, so it can show "follow global" as a real, selectable state instead
+    of silently duplicating the global value onto every session.
+    """
+    from agent.workspace import session_prefs
+
+    local_config = conf()
+    prefs = session_prefs.get_prefs(session_id, agent_id)
+
+    global_bot_type = local_config.get("bot_type") or ""
+    global_provider = "openai" if global_bot_type == const.CHATGPT else global_bot_type
+    if local_config.get("use_linkai") and local_config.get("linkai_api_key"):
+        global_provider = "linkai"
+    global_model = local_config.get("model") or ""
+    global_permission = permission_global_mode()
+
+    return {
+        "model": {
+            "model": prefs.get("model") or global_model,
+            "provider": prefs.get("provider") or global_provider,
+            "source": "session" if prefs.get("model") else "global",
+            "global": {"model": global_model, "provider": global_provider},
+            "providers": _session_model_catalog(),
+        },
+        "permission": {
+            "mode": (
+                permission_normalize_mode(prefs["permission"], global_permission)
+                if prefs.get("permission") else global_permission
+            ),
+            "source": "session" if prefs.get("permission") else "global",
+            "global": global_permission,
+            "modes": list(PERMISSION_MODES),
+        },
+    }
+
+
+class SessionSettingsHandler:
+    """Per-session model and permission overrides.
+
+    Both are stored outside the sessions table (see session_prefs) so they can be
+    set before the conversation has its first message, and both fall back to the
+    global config when unset.
+    """
+
+    def GET(self, session_id: str):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            if not session_id:
+                return json.dumps({"status": "error", "message": "session_id required"})
+            params = web.input(agent='')
+            state = _session_settings_state(session_id, params.agent or None)
+            return json.dumps({"status": "success", **state}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Session settings read error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def POST(self, session_id: str):
+        """Set or clear this session's model / permission.
+
+        Send ``null`` for a field to drop the override and follow the global
+        setting again. ``model`` and ``provider`` move together: a model without
+        its provider would be routed by the global bot type.
+        """
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            if not session_id:
+                return json.dumps({"status": "error", "message": "session_id required"})
+
+            from agent.workspace import session_prefs
+            body = json.loads(web.data() or b"{}")
+            agent_id = body.get("agent") or body.get("agent_id")
+
+            updates = {}
+            if "permission" in body:
+                mode = body.get("permission")
+                updates["permission"] = (
+                    permission_normalize_mode(mode) if mode else None
+                )
+            if "model" in body or "provider" in body:
+                model = (body.get("model") or "").strip() or None
+                provider = (body.get("provider") or "").strip() or None
+                # Clearing the model clears its provider too: a pinned provider
+                # with no model would route the global model to the wrong vendor.
+                updates["model"] = model
+                updates["provider"] = provider if model else None
+
+            if not updates:
+                return json.dumps({
+                    "status": "error",
+                    "message": "permission, model or provider required",
+                })
+
+            session_prefs.set_prefs(session_id, agent_id, **updates)
+
+            # Retarget the live agent so the change lands on the next message
+            # without waiting for a fresh get_agent.
+            try:
+                from bridge.bridge import Bridge
+                ab = Bridge().get_agent_bridge()
+                agent = ab.get_cached_agent(session_id, agent_id)
+                if agent is not None:
+                    ab.apply_session_prefs(agent, session_id, agent_id)
+            except Exception as e:
+                logger.debug(f"[WebChannel] session prefs apply-to-agent skipped: {e}")
+
+            logger.info(
+                f"[WebChannel] Session settings updated: sid={session_id}, {updates}"
+            )
+            state = _session_settings_state(session_id, agent_id)
+            return json.dumps({"status": "success", **state}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Session settings update error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
 
 
@@ -6297,7 +7203,8 @@ class HistoryHandler:
             for msg in result.get("messages") or []:
                 if msg.get("role") != "assistant":
                     continue
-                artifacts = _artifacts_from_steps(msg.get("steps"))
+                _add_subagent_displays(msg.get("steps"))
+                artifacts = _artifacts_from_steps(msg.get("steps"), session_id)
                 if artifacts:
                     msg["artifacts"] = artifacts
             active_req = WebChannel().active_session_requests.get(session_id)
@@ -6396,6 +7303,35 @@ class LogsHandler:
         return generate()
 
 
+class LogsDownloadHandler:
+    """Serve the full run.log as a file download for offline troubleshooting.
+
+    The /api/logs stream only replays the last 200 lines; this returns the whole
+    file so users can attach it to a bug report.
+    """
+
+    def GET(self):
+        _require_auth()
+        log_path = os.path.join(get_data_root(), "run.log")
+        if not os.path.isfile(log_path):
+            raise web.notfound()
+
+        try:
+            with open(log_path, 'rb') as f:
+                data = f.read()
+        except Exception as e:
+            logger.error(f"[WebChannel] Log download error: {e}")
+            raise web.internalerror()
+
+        # Timestamped name so multiple downloads don't overwrite each other.
+        fname = f"cowagent-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        web.header('Content-Type', 'text/plain; charset=utf-8')
+        web.header('Content-Disposition', f'attachment; filename="{fname}"')
+        web.header('Content-Length', str(len(data)))
+        web.header('Cache-Control', 'no-store')
+        return data
+
+
 class AssetsHandler:
     def GET(self, file_path):  # 修改默认参数
         try:
@@ -6445,9 +7381,29 @@ class AssetsHandler:
             raise web.notfound()
 
 
-def _workspace_service():
+def _workspace_service(session_id: str = None, agent_id: str = None):
     from agent.workspace.service import WorkspaceService
-    return WorkspaceService(_get_workspace_root())
+    return WorkspaceService(_get_workspace_root(session_id, agent_id))
+
+
+# System assets (memory / knowledge / persona files) always live in state_root,
+# never in a project dir. When a session has a project open, a relative ref to
+# one of these resolves against the project and misses; we fall back to the
+# system directory so preview/@ still work.
+_SYSTEM_ASSET_PREFIXES = ("memory/", "memory\\", "knowledge/", "knowledge\\")
+_SYSTEM_ASSET_FILES = ("MEMORY.md", "AGENT.md", "USER.md", "RULE.md")
+
+
+def _is_system_asset_rel(rel_path: str) -> bool:
+    """True if a relative path points at a state_root-anchored system asset."""
+    p = (rel_path or "").lstrip("./")
+    return p in _SYSTEM_ASSET_FILES or p.startswith(_SYSTEM_ASSET_PREFIXES)
+
+
+def _system_workspace_service():
+    from agent.workspace.service import WorkspaceService
+    from common.state_dir import state_root_str
+    return WorkspaceService(state_root_str())
 
 
 def _decorate_entry(svc, entry: dict) -> dict:
@@ -6466,8 +7422,8 @@ class WorkspaceTreeHandler:
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
-            params = web.input(path='', show_hidden='')
-            svc = _workspace_service()
+            params = web.input(path='', show_hidden='', session='', agent='')
+            svc = _workspace_service(params.session or None, params.agent or None)
             result = svc.list_dir(params.path, show_hidden=params.show_hidden == '1')
             result["entries"] = [_decorate_entry(svc, e) for e in result["entries"]]
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
@@ -6483,12 +7439,12 @@ class WorkspaceSearchHandler:
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
-            params = web.input(q='', limit='30')
+            params = web.input(q='', limit='30', session='', agent='')
             try:
                 limit = max(1, min(100, int(params.limit)))
             except (TypeError, ValueError):
                 limit = 30
-            svc = _workspace_service()
+            svc = _workspace_service(params.session or None, params.agent or None)
             result = svc.search(params.q, limit=limit)
             result["results"] = [_decorate_entry(svc, e) for e in result["results"]]
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
@@ -6510,12 +7466,12 @@ class WorkspaceResolveHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             from agent.protocol.artifact import classify_kind, is_previewable
-            params = web.input(path='')
+            params = web.input(path='', session='', agent='')
             raw_path = (params.path or '').strip()
             if not raw_path:
                 return json.dumps({"status": "error", "message": "path is required"})
 
-            svc = _workspace_service()
+            svc = _workspace_service(params.session or None, params.agent or None)
             if os.path.isabs(os.path.expanduser(raw_path)):
                 abs_path = os.path.realpath(os.path.expanduser(raw_path))
                 if not _is_path_allowed(abs_path):
@@ -6535,7 +7491,15 @@ class WorkspaceResolveHandler:
                     "mtime": os.path.getmtime(abs_path),
                 }
             else:
-                entry = svc.stat_file(raw_path)
+                try:
+                    entry = svc.stat_file(raw_path)
+                except FileNotFoundError:
+                    # Memory/knowledge live in state_root, not the project. Retry
+                    # there so their cards still preview when a project is open.
+                    if _is_system_asset_rel(raw_path):
+                        entry = _system_workspace_service().stat_file(raw_path)
+                    else:
+                        raise
 
             # A directory has nothing to serve; the client browses into it.
             if not entry["is_dir"]:
@@ -6554,9 +7518,255 @@ class WorkspaceMetaHandler:
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
-            return json.dumps({"status": "success", **_workspace_service().meta()}, ensure_ascii=False)
+            params = web.input(session='', agent='')
+            svc = _workspace_service(params.session or None, params.agent or None)
+            return json.dumps({"status": "success", **svc.meta()}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Workspace meta error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+def _project_state(session_id: str, agent_id: str = None) -> dict:
+    """Assemble the project picker state: current selection + recents + root."""
+    from agent.workspace import project_store
+    from common.state_dir import state_root_str
+
+    current = project_store.get_project_dir(session_id, agent_id) if session_id else None
+    return {
+        "current": (
+            {"path": current, "name": os.path.basename(current) or current}
+            if current else None
+        ),
+        "default_workspace": state_root_str(),
+        "projects_root": project_store.projects_root(),
+        "recents": project_store.list_recents(),
+    }
+
+
+class ProjectsHandler:
+    """List the project picker state for a session (current + recents)."""
+
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            params = web.input(session='', agent='')
+            state = _project_state(params.session or None, params.agent or None)
+            return json.dumps({"status": "success", **state}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Projects list error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class ProjectSelectHandler:
+    """Bind a session to a project directory, or clear it (project_dir=null)."""
+
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from agent.workspace import project_store
+            body = json.loads(web.data() or b"{}")
+            session_id = (body.get("session") or body.get("session_id") or "").strip()
+            agent_id = body.get("agent") or body.get("agent_id")
+            if not session_id:
+                return json.dumps({"status": "error", "message": "session is required"})
+            project_dir = body.get("project_dir")
+            applied = project_store.set_project_dir(
+                session_id, project_dir or None, agent_id
+            )
+            # Retarget an already-instantiated session agent immediately, so the
+            # change takes effect on the next message without a fresh get_agent.
+            try:
+                from bridge.bridge import Bridge
+                ab = Bridge().get_agent_bridge()
+                agent = ab.get_cached_agent(session_id, agent_id)
+                if agent is not None and getattr(agent, "apply_project_dir", None):
+                    agent.apply_project_dir(applied)
+            except Exception as e:
+                logger.debug(f"[WebChannel] project apply-to-agent skipped: {e}")
+            state = _project_state(session_id, agent_id)
+            return json.dumps({"status": "success", **state}, ensure_ascii=False)
+        except (ValueError, FileNotFoundError) as e:
+            return json.dumps({"status": "error", "message": str(e)})
+        except Exception as e:
+            logger.error(f"[WebChannel] Project select error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class ProjectCreateHandler:
+    """Create a new project folder under the projects root and select it."""
+
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from agent.workspace import project_store
+            body = json.loads(web.data() or b"{}")
+            session_id = (body.get("session") or body.get("session_id") or "").strip()
+            agent_id = body.get("agent") or body.get("agent_id")
+            name = (body.get("name") or "").strip()
+            if not name:
+                return json.dumps({"status": "error", "message": "name is required"})
+            path = project_store.create_project(name)
+            if session_id:
+                project_store.set_project_dir(session_id, path, agent_id)
+                try:
+                    from bridge.bridge import Bridge
+                    ab = Bridge().get_agent_bridge()
+                    agent = ab.get_cached_agent(session_id, agent_id)
+                    if agent is not None and getattr(agent, "apply_project_dir", None):
+                        agent.apply_project_dir(path)
+                except Exception as e:
+                    logger.debug(f"[WebChannel] project apply-to-agent skipped: {e}")
+            state = _project_state(session_id or None, agent_id)
+            return json.dumps({"status": "success", "path": path, **state}, ensure_ascii=False)
+        except (ValueError, FileExistsError) as e:
+            return json.dumps({"status": "error", "message": str(e)})
+        except Exception as e:
+            logger.error(f"[WebChannel] Project create error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class ProjectOrderHandler:
+    """Persist the user's chosen sidebar order of project spaces."""
+
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from agent.workspace import project_store
+            body = json.loads(web.data() or b"{}")
+            order = body.get("order")
+            if not isinstance(order, list):
+                return json.dumps({"status": "error", "message": "order must be a list"})
+            saved = project_store.set_order(order)
+            return json.dumps({"status": "success", "order": saved}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Project order error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class ProjectManageHandler:
+    """Rename (PUT) or delete (DELETE) a project record.
+
+    Neither touches the folder on disk: a rename only sets a display name, and a
+    delete only forgets the CowAgent record and unbinds any sessions (they revert
+    to the default workspace). The files stay exactly where they are.
+    """
+
+    def PUT(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from agent.workspace import project_store
+            body = json.loads(web.data() or b"{}")
+            path = (body.get("path") or "").strip()
+            if not path:
+                return json.dumps({"status": "error", "message": "path is required"})
+            name = project_store.rename_project(path, body.get("name") or "")
+            return json.dumps({"status": "success", "name": name}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Project rename error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def DELETE(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from agent.workspace import project_store
+            body = json.loads(web.data() or b"{}")
+            path = (body.get("path") or "").strip()
+            agent_id = body.get("agent") or body.get("agent_id")
+            if not path:
+                return json.dumps({"status": "error", "message": "path is required"})
+            unbound = project_store.delete_project(path, agent_id)
+            return json.dumps({"status": "success", "unbound": unbound}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Project delete error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+# Virtual path (Windows only) that expands to the list of logical drives, so
+# the picker can navigate above a drive root and switch between drives.
+_DRIVES_SENTINEL = "__DRIVES__"
+
+
+class ProjectBrowseHandler:
+    """List sub-directories of a path, for the "open project" folder picker.
+
+    Directories only (files are irrelevant when choosing a project root). The
+    starting point defaults to the projects root; the parent is included so the
+    user can navigate upward.
+    """
+
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from common.utils import expand_path
+            params = web.input(path='')
+            raw = (params.path or '').strip()
+
+            # On Windows, "__DRIVES__" is a virtual path listing all logical
+            # drives, so the user can hop across drives from a drive root.
+            if sys.platform == 'win32' and raw == _DRIVES_SENTINEL:
+                import ctypes
+
+                drives = []
+                buf = ctypes.create_unicode_buffer(1024)
+                length = ctypes.windll.kernel32.GetLogicalDriveStringsW(1024, buf)
+                for drive in buf[:length].split('\x00'):
+                    if drive:
+                        drives.append({"name": drive.rstrip("\\"), "path": drive})
+                return json.dumps({
+                    "status": "success",
+                    "path": _DRIVES_SENTINEL,
+                    "parent": None,
+                    "dirs": drives,
+                }, ensure_ascii=False)
+
+            # Default entry point is the user's home (~), a familiar anchor for
+            # picking a project directory.
+            base = os.path.realpath(expand_path(raw)) if raw else os.path.realpath(os.path.expanduser("~"))
+            if not os.path.isdir(base):
+                base = os.path.realpath(os.path.expanduser("~"))
+
+            dirs = []
+            try:
+                with os.scandir(base) as it:
+                    for entry in it:
+                        if entry.name.startswith("."):
+                            continue
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                dirs.append({
+                                    "name": entry.name,
+                                    "path": os.path.join(base, entry.name),
+                                })
+                        except OSError:
+                            continue
+            except PermissionError:
+                return json.dumps({"status": "error", "message": "permission denied"})
+
+            dirs.sort(key=lambda d: d["name"].lower())
+            parent = os.path.dirname(base)
+
+            # On Windows, at a drive root (e.g. C:\) dirname returns the same
+            # path, so point parent at the drives list instead of dropping it.
+            if sys.platform == 'win32':
+                _, tail = os.path.splitdrive(base)
+                if tail in (os.sep, os.altsep, ''):
+                    parent = _DRIVES_SENTINEL
+
+            return json.dumps({
+                "status": "success",
+                "path": base,
+                "parent": parent if parent != base else None,
+                "dirs": dirs,
+            }, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Project browse error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
 
 
@@ -6582,6 +7792,7 @@ class KnowledgeReadHandler:
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
+            from pathlib import Path
             from agent.knowledge.service import KnowledgeService
             params = web.input(path='')
             svc = KnowledgeService(_get_workspace_root())
@@ -6590,6 +7801,11 @@ class KnowledgeReadHandler:
                                         role=user["role"] if user else "admin"):
                 return json.dumps({"status": "error", "message": "Access denied"}, ensure_ascii=False)
             result = svc.read_file(params.path)
+            # Absolute directory of the doc (posix separators), so clients can
+            # resolve image srcs that are relative to the doc into /api/file
+            # URLs. Additive field; read_file itself stays untouched.
+            rel = str(result["path"]).replace("\\", "/")
+            result["dir"] = Path(svc.knowledge_dir, *rel.split("/")).parent.as_posix()
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except (ValueError, FileNotFoundError) as e:
             return json.dumps({"status": "error", "message": str(e)})

@@ -39,6 +39,11 @@
   "agent_max_context_tokens": 64000,
   "agent_max_context_turns": 30,
   "agent_max_steps": 30,
+  "agent_permission_mode": "full-access",
+  "subagent": {
+    "enabled": true,
+    "max_concurrent": 3
+  },
   "enable_thinking": false,
   "reasoning_effort": "high",
   "knowledge": true,

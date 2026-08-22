@@ -75,6 +75,18 @@ class ChatService:
         # State shared between the event callback and this method
         state = _StreamState()
 
+        def flush_file_links():
+            """Emit any buffered file links as content, then drop them."""
+            if not state.pending_file_links:
+                return
+            links = state.pending_file_links
+            state.pending_file_links = []
+            send_chunk_fn({
+                "chunk_type": "content",
+                "delta": "\n\n" + "\n\n".join(links) + "\n\n",
+                "segment_id": state.segment_id,
+            })
+
         def on_event(event: dict):
             """Translate agent events into CHAT protocol chunks."""
             event_type = event.get("type")
@@ -116,11 +128,7 @@ class ChatService:
                         link = f"![{fname}]({url})"
                     else:
                         link = f"[{fname}]({url})"
-                    send_chunk_fn({
-                        "chunk_type": "content",
-                        "delta": "\n\n" + link + "\n\n",
-                        "segment_id": state.segment_id,
-                    })
+                    state.pending_file_links.append(link)
                     # Remove url so the model won't repeat it in its reply
                     data.pop("url", None)
 
@@ -135,6 +143,9 @@ class ChatService:
                     "chunk_type": "tool_start",
                     "tool": tool_name,
                     "arguments": arguments,
+                    # Carry the call id so later subagent_step chunks can attach
+                    # their inner steps to the right card via card_id.
+                    "tool_id": tool_call_id,
                 })
 
             elif event_type == "tool_execution_end":
@@ -161,10 +172,41 @@ class ChatService:
                     "result": result,
                     "status": status,
                     "elapsed": elapsed_str,
+                    # Same id the matching tool_start carried, so the frontend can
+                    # carry sub agent substeps over from the loading card to this
+                    # resolved one (see collectLoadingSubsteps / carried.get).
+                    "id": tool_call_id,
                 }
 
                 if state.pending_tool_results is not None:
                     state.pending_tool_results.append(tool_info)
+
+            elif event_type == "subagent_step":
+                # A single step a sub agent ran inside a still-in-flight
+                # `subagent` tool call. Forwarded immediately (NOT batched into
+                # pending_tool_results) so the console can follow the sub
+                # agent's progress live instead of waiting minutes for the whole
+                # spawn to finish and flush at turn_end.
+                send_chunk_fn({
+                    "chunk_type": "subagent_step",
+                    "card_id": data.get("card_id"),
+                    "step_id": data.get("step_id"),
+                    "phase": data.get("phase"),
+                    # Frontend expects `tool`; the event carries `tool_name`.
+                    "tool": data.get("tool_name") or data.get("tool") or "tool",
+                    "arguments": data.get("arguments") or {},
+                    "status": data.get("status"),
+                    "execution_time": data.get("execution_time"),
+                    "error": data.get("error"),
+                })
+
+            elif event_type == "artifact":
+                # A file a (sub) agent wrote. Forward live so it can be previewed
+                # as soon as it exists rather than only after the turn settles.
+                send_chunk_fn({
+                    "chunk_type": "artifact",
+                    "artifact": data,
+                })
 
             elif event_type == "turn_end":
                 has_tool_calls = data.get("has_tool_calls", False)
@@ -177,6 +219,9 @@ class ChatService:
                     state.pending_tool_results = None
                     # Next content belongs to a new segment
                     state.segment_id += 1
+                # Now that the tool results are out, the links belong to the
+                # content that follows them.
+                flush_file_links()
 
         # Run the agent with our event callback ---------------------------
         logger.info(
@@ -257,6 +302,10 @@ class ChatService:
                     pass
             if cancel_key and steer_inbox is not None:
                 steer_registry.unregister(cancel_key, steer_inbox)
+
+        # A run that ends without a closing turn_end (e.g. the last turn had no
+        # tool calls to flush) must still deliver whatever the send tool uploaded.
+        flush_file_links()
 
         # Sync executor messages back to agent (thread-safe).
         # The executor may have trimmed context, making its list shorter than
@@ -428,3 +477,8 @@ class _StreamState:
         # Maps tool_call_id -> arguments captured from tool_execution_start,
         # so that tool_execution_end can attach the correct input args.
         self.pending_tool_arguments: dict = {}
+        # Markdown links for files the send tool uploaded, held until the turn's
+        # tool results have been flushed. Emitting one the moment the tool reports
+        # it would place content between a tool's start and its result, which no
+        # other event does and which leaves clients unable to pair the two.
+        self.pending_file_links: list = []

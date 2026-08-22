@@ -82,6 +82,7 @@ const I18N = {
         models_embedding_saved_msg: '请在聊天框输入 /memory rebuild-index 重建索引。',
         models_embedding_saved_ok: '去执行',
         models_pick_provider: '待选择',
+        models_manage_api_key: '管理 API Key',
         models_clear_confirm_title: '清除厂商凭据',
         models_clear_confirm_msg: '确认清除该厂商的 API Key 与 Base URL 吗？相关能力将不再可用。',
         cancel: '取消',
@@ -132,13 +133,23 @@ const I18N = {
         config_title: '配置管理', config_desc: '管理模型和 Agent 配置',
         config_model: '模型配置', config_agent: 'Agent 配置',
         config_language: '语言', config_language_hint: '界面展示、命令文案、系统提示词等使用的语言（与右上角切换同步）',
+        config_system: '系统',
+        config_task_notify: '任务通知', config_task_notify_hint: '窗口在后台且任务完成或失败时发送浏览器通知，点击可跳转会话',
+        config_task_notify_sound: '通知声音', config_task_notify_sound_hint: '通知开启时可单独关闭提示音',
+        config_task_notify_blocked: '系统通知已被浏览器屏蔽，请点击地址栏左侧图标 → 通知 → 允许后刷新页面',
+        notify_task_done: '任务完成',
+        notify_task_error: '任务失败',
         config_model_advanced: '高级配置',
+        settings_tab_basic: '基础配置',
+        settings_tab_models: '模型配置',
         config_channel: '通道配置',
         config_agent_enabled: 'Agent 模式',
         config_max_tokens: '最大上下文 Token', config_max_tokens_hint: '对话中 Agent 能输入的最大 Token 长度，超过后会智能压缩处理',
         config_max_turns: '最大记忆轮次', config_max_turns_hint: '一问一答为一轮，超过后会智能压缩处理',
         config_max_steps: '最大执行步数', config_max_steps_hint: '单次对话中 Agent 最多调用工具的次数',
         config_enable_thinking: '深度思考', config_enable_thinking_hint: '是否启用深度思考模式',
+        config_reasoning_effort: '思考强度', config_reasoning_effort_hint: '按当前模型厂商支持的原生枚举发送',
+        config_subagent: '子 Agent', config_subagent_hint: '把可独立完成的任务交给子 Agent，多个任务并行执行，只把结论带回主对话',
         config_self_evolution: '自主进化', config_self_evolution_hint: '会话空闲后自动复盘，沉淀记忆、优化技能、处理未完成事项',
         evolution_badge: '自主学习',
         config_channel_type: '通道类型',
@@ -150,6 +161,9 @@ const I18N = {
         config_custom_tip: '接口需遵循 OpenAI API 协议',
         config_security: '安全设置', config_password: '访问密码',
         config_password_hint: '留空则不启用密码保护',
+        config_permission: '默认权限',
+        config_permission_hint: '新会话的默认权限范围，决定 Agent 能修改哪些文件、能执行哪些命令',
+        config_permission_desc: '新会话默认使用该权限；单个会话可在输入框下方单独调整',
         config_password_changed: '密码已更新',
         config_password_cleared: '密码已清除',
         config_password_security_warning: '⚠️ 警告：目前密码为空且对外连接埠开放，建议重启服务，或检查是否调整监听位址绑定。',
@@ -232,6 +246,15 @@ const I18N = {
         new_chat: '新对话',
         session_history: '历史会话',
         ws_toggle: '工作空间', ws_tab_preview: '预览', ws_tab_files: '文件',
+        ws_default_workspace: '默认空间', ws_sel_title: '选择工作空间',
+        ws_sel_system_space: '系统空间', ws_sel_project_space: '项目空间',
+        ws_sel_default_hint: '使用默认工作空间（~/cow）', ws_sel_recents: '最近使用',
+        ws_sel_open: '打开项目…', ws_sel_new: '新建项目', ws_sel_new_placeholder: '项目名称',
+        ws_sel_create: '创建', ws_sel_up: '上一级',
+        ws_sel_new_subtitle: '将在 {root} 下创建新项目目录', ws_sel_new_hint: '仅填写项目名称，不含路径分隔符',
+        ws_sel_name_required: '请输入项目名称', ws_sel_name_no_slash: '项目名称不能包含 / 或 \\',
+        ws_sel_open_here: '打开此目录', ws_sel_dblclick_hint: '双击进入子目录，单击选中',
+        ws_sel_no_subdirs: '此目录下没有子文件夹', ws_sel_drives: '此电脑',
         ws_open_external: '在新标签页打开', ws_download: '下载', ws_copy_path: '复制路径',
         ws_close: '关闭', ws_refresh: '刷新', ws_preview: '预览',
         ws_search_placeholder: '搜索文件',
@@ -242,6 +265,31 @@ const I18N = {
         ws_empty_dir: '空目录', ws_no_results: '没有匹配的文件',
         ws_truncated: '文件过多，仅显示部分',
         today: '今天', yesterday: '昨天', earlier: '更早',
+        session_pinned_group: '置顶',
+        pin_session: '置顶',
+        unpin_session: '取消置顶',
+        project_rename: '重命名项目',
+        project_delete: '删除项目',
+        project_new_chat: '新建会话',
+        project_rename_title: '重命名项目',
+        project_delete_title: '删除项目',
+        project_delete_confirm: '确认删除项目「{name}」？仅移除项目记录，磁盘上的文件不会被删除，其下会话将回到默认空间。',
+        perm_menu_title: '本次会话权限',
+        perm_read_only: '只读',
+        perm_workspace_write: '工作区可写',
+        perm_full_access: '全部可访问',
+        perm_read_only_desc: '只能查看和分析，不修改任何文件',
+        perm_workspace_write_desc: '在当前工作空间内自由读写，空间之外的写入会被拒绝',
+        perm_full_access_desc: '不加限制，可修改任意位置（当前默认）',
+        perm_follow_global: '跟随全局设置',
+        perm_tip: '权限：{name}',
+        perm_denied_hint: '当前权限为「{name}」，此操作被拒绝。',
+        perm_denied_action: '调整权限',
+        model_menu_title: '本次会话模型',
+        model_follow_global: '跟随全局设置',
+        model_tip: '模型：{name}',
+        model_unset: '未配置',
+        session_settings_failed: '设置失败，请重试',
         delete_session_confirm: '确认删除该会话？所有消息将被清除。',
         delete_session_title: '删除会话',
         rename_session: '重命名',
@@ -254,6 +302,8 @@ const I18N = {
         tip_new_chat: '新建对话',
         tip_clear_context: '清除上下文',
         tip_attach: '添加附件',
+        tip_cancel: '中止',
+        tip_cancelled: '已中止',
         attach_menu_file: '上传文件',
         mic_idle_title: '点击录音 / 再按一次结束',
         mic_recording_title: '录音中，再次点击结束',
@@ -448,6 +498,7 @@ const I18N = {
         models_embedding_saved_msg: '請在聊天框輸入 /memory rebuild-index 重建索引。',
         models_embedding_saved_ok: '去執行',
         models_pick_provider: '待選擇',
+        models_manage_api_key: '管理 API Key',
         models_clear_confirm_title: '清除廠商憑據',
         models_clear_confirm_msg: '確認清除該廠商的 API Key 與 Base URL 嗎？相關能力將不再可用。',
         cancel: '取消',
@@ -498,13 +549,23 @@ const I18N = {
         config_title: '設定管理', config_desc: '管理模型和 Agent 設定',
         config_model: '模型設定', config_agent: 'Agent 設定',
         config_language: '語言', config_language_hint: '介面展示、命令文案、系統提示詞等使用的語言（與右上角切換同步）',
+        config_system: '系統',
+        config_task_notify: '任務通知', config_task_notify_hint: '視窗在背景且任務完成或失敗時發送瀏覽器通知，點擊可跳轉會話',
+        config_task_notify_sound: '通知聲音', config_task_notify_sound_hint: '通知開啟時可單獨關閉提示音',
+        config_task_notify_blocked: '系統通知已被瀏覽器封鎖，請點擊網址列左側圖示 → 通知 → 允許後重新整理頁面',
+        notify_task_done: '任務完成',
+        notify_task_error: '任務失敗',
         config_model_advanced: '高階設定',
+        settings_tab_basic: '基礎設定',
+        settings_tab_models: '模型設定',
         config_channel: '管道設定',
         config_agent_enabled: 'Agent 模式',
         config_max_tokens: '最大上下文 Token', config_max_tokens_hint: '對話中 Agent 能輸入的最大 Token 長度，超過後會智慧壓縮處理',
         config_max_turns: '最大記憶輪次', config_max_turns_hint: '一問一答為一輪，超過後會智慧壓縮處理',
         config_max_steps: '最大執行步數', config_max_steps_hint: '單次對話中 Agent 最多呼叫工具的次數',
         config_enable_thinking: '深度思考', config_enable_thinking_hint: '是否啟用深度思考模式',
+        config_reasoning_effort: '思考強度', config_reasoning_effort_hint: '按目前模型廠商支援的原生枚舉傳送',
+        config_subagent: '子 Agent', config_subagent_hint: '把可獨立完成的任務交給子 Agent，多個任務並行執行，只把結論帶回主對話',
         config_self_evolution: '自主進化', config_self_evolution_hint: '會話空閒後自動覆盤，沉澱記憶、最佳化技能、處理未完成事項',
         evolution_badge: '自主學習',
         config_channel_type: '管道型別',
@@ -516,6 +577,9 @@ const I18N = {
         config_custom_tip: '介面需遵循 OpenAI API 協議',
         config_security: '安全設定', config_password: '訪問密碼',
         config_password_hint: '留空則不啟用密碼保護',
+        config_permission: '預設權限',
+        config_permission_hint: '新會話的預設權限範圍，決定 Agent 能修改哪些檔案、能執行哪些命令',
+        config_permission_desc: '新會話預設使用該權限；單個會話可在輸入框下方單獨調整',
         config_password_changed: '密碼已更新',
         config_password_cleared: '密碼已清除',
         config_password_security_warning: '⚠️ 警告：目前密碼為空且對外連接埠開放，建議重啟服務，或檢查是否調整監聽位址綁定。',
@@ -598,6 +662,15 @@ const I18N = {
         new_chat: '新對話',
         session_history: '歷史會話',
         ws_toggle: '工作空間', ws_tab_preview: '預覽', ws_tab_files: '檔案',
+        ws_default_workspace: '預設空間', ws_sel_title: '選擇工作空間',
+        ws_sel_system_space: '系統空間', ws_sel_project_space: '專案空間',
+        ws_sel_default_hint: '使用預設工作空間（~/cow）', ws_sel_recents: '最近使用',
+        ws_sel_open: '開啟專案…', ws_sel_new: '新建專案', ws_sel_new_placeholder: '專案名稱',
+        ws_sel_create: '建立', ws_sel_up: '上一層',
+        ws_sel_new_subtitle: '將在 {root} 下建立新專案目錄', ws_sel_new_hint: '僅填寫專案名稱，不含路徑分隔符',
+        ws_sel_name_required: '請輸入專案名稱', ws_sel_name_no_slash: '專案名稱不能包含 / 或 \\',
+        ws_sel_open_here: '開啟此目錄', ws_sel_dblclick_hint: '雙擊進入子目錄，單擊選中',
+        ws_sel_no_subdirs: '此目錄下沒有子資料夾', ws_sel_drives: '本機',
         ws_open_external: '在新分頁開啟', ws_download: '下載', ws_copy_path: '複製路徑',
         ws_close: '關閉', ws_refresh: '重新整理', ws_preview: '預覽',
         ws_search_placeholder: '搜尋檔案',
@@ -608,6 +681,31 @@ const I18N = {
         ws_empty_dir: '空目錄', ws_no_results: '沒有符合的檔案',
         ws_truncated: '檔案過多，僅顯示部分',
         today: '今天', yesterday: '昨天', earlier: '更早',
+        session_pinned_group: '置頂',
+        pin_session: '置頂',
+        unpin_session: '取消置頂',
+        project_rename: '重新命名專案',
+        project_delete: '刪除專案',
+        project_new_chat: '新建會話',
+        project_rename_title: '重新命名專案',
+        project_delete_title: '刪除專案',
+        project_delete_confirm: '確認刪除專案「{name}」？僅移除專案記錄，磁碟上的檔案不會被刪除，其下會話將回到預設空間。',
+        perm_menu_title: '本次會話權限',
+        perm_read_only: '唯讀',
+        perm_workspace_write: '工作區可寫',
+        perm_full_access: '全部可存取',
+        perm_read_only_desc: '只能查看和分析，不修改任何檔案',
+        perm_workspace_write_desc: '在目前工作空間內自由讀寫，空間之外的寫入會被拒絕',
+        perm_full_access_desc: '不加限制，可修改任意位置（目前預設）',
+        perm_follow_global: '跟隨全域設定',
+        perm_tip: '權限：{name}',
+        perm_denied_hint: '目前權限為「{name}」，此操作被拒絕。',
+        perm_denied_action: '調整權限',
+        model_menu_title: '本次會話模型',
+        model_follow_global: '跟隨全域設定',
+        model_tip: '模型：{name}',
+        model_unset: '未設定',
+        session_settings_failed: '設定失敗，請重試',
         delete_session_confirm: '確認刪除該會話？所有訊息將被清除。',
         delete_session_title: '刪除會話',
         rename_session: '重新命名',
@@ -620,6 +718,8 @@ const I18N = {
         tip_new_chat: '新建對話',
         tip_clear_context: '清除上下文',
         tip_attach: '新增附件',
+        tip_cancel: '中止',
+        tip_cancelled: '已中止',
         attach_menu_file: '上傳檔案',
         mic_idle_title: '點選錄音 / 再按一次結束',
         mic_recording_title: '錄音中，再次點選結束',
@@ -809,6 +909,7 @@ const I18N = {
         models_embedding_saved_msg: 'Send /memory rebuild-index in the chat to rebuild the index.',
         models_embedding_saved_ok: 'Go',
         models_pick_provider: 'Pick a provider',
+        models_manage_api_key: 'Manage API keys',
         models_clear_confirm_title: 'Clear provider credentials',
         models_clear_confirm_msg: 'Remove this provider\'s API Key and Base URL? Capabilities relying on it will stop working.',
         cancel: 'Cancel',
@@ -859,13 +960,23 @@ const I18N = {
         config_title: 'Configuration', config_desc: 'Manage model and agent settings',
         config_model: 'Model Configuration', config_agent: 'Agent Configuration',
         config_language: 'Language', config_language_hint: 'Language for the UI, command text, system prompts and more (synced with the top-right switch)',
+        config_system: 'System',
+        config_task_notify: 'Task Notifications', config_task_notify_hint: 'Show a browser notification when a task finishes or fails while the window is in the background; click to open the session',
+        config_task_notify_sound: 'Notification Sound', config_task_notify_sound_hint: 'Turn off the alert sound while keeping notifications',
+        config_task_notify_blocked: 'Notifications are blocked by the browser. Click the icon on the left of the address bar → Notifications → Allow, then reload.',
+        notify_task_done: 'Task finished',
+        notify_task_error: 'Task failed',
         config_model_advanced: 'Advanced',
+        settings_tab_basic: 'Basic',
+        settings_tab_models: 'Models',
         config_channel: 'Channel Configuration',
         config_agent_enabled: 'Agent Mode',
         config_max_tokens: 'Max Context Tokens', config_max_tokens_hint: 'Max tokens the Agent can input per conversation, auto-compressed when exceeded',
         config_max_turns: 'Max Memory Turns', config_max_turns_hint: 'One Q&A pair = one turn, auto-compressed when exceeded',
         config_max_steps: 'Max Steps', config_max_steps_hint: 'Max tool calls the Agent can make in a single conversation',
         config_enable_thinking: 'Deep Thinking', config_enable_thinking_hint: 'Enable deep thinking mode',
+        config_reasoning_effort: 'Reasoning Effort', config_reasoning_effort_hint: 'Sent as the active provider\'s native enum value',
+        config_subagent: 'Sub Agents', config_subagent_hint: 'Hand self-contained tasks to sub agents, which run in parallel and report back only their conclusions',
         config_self_evolution: 'Self-Evolution', config_self_evolution_hint: 'Auto-review idle conversations to consolidate memory, improve skills, and follow up on unfinished tasks',
         evolution_badge: 'Self-learned',
         config_channel_type: 'Channel Type',
@@ -877,6 +988,9 @@ const I18N = {
         config_custom_tip: 'API must follow OpenAI protocol.',
         config_security: 'Security', config_password: 'Password',
         config_password_hint: 'Leave empty to disable password protection',
+        config_permission: 'Default permissions',
+        config_permission_hint: 'The default scope for new chats: which files the agent may change and which commands it may run',
+        config_permission_desc: 'New chats start with this; each chat can be changed under the input box',
         config_password_changed: 'Password updated',
         config_password_cleared: 'Password cleared',
         config_password_security_warning: '⚠️ Warning: Password is now empty and the port is exposed. Consider restarting the service or adjusting the listening address binding.',
@@ -959,6 +1073,15 @@ const I18N = {
         new_chat: 'New Chat',
         session_history: 'History',
         ws_toggle: 'Workspace', ws_tab_preview: 'Preview', ws_tab_files: 'Files',
+        ws_default_workspace: 'Default', ws_sel_title: 'Select workspace',
+        ws_sel_system_space: 'System space', ws_sel_project_space: 'Project space',
+        ws_sel_default_hint: 'Use the default workspace (~/cow)', ws_sel_recents: 'Recent',
+        ws_sel_open: 'Open project…', ws_sel_new: 'New project', ws_sel_new_placeholder: 'Project name',
+        ws_sel_create: 'Create', ws_sel_up: 'Up',
+        ws_sel_new_subtitle: 'Creates a new project directory under {root}', ws_sel_new_hint: 'Project name only, no path separators',
+        ws_sel_name_required: 'Please enter a project name', ws_sel_name_no_slash: 'Project name must not contain / or \\',
+        ws_sel_open_here: 'Open this folder', ws_sel_dblclick_hint: 'Double-click to enter, single-click to select',
+        ws_sel_no_subdirs: 'No sub-folders here', ws_sel_drives: 'This PC',
         ws_open_external: 'Open in new tab', ws_download: 'Download', ws_copy_path: 'Copy path',
         ws_close: 'Close', ws_refresh: 'Refresh', ws_preview: 'Preview',
         ws_search_placeholder: 'Search files',
@@ -969,6 +1092,31 @@ const I18N = {
         ws_empty_dir: 'Empty directory', ws_no_results: 'No matching files',
         ws_truncated: 'Too many files, showing a subset',
         today: 'Today', yesterday: 'Yesterday', earlier: 'Earlier',
+        session_pinned_group: 'Pinned',
+        pin_session: 'Pin',
+        unpin_session: 'Unpin',
+        project_rename: 'Rename project',
+        project_delete: 'Delete project',
+        project_new_chat: 'New chat',
+        project_rename_title: 'Rename project',
+        project_delete_title: 'Delete project',
+        project_delete_confirm: 'Delete project “{name}”? Only the project record is removed — files on disk are kept, and its chats revert to the default workspace.',
+        perm_menu_title: 'Permissions for this chat',
+        perm_read_only: 'Read-only',
+        perm_workspace_write: 'Workspace write',
+        perm_full_access: 'Full access',
+        perm_read_only_desc: 'Read and analyse only; no file is modified',
+        perm_workspace_write_desc: 'Write freely inside this workspace; writes outside it are refused',
+        perm_full_access_desc: 'No limits, anywhere on the machine (current default)',
+        perm_follow_global: 'Follow global setting',
+        perm_tip: 'Permissions: {name}',
+        perm_denied_hint: 'This session is “{name}”, so the action was refused.',
+        perm_denied_action: 'Adjust permissions',
+        model_menu_title: 'Model for this chat',
+        model_follow_global: 'Follow global setting',
+        model_tip: 'Model: {name}',
+        model_unset: 'Not set',
+        session_settings_failed: 'Could not apply, please retry',
         delete_session_confirm: 'Delete this session? All messages will be removed.',
         delete_session_title: 'Delete Session',
         rename_session: 'Rename',
@@ -981,6 +1129,8 @@ const I18N = {
         tip_new_chat: 'New Chat',
         tip_clear_context: 'Clear Context',
         tip_attach: 'Add Attachment',
+        tip_cancel: 'Cancel',
+        tip_cancelled: 'Cancelled',
         attach_menu_file: 'Upload File',
         mic_idle_title: 'Click to record, click again to stop',
         mic_recording_title: 'Recording, click to stop',
@@ -1201,6 +1351,10 @@ function setLanguage(lang) {
     localStorage.setItem('cow_lang', currentLang);
     applyI18n();
     _applyInputTooltips();
+    // Session-panel labels (default space, today/yesterday, pinned group) are
+    // produced via t() at render time, so repaint the list to pick up the new
+    // language instead of leaving stale text like "默认空间" under English.
+    if (sessionPanelOpen && _sessionItems.length) _renderSessionList();
     // Keep the language switch button and config selector visually in sync.
     try { updateLangControls(); } catch (e) {}
     
@@ -1318,7 +1472,7 @@ document.addEventListener('click', (e) => {
 // Refresh JS-rendered views after a language switch. Each branch uses the
 // lightweight in-memory re-render path (no extra network round-trips).
 function rerenderDynamicViews() {
-    if (currentView === 'models' && typeof renderModelsView === 'function'
+    if (currentView === 'config' && _configModelsLoaded && typeof renderModelsView === 'function'
             && modelsState && (modelsState.providers || modelsState.capabilities)) {
         renderModelsView();
     }
@@ -1365,7 +1519,7 @@ function installCfgTipPortal() {
         }
         _cfgTipPortalEl.textContent = text;
         const rect = target.getBoundingClientRect();
-        // Render once to measure, then position above the target, centered.
+        // Render once to measure, then position relative to the target.
         _cfgTipPortalEl.style.left = '0px';
         _cfgTipPortalEl.style.top = '0px';
         _cfgTipPortalEl.classList.add('show');
@@ -1373,7 +1527,9 @@ function installCfgTipPortal() {
         let left = rect.left + rect.width / 2 - tipRect.width / 2;
         // Clamp horizontally to the viewport with an 8px gutter.
         left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
-        const top = rect.top - tipRect.height - 6;
+        // Default above the target; place below when data-tooltip-pos="bottom".
+        const below = target.getAttribute('data-tooltip-pos') === 'bottom';
+        const top = below ? rect.bottom + 6 : rect.top - tipRect.height - 6;
         _cfgTipPortalEl.style.left = left + 'px';
         _cfgTipPortalEl.style.top = top + 'px';
     };
@@ -1381,12 +1537,16 @@ function installCfgTipPortal() {
         if (_cfgTipPortalEl) _cfgTipPortalEl.classList.remove('show');
     };
 
+    // Matches config keys and any element opting into the floating tooltip via
+    // [data-tip-float] (used for dynamic tooltips like the workspace selector,
+    // whose data-tooltip is set at runtime rather than from a translation key).
+    const _tipSel = '[data-tip-key],[data-tip-float]';
     document.addEventListener('mouseover', (e) => {
-        const target = e.target.closest('[data-tip-key]');
+        const target = e.target.closest(_tipSel);
         if (target) showTip(target);
     });
     document.addEventListener('mouseout', (e) => {
-        const target = e.target.closest('[data-tip-key]');
+        const target = e.target.closest(_tipSel);
         if (target) hideTip();
     });
     // Hide on scroll/resize so the tooltip doesn't drift away from its anchor.
@@ -1419,6 +1579,169 @@ function toggleTheme() {
     localStorage.setItem('cow_theme', currentTheme);
     applyTheme();
 }
+
+// =====================================================================
+// Task completion notification (client-side preference)
+// =====================================================================
+const TASK_NOTIFY_KEY = 'cow_task_notify';
+const TASK_NOTIFY_SOUND_KEY = 'cow_task_notify_sound';
+let taskNotifyEnabled = localStorage.getItem(TASK_NOTIFY_KEY) !== '0';
+let taskNotifySound = localStorage.getItem(TASK_NOTIFY_SOUND_KEY) !== '0';
+let notifyAudioCtx = null;
+let unreadCount = 0;
+const baseDocTitle = document.title;
+
+// Unlock audio on the first user gesture; browsers block autoplay otherwise.
+document.addEventListener('pointerdown', function() {
+    if (window.AudioContext) notifyAudioCtx = notifyAudioCtx || new AudioContext();
+    if (notifyAudioCtx && notifyAudioCtx.state === 'suspended') {
+        notifyAudioCtx.resume().catch(function() {});
+    }
+}, { once: true });
+
+function playNotifyBeep() {
+    if (!taskNotifySound) return;
+    try {
+        if (!notifyAudioCtx) {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            notifyAudioCtx = new Ctx();
+        }
+        if (notifyAudioCtx.state === 'suspended') {
+            notifyAudioCtx.resume().catch(function() {});
+        }
+        // Two short sine tones (A5 → D6); no audio asset needed.
+        const t0 = notifyAudioCtx.currentTime;
+        [880, 1174.66].forEach(function(freq, i) {
+            const at = t0 + i * 0.09;
+            const osc = notifyAudioCtx.createOscillator();
+            const gain = notifyAudioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.001, at);
+            gain.gain.exponentialRampToValueAtTime(0.12, at + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.001, at + 0.09);
+            osc.connect(gain).connect(notifyAudioCtx.destination);
+            osc.start(at);
+            osc.stop(at + 0.1);
+        });
+    } catch (_) {
+        // Autoplay still blocked or AudioContext unavailable; stay silent.
+    }
+}
+
+function firstLineSnippet(text) {
+    return (text || '').split('\n')[0].trim().slice(0, 80);
+}
+
+function sessionTitleOf(sid) {
+    const el = document.querySelector(`.session-item[data-session-id="${sid}"] .session-title`);
+    return el ? el.textContent.trim() : '';
+}
+
+function popNotification(title, body, sid) {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    try {
+        const n = new Notification(title, { body: body || title });
+        n.onclick = function() {
+            window.focus();
+            if (sid && sid !== sessionId) switchSession(sid);
+            n.close();
+        };
+    } catch (_) {
+        // Notification API unavailable; beep + title badge still applied.
+    }
+}
+
+function showTaskNotification(title, body, sid) {
+    if (!taskNotifyEnabled) return;
+    // Only notify when the window is not focused. If the user is actively
+    // watching the tab, the reply is already on screen — a notification/beep
+    // would just be noise (especially for short tasks).
+    if (document.hasFocus()) return;
+    playNotifyBeep();
+    if (document.hidden) {
+        unreadCount += 1;
+        document.title = `(${unreadCount}) ${baseDocTitle}`;
+    }
+    if (typeof Notification === 'undefined') return;
+    // First time we actually need to notify (window is in the background):
+    // request permission now, then show this notification once granted. This
+    // is more contextual than prompting on page load.
+    if (Notification.permission === 'default') {
+        Notification.requestPermission()
+            .then(function(perm) {
+                if (perm === 'granted') popNotification(title, body, sid);
+                else refreshNotifyBlockedHint();
+            })
+            .catch(function() {});
+        return;
+    }
+    if (Notification.permission === 'denied') {
+        // Can't notify; surface the hint in settings so the user knows why.
+        refreshNotifyBlockedHint();
+        return;
+    }
+    popNotification(title, body, sid);
+}
+
+function notifyTaskFinished(sid, kind, text) {
+    const label = t(kind === 'error' ? 'notify_task_error' : 'notify_task_done');
+    const snippet = firstLineSnippet(text);
+    showTaskNotification(sessionTitleOf(sid) || label, snippet ? `${label}: ${snippet}` : label, sid);
+}
+
+document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+        unreadCount = 0;
+        document.title = baseDocTitle;
+    }
+});
+
+// Request OS notification permission when notifications are enabled and the
+// browser hasn't decided yet. Safe to call repeatedly.
+function ensureNotifyPermission() {
+    if (taskNotifyEnabled
+        && typeof Notification !== 'undefined'
+        && Notification.permission === 'default') {
+        Notification.requestPermission().catch(function() {});
+    }
+}
+
+// Show the "blocked by browser" hint only when notifications are enabled but
+// the browser permission is denied (nothing the app can do about it in code).
+function refreshNotifyBlockedHint() {
+    const el = document.getElementById('cfg-task-notify-blocked');
+    if (!el) return;
+    const blocked = taskNotifyEnabled
+        && typeof Notification !== 'undefined'
+        && Notification.permission === 'denied';
+    el.classList.toggle('hidden', !blocked);
+}
+
+function initTaskNotifyToggles() {
+    const notifyEl = document.getElementById('cfg-task-notify');
+    if (notifyEl) {
+        notifyEl.checked = taskNotifyEnabled;
+        notifyEl.addEventListener('change', function() {
+            taskNotifyEnabled = notifyEl.checked;
+            localStorage.setItem(TASK_NOTIFY_KEY, taskNotifyEnabled ? '1' : '0');
+            ensureNotifyPermission();
+            refreshNotifyBlockedHint();
+        });
+    }
+    const soundEl = document.getElementById('cfg-task-notify-sound');
+    if (soundEl) {
+        soundEl.checked = taskNotifySound;
+        soundEl.addEventListener('change', function() {
+            taskNotifySound = soundEl.checked;
+            localStorage.setItem(TASK_NOTIFY_SOUND_KEY, taskNotifySound ? '1' : '0');
+        });
+    }
+    refreshNotifyBlockedHint();
+}
+
+document.addEventListener('DOMContentLoaded', initTaskNotifyToggles);
 
 // =====================================================================
 // Sidebar & Navigation
@@ -1659,12 +1982,17 @@ const md = createMd();
 const VIDEO_EXT_RE = /\.(?:mp4|webm|mov|avi|mkv)$/i;  // tested against URL without query string
 const IMAGE_EXT_RE = /\.(?:jpg|jpeg|png|gif|webp|bmp|svg)$/i;  // tested against URL without query string
 
+// Windows absolute path (D:\x.png / D:/x.png).
+const WIN_ABS_PATH_RE = /^[A-Za-z]:[\\/]/;
+
 function _toWebUrl(url) {
-    if (/^\/[A-Za-z]/.test(url) && !url.startsWith('/api/')) {
+    if ((/^\/[A-Za-z]/.test(url) || WIN_ABS_PATH_RE.test(url)) && !url.startsWith('/api/')) {
         return '/api/file?path=' + encodeURIComponent(url);
     }
     if (/^file:\/\/\//i.test(url)) {
-        return '/api/file?path=' + encodeURIComponent(url.replace(/^file:\/\/\//i, '/'));
+        // file:///home/x → /home/x, but file:///D:/x stays drive-relative.
+        const p = url.replace(/^file:\/\/\//i, '');
+        return '/api/file?path=' + encodeURIComponent(WIN_ABS_PATH_RE.test(p) ? p : '/' + p);
     }
     return url;
 }
@@ -1818,6 +2146,9 @@ const _teamRenderedSeqs = new Set();  // seqs already rendered in team chat
 let _teamAiLoadingEl = null;          // loading spinner shown to observers while AI streams
 let _teamAiLoadingReqId = null;       // request_id associated with above spinner
 let sessionActiveRequest = {};   // session_id -> request_id (in-flight stream per session)
+const PENDING_VOICE_ATTACH_TTL_MS = 2 * 60 * 1000;
+const PENDING_VOICE_ATTACH_MAX = 100;
+const pendingVoiceAttachments = new Map(); // session_id:bot_seq -> pending audio
 
 function isCurrentSessionConversationActive() {
     return !!sessionActiveRequest[sessionId];
@@ -1904,6 +2235,25 @@ const supportsDirectoryUpload = !!folderInput && 'webkitdirectory' in folderInpu
 
 if (!supportsDirectoryUpload && attachFolderOption) {
     attachFolderOption.classList.add('hidden');
+}
+
+// Composer textarea sizing. The empty box is deliberately tall (a few lines of
+// room, like other coding agents) and grows with the text up to a cap, after
+// which it scrolls.
+const COMPOSER_MIN_H = 52;
+const COMPOSER_MAX_H = 220;
+
+function autoResizeComposer() {
+    chatInput.style.height = COMPOSER_MIN_H + 'px';
+    const scrollH = chatInput.scrollHeight;
+    chatInput.style.height = Math.max(COMPOSER_MIN_H, Math.min(scrollH, COMPOSER_MAX_H)) + 'px';
+    chatInput.style.overflowY = scrollH > COMPOSER_MAX_H ? 'auto' : 'hidden';
+}
+
+/** Shrink the composer back to its resting height after the text is consumed. */
+function resetComposerHeight() {
+    chatInput.style.height = COMPOSER_MIN_H + 'px';
+    chatInput.style.overflowY = 'hidden';
 }
 
 // ---------------- Mic button: in-page voice input via the configured ASR provider ----------------
@@ -2337,7 +2687,7 @@ function setSendBtnCancelMode(requestId) {
     sendBtnMode = 'cancel';
     sendBtn.disabled = false;
     sendBtn.classList.add('send-btn-cancel');
-    sendBtn.title = (currentLang === 'zh' ? '中止' : 'Cancel');
+    _setBtnTooltip(sendBtn, t('tip_cancel'));
     sendBtn.innerHTML = '<i class="fas fa-stop text-sm"></i>';
     updateSteerBtnState();
 }
@@ -2346,7 +2696,7 @@ function resetSendBtnSendMode() {
     activeRequestId = null;
     sendBtnMode = 'send';
     sendBtn.classList.remove('send-btn-cancel');
-    sendBtn.title = '';
+    _setBtnTooltip(sendBtn, '');
     sendBtn.innerHTML = '<i class="fas fa-paper-plane text-sm"></i>';
     steerBtn.classList.add('hidden');
     steerBtn.classList.remove('flex');
@@ -2374,8 +2724,7 @@ function steerActiveTask() {
     addUserMessage(`↪ ${instruction}`, new Date());
 
     chatInput.value = '';
-    chatInput.style.height = '42px';
-    chatInput.style.overflowY = 'hidden';
+    resetComposerHeight();
     updateSteerBtnState();
 
     fetch('/message', {
@@ -2419,7 +2768,7 @@ function requestCancel() {
     // Optimistic UI lock so the click visibly registers before the SSE
     // "cancelled" event arrives.
     sendBtn.disabled = true;
-    sendBtn.title = (currentLang === 'zh' ? '已中止' : 'Cancelled');
+    _setBtnTooltip(sendBtn, t('tip_cancelled'));
 }
 
 // Button click is the only path to Cancel. Pressing Enter still calls
@@ -2645,9 +2994,597 @@ document.addEventListener('click', (e) => {
     hideAttachMenu();
 });
 
+// =====================================================================
+// Workspace selector (project picker above the input)
+// =====================================================================
+let _wsSelState = { current: null, recents: [], defaultWorkspace: '', projectsRoot: '' };
+
+function _wsSelBtn() { return document.getElementById('workspace-selector-btn'); }
+function _wsSelMenu() { return document.getElementById('workspace-selector-menu'); }
+
+// Minimal self-dismissing toast for selector errors (no global toast exists).
+function _wsToast(msg) {
+    let el = document.getElementById('ws-sel-toast');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'ws-sel-toast';
+        el.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);' +
+            'background:#1e293b;color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;' +
+            'z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.2);opacity:0;transition:opacity .2s;';
+        document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.style.opacity = '1';
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.style.opacity = '0'; }, 2600);
+}
+
+// Refresh the selector state + label for the current session.
+async function refreshWorkspaceSelector() {
+    const label = document.getElementById('workspace-selector-label');
+    try {
+        const res = await fetch(`/api/projects?session=${encodeURIComponent(sessionId)}`);
+        const data = await res.json();
+        if (data.status !== 'success') return;
+        _wsSelState = {
+            current: data.current || null,
+            recents: data.recents || [],
+            defaultWorkspace: data.default_workspace || '',
+            projectsRoot: data.projects_root || '',
+        };
+        _wsSelUpdateLabel();
+    } catch (e) { /* keep last label */ }
+}
+
+// Sync the selector button's label and hover tooltip with the current state.
+// Called after every selection so the tooltip always shows the live full path.
+function _wsSelUpdateLabel() {
+    const label = document.getElementById('workspace-selector-label');
+    if (label) {
+        label.textContent = _wsSelState.current
+            ? _wsSelState.current.name
+            : t('ws_default_workspace');
+    }
+    const btn = _wsSelBtn();
+    if (btn) {
+        const full = _wsSelState.current
+            ? _wsSelState.current.path
+            : _wsSelState.defaultWorkspace;
+        btn.setAttribute('data-tooltip', full || t('ws_sel_title'));
+        btn.setAttribute('data-tooltip-pos', 'top');
+        // Route through the body-level floating tooltip so the full path isn't
+        // clipped/covered by the chat history above the input bar.
+        btn.setAttribute('data-tip-float', '');
+    }
+}
+
+function toggleWorkspaceSelector(event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    const menu = _wsSelMenu();
+    if (!menu) return;
+    if (!menu.classList.contains('hidden')) {
+        _wsSelHide();
+        return;
+    }
+    _closeComposerMenus(menu);
+    refreshWorkspaceSelector().then(renderWorkspaceSelectorMenu);
+    menu.classList.remove('hidden');
+    _wsSelBtn()?.classList.add('open');
+}
+
+function _wsSelHide() {
+    const menu = _wsSelMenu();
+    if (menu) menu.classList.add('hidden');
+    _wsSelBtn()?.classList.remove('open');
+}
+
+function renderWorkspaceSelectorMenu() {
+    const menu = _wsSelMenu();
+    if (!menu) return;
+
+    const parts = [];
+    const isDefault = !_wsSelState.current;
+    parts.push(`<div class="ws-sel-section-title">${escapeHtml(t('ws_sel_system_space'))}</div>`);
+    // Default workspace: hovering shows the full ~/cow absolute path.
+    parts.push(`
+        <button class="ws-sel-item ${isDefault ? 'active' : ''}" onclick="selectWorkspaceProject(null)"
+                data-tip-float data-tooltip="${escapeHtml(_wsSelState.defaultWorkspace || '')}" data-tooltip-pos="bottom">
+            <i class="fas fa-house"></i>
+            <span class="ws-sel-name">${escapeHtml(t('ws_default_workspace'))}</span>
+            ${isDefault ? '<i class="fas fa-check ws-sel-check"></i>' : ''}
+        </button>`);
+
+    // Project space: recent projects plus the open/new actions share one
+    // heading, separated from the system space above by a divider.
+    parts.push(`<div class="ws-sel-divider"></div>`);
+    parts.push(`<div class="ws-sel-section-title">${escapeHtml(t('ws_sel_project_space'))}</div>`);
+    (_wsSelState.recents || []).forEach(r => {
+        const active = _wsSelState.current && _wsSelState.current.path === r.path;
+        parts.push(`
+            <button class="ws-sel-item ${active ? 'active' : ''}" onclick="selectWorkspaceProject('${_wsAttr(r.path)}')"
+                    data-tip-float data-tooltip="${escapeHtml(r.path)}" data-tooltip-pos="bottom">
+                <i class="fas fa-folder"></i>
+                <span class="ws-sel-name">${escapeHtml(r.name)}</span>
+                ${active ? '<i class="fas fa-check ws-sel-check"></i>' : ''}
+            </button>`);
+    });
+
+    // Divider between the project list and the open/new-project actions.
+    parts.push(`<div class="ws-sel-divider"></div>`);
+    parts.push(`
+        <button class="ws-sel-item" onclick="wsSelOpenProjectDialog()">
+            <i class="fas fa-folder-open"></i>
+            <span class="ws-sel-name">${escapeHtml(t('ws_sel_open'))}</span>
+        </button>`);
+    parts.push(`
+        <button class="ws-sel-item" onclick="wsSelNewProjectDialog()">
+            <i class="fas fa-folder-plus"></i>
+            <span class="ws-sel-name">${escapeHtml(t('ws_sel_new'))}</span>
+        </button>`);
+
+    menu.innerHTML = parts.join('');
+}
+
+// Escape a path for safe embedding inside a single-quoted inline handler.
+function _wsAttr(p) { return String(p || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+
+// ------- Folder picker modal (open an existing project) -------
+let _fpCurrent = '';   // absolute path currently listed
+let _fpBound = false;  // one-time listener binding guard
+
+function wsSelOpenProjectDialog() {
+    _wsSelHide();
+    _fpBindOnce();
+    const overlay = document.getElementById('folder-picker-overlay');
+    document.getElementById('folder-picker-cancel').textContent = t('channels_cancel') || t('ws_sel_up');
+    document.getElementById('folder-picker-open').textContent = t('ws_sel_open_here');
+    document.getElementById('folder-picker-hint').textContent = t('ws_sel_dblclick_hint');
+    overlay.classList.remove('hidden');
+    _fpBrowse('');  // '' => backend starts at ~
+}
+
+function _fpBindOnce() {
+    if (_fpBound) return;
+    _fpBound = true;
+    const overlay = document.getElementById('folder-picker-overlay');
+    const close = () => overlay.classList.add('hidden');
+    document.getElementById('folder-picker-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.getElementById('folder-picker-open').addEventListener('click', async () => {
+        if (!_fpCurrent) return;
+        const ok = await _wsSelApply('/api/projects/select', { session: sessionId, project_dir: _fpCurrent });
+        if (ok) close();
+    });
+}
+
+// Virtual path (Windows) that lists logical drives; not a real openable dir.
+const _FP_DRIVES = '__DRIVES__';
+
+async function _fpBrowse(path) {
+    const list = document.getElementById('folder-picker-list');
+    list.innerHTML = `<div class="fp-empty"><i class="fas fa-spinner fa-spin"></i></div>`;
+    try {
+        const res = await fetch(`/api/projects/browse?path=${encodeURIComponent(path || '')}`);
+        const data = await res.json();
+        if (data.status !== 'success') { list.innerHTML = `<div class="fp-empty">${escapeHtml(data.message || 'error')}</div>`; return; }
+        const isDrives = data.path === _FP_DRIVES;
+        _fpCurrent = isDrives ? null : data.path;
+        // Drives view is a selector, not a real directory: show a label and
+        // disable "Open here" so the sentinel can't be picked as a project.
+        const label = isDrives ? (t('ws_sel_drives') || 'This PC') : data.path;
+        document.getElementById('folder-picker-path').textContent = label;
+        document.getElementById('folder-picker-path').setAttribute('title', label);
+        document.getElementById('folder-picker-open').disabled = isDrives;
+        _fpRenderToolbar(data);
+        _fpRenderList(data);
+    } catch (e) {
+        list.innerHTML = `<div class="fp-empty">${escapeHtml(String(e.message || e))}</div>`;
+    }
+}
+
+function _fpRenderToolbar(data) {
+    const bar = document.getElementById('folder-picker-toolbar');
+    const upDisabled = !data.parent;
+    bar.innerHTML = `
+        <button class="fp-btn" ${upDisabled ? 'disabled' : ''} onclick="_fpBrowse('${_wsAttr(data.parent || '')}')" data-tooltip="${escapeHtml(t('ws_sel_up'))}" data-tooltip-pos="bottom">
+            <i class="fas fa-arrow-up"></i>
+        </button>
+        <button class="fp-btn" onclick="_fpBrowse('~')" data-tooltip="~" data-tooltip-pos="bottom">
+            <i class="fas fa-house"></i>
+        </button>`;
+}
+
+function _fpRenderList(data) {
+    const list = document.getElementById('folder-picker-list');
+    const dirs = data.dirs || [];
+    if (!dirs.length) {
+        list.innerHTML = `<div class="fp-empty"><i class="fas fa-folder-open"></i><span>${escapeHtml(t('ws_sel_no_subdirs'))}</span></div>`;
+        return;
+    }
+    list.innerHTML = dirs.map(d => `
+        <div class="fp-row" ondblclick="_fpBrowse('${_wsAttr(d.path)}')" onclick="_fpSelectRow(this,'${_wsAttr(d.path)}')" title="${escapeHtml(d.path)}">
+            <i class="fas fa-folder"></i>
+            <span class="fp-name">${escapeHtml(d.name)}</span>
+            <i class="fas fa-chevron-right fp-into" onclick="event.stopPropagation();_fpBrowse('${_wsAttr(d.path)}')"></i>
+        </div>`).join('');
+}
+
+// Single click selects a child folder as the target (so you can open a folder
+// without navigating into it); double click / chevron navigates inside.
+function _fpSelectRow(el, path) {
+    document.querySelectorAll('#folder-picker-list .fp-row.selected').forEach(r => r.classList.remove('selected'));
+    el.classList.add('selected');
+    _fpCurrent = path;
+    // Picking a row (e.g. a drive in the drives view) is a valid target again.
+    document.getElementById('folder-picker-open').disabled = false;
+    document.getElementById('folder-picker-path').textContent = path;
+}
+
+// Create a new project by name (lands under the projects root), then open it.
+function wsSelNewProjectDialog() {
+    _wsSelHide();
+    openKnowledgeDialog({
+        title: t('ws_sel_new'),
+        subtitle: (t('ws_sel_new_subtitle') || '').replace('{root}', _wsSelState.projectsRoot || ''),
+        label: t('ws_sel_new_placeholder'),
+        hint: t('ws_sel_new_hint'),
+        icon: 'fa-folder-plus',
+        value: '',
+        validate: (v) => {
+            v = (v || '').trim();
+            if (!v) return t('ws_sel_name_required');
+            if (v.includes('/') || v.includes('\\')) return t('ws_sel_name_no_slash');
+            return '';
+        },
+        onSubmit: async (name) => {
+            const ok = await _wsSelApply('/api/projects/create', { session: sessionId, name: name.trim() });
+            return ok ? true : null;
+        },
+    });
+}
+
+// Shared apply path for select/create: POST, update label, then reveal the
+// project in the right-hand file panel so the user sees they are "inside" it.
+async function _wsSelApply(url, body) {
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (data.status !== 'success') { _wsToast(data.message || 'failed'); return false; }
+        _wsSelState.current = data.current || null;
+        if (Array.isArray(data.recents)) _wsSelState.recents = data.recents;
+        if (data.default_workspace) _wsSelState.defaultWorkspace = data.default_workspace;
+        _wsSelUpdateLabel();
+        _wsSelRevealFiles();
+        // Surface the change in the history sidebar too: opening/creating a
+        // project should immediately show its group with the current session
+        // filed inside it. Open the panel if closed, uncollapse the target
+        // group, then reload so grouping/counts reflect the new binding.
+        _revealSpaceInSessionPanel(_wsSelState.current ? _wsSelState.current.path : DEFAULT_SPACE_KEY);
+        return true;
+    } catch (e) { _wsToast(String(e.message || e)); return false; }
+}
+
+// Ensure the history sidebar is open and the given space's group is expanded,
+// then reload the session list so the just-bound session shows under it.
+function _revealSpaceInSessionPanel(spaceKey) {
+    const panel = document.getElementById('session-panel');
+    if (panel && !sessionPanelOpen) {
+        sessionPanelOpen = true;
+        panel.classList.remove('hidden');
+        _showSessionOverlay();
+        _persistPanelState();
+    }
+    if (spaceKey && _collapsedProjects.has(spaceKey)) {
+        _collapsedProjects.delete(spaceKey);
+        _saveCollapsed(_collapsedProjects);
+    }
+    // Keep the current session visible even if it has no backend record yet
+    // (a fresh chat that just got a workspace but no first message): re-add it
+    // as an optimistic item so it appears inside the newly opened space.
+    const curSid = sessionId;
+    loadSessionList(() => {
+        if (!_sessionItems.some(s => s.session_id === curSid)) {
+            _addOptimisticSessionItem(curSid);
+        }
+        // Select the current session in the reloaded list and scroll to it.
+        _revealActiveSession();
+    });
+}
+
+// Open (or refresh) the right-hand file panel on the Files tab so the newly
+// selected project's directory is visible.
+function _wsSelRevealFiles() {
+    try {
+        if (typeof openWorkspacePanel === 'function') {
+            wsAutoOpenSuppressed = false;
+            // Reset to the root of the new workspace before opening.
+            if (typeof wsCurrentDir !== 'undefined') wsCurrentDir = '';
+            openWorkspacePanel('files');
+        }
+        if (typeof refreshWorkspaceTree === 'function') refreshWorkspaceTree();
+    } catch (e) { /* panel not present on this view */ }
+}
+
+// Kept for callers that select without a dialog (default / recents).
+async function selectWorkspaceProject(projectDir) {
+    _wsSelHide();
+    await _wsSelApply('/api/projects/select', { session: sessionId, project_dir: projectDir });
+}
+
+document.addEventListener('click', (e) => {
+    const menu = _wsSelMenu();
+    const btn = _wsSelBtn();
+    if (!menu || menu.classList.contains('hidden')) return;
+    if (menu.contains(e.target) || (btn && btn.contains(e.target))) return;
+    _wsSelHide();
+});
+
+// =====================================================================
+// Per-session settings: permission mode and model
+//
+// Both live next to the workspace picker under the input, because all three
+// answer the same question - what this conversation is allowed to do, and with
+// what. Each falls back to the global setting until the user pins one here, so
+// a session that was never touched keeps following Settings.
+// =====================================================================
+
+// Icons and i18n keys per mode. Ordered most-open first so the menu reads from
+// "least restricted" downward, matching how the chip colours escalate.
+const PERMISSION_META = {
+    'full-access':     { icon: 'fa-lock-open',     key: 'perm_full_access' },
+    'workspace-write': { icon: 'fa-shield-halved', key: 'perm_workspace_write' },
+    'read-only':       { icon: 'fa-eye',           key: 'perm_read_only' },
+};
+
+// Last state from GET /api/sessions/<id>/settings; null until first fetch.
+let _sessCfg = null;
+
+function _permBtn() { return document.getElementById('permission-selector-btn'); }
+function _permMenu() { return document.getElementById('permission-selector-menu'); }
+function _modelBtn() { return document.getElementById('model-selector-btn'); }
+function _modelMenu() { return document.getElementById('model-selector-menu'); }
+
+function _permLabel(mode) { return t((PERMISSION_META[mode] || {}).key || 'perm_full_access'); }
+
+/** Close every composer popover except `keep` (so one chip's menu replaces another's). */
+function _closeComposerMenus(keep) {
+    [[_wsSelMenu(), _wsSelBtn()], [_permMenu(), _permBtn()], [_modelMenu(), _modelBtn()]]
+        .forEach(([menu, btn]) => {
+            if (!menu || menu === keep) return;
+            menu.classList.add('hidden');
+            if (btn) btn.classList.remove('open');
+        });
+}
+
+// Fetch this session's effective model + permission and repaint both chips.
+async function refreshSessionSettings() {
+    try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/settings`);
+        const data = await res.json();
+        if (data.status !== 'success') return;
+        _sessCfg = { model: data.model, permission: data.permission };
+    } catch (e) {
+        // Keep whatever the chips already show rather than blanking them.
+        return;
+    }
+    _renderPermissionChip();
+    _renderModelChip();
+}
+
+function _renderPermissionChip() {
+    const btn = _permBtn();
+    if (!btn || !_sessCfg) return;
+    const state = _sessCfg.permission || {};
+    const mode = state.mode || 'full-access';
+    const meta = PERMISSION_META[mode] || PERMISSION_META['full-access'];
+
+    const label = document.getElementById('permission-selector-label');
+    if (label) label.textContent = _permLabel(mode);
+    const icon = document.getElementById('permission-selector-icon');
+    if (icon) icon.className = `fas ${meta.icon}`;
+
+    // One colour per mode, so an unrestricted session is visibly different from
+    // a read-only one without having to read the label.
+    btn.classList.remove('perm-read-only', 'perm-workspace-write', 'perm-full-access');
+    btn.classList.add(`perm-${mode}`);
+
+    const tip = t('perm_tip').replace('{name}', _permLabel(mode))
+        + (state.source === 'global' ? ` · ${t('perm_follow_global')}` : '');
+    btn.setAttribute('data-tooltip', tip);
+    btn.setAttribute('data-tooltip-pos', 'top');
+    btn.setAttribute('data-tip-float', '');
+}
+
+function _renderModelChip() {
+    const btn = _modelBtn();
+    if (!btn || !_sessCfg) return;
+    const state = _sessCfg.model || {};
+    const model = state.model || '';
+
+    const label = document.getElementById('model-selector-label');
+    if (label) label.textContent = model || t('model_unset');
+
+    const tip = t('model_tip').replace('{name}', model || t('model_unset'))
+        + (state.source === 'global' ? ` · ${t('model_follow_global')}` : '');
+    btn.setAttribute('data-tooltip', tip);
+    btn.setAttribute('data-tooltip-pos', 'top');
+    btn.setAttribute('data-tip-float', '');
+}
+
+function togglePermissionSelector(event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    const menu = _permMenu();
+    if (!menu) return;
+    if (!menu.classList.contains('hidden')) {
+        _closeComposerMenus();
+        return;
+    }
+    _closeComposerMenus(menu);
+    const open = () => { renderPermissionMenu(); menu.classList.remove('hidden'); _permBtn()?.classList.add('open'); };
+    if (_sessCfg) open(); else refreshSessionSettings().then(open);
+}
+
+function renderPermissionMenu() {
+    const menu = _permMenu();
+    if (!menu) return;
+    const state = (_sessCfg && _sessCfg.permission) || {};
+    const modes = state.modes && state.modes.length ? state.modes : Object.keys(PERMISSION_META);
+    const current = state.mode || 'full-access';
+    const isGlobal = state.source === 'global';
+
+    const parts = [`<div class="composer-menu-title">${escapeHtml(t('perm_menu_title'))}</div>`];
+    // Menu order follows PERMISSION_META, not the backend tuple, so the list
+    // reads consistently even if the backend reorders its modes. "Follow global"
+    // is intentionally not a row of its own: picking a mode simply pins it, and
+    // clicking the already-active mode clears the pin (back to global) so the
+    // behaviour is still reachable without cluttering the menu.
+    Object.keys(PERMISSION_META).filter(m => modes.includes(m)).forEach(mode => {
+        const meta = PERMISSION_META[mode];
+        const active = mode === current;
+        // When this mode is the active one AND it is pinned, clicking it clears
+        // the pin; otherwise clicking pins this mode.
+        const arg = (active && !isGlobal) ? 'null' : `'${mode}'`;
+        parts.push(`
+            <button class="composer-menu-item ${active ? 'active' : ''}" onclick="selectSessionPermission(${arg})">
+                <i class="fas ${meta.icon}"></i>
+                <span class="composer-menu-body">
+                    <span class="composer-menu-name">${escapeHtml(t(meta.key))}</span>
+                    <span class="composer-menu-desc">${escapeHtml(t(meta.key + '_desc'))}</span>
+                </span>
+                ${active ? '<i class="fas fa-check composer-menu-check"></i>' : ''}
+            </button>`);
+    });
+
+    menu.innerHTML = parts.join('');
+}
+
+/** Pin this session's permission mode, or pass null to follow the global one. */
+async function selectSessionPermission(mode) {
+    _closeComposerMenus();
+    await _applySessionSettings({ permission: mode });
+}
+
+// Insert an actionable hint after a tool card whose call was refused by the
+// permission gate. Clicking it opens the permission selector under the input so
+// the user can raise the mode without hunting for the chip.
+function _appendPermissionDeniedHint(toolEl, mode) {
+    if (!toolEl || !toolEl.parentElement) return;
+    // Avoid stacking duplicate hints if the model retries the same blocked call.
+    if (toolEl.nextElementSibling
+        && toolEl.nextElementSibling.classList
+        && toolEl.nextElementSibling.classList.contains('perm-denied-hint')) {
+        return;
+    }
+    const label = _permLabel(mode || (_sessCfg && _sessCfg.permission && _sessCfg.permission.mode) || 'workspace-write');
+    const hint = document.createElement('div');
+    hint.className = 'perm-denied-hint';
+    hint.innerHTML = `
+        <i class="fas fa-shield-halved"></i>
+        <span class="perm-denied-text">${escapeHtml(t('perm_denied_hint').replace('{name}', label))}</span>
+        <button type="button" class="perm-denied-btn">${escapeHtml(t('perm_denied_action'))}</button>`;
+    hint.querySelector('.perm-denied-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const btn = _permBtn();
+        if (btn) { btn.scrollIntoView({ block: 'nearest' }); }
+        togglePermissionSelector();
+    });
+    toolEl.parentElement.insertBefore(hint, toolEl.nextElementSibling);
+}
+
+function toggleModelSelector(event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    const menu = _modelMenu();
+    if (!menu) return;
+    if (!menu.classList.contains('hidden')) {
+        _closeComposerMenus();
+        return;
+    }
+    _closeComposerMenus(menu);
+    const open = () => { renderModelMenu(); menu.classList.remove('hidden'); _modelBtn()?.classList.add('open'); };
+    // Always re-fetch: the catalog depends on which providers have keys, which
+    // may have changed in Settings since this page loaded.
+    refreshSessionSettings().then(() => { if (_sessCfg) open(); });
+}
+
+function renderModelMenu() {
+    const menu = _modelMenu();
+    if (!menu) return;
+    const state = (_sessCfg && _sessCfg.model) || {};
+    const providers = state.providers || [];
+    const pinned = state.source === 'session';
+
+    // Which model is currently effective (pinned or inherited from global), so
+    // the check mark shows on it even when the session follows the global model.
+    const activeModel = state.model || (state.global && state.global.model) || '';
+    const activeProvider = state.provider || (state.global && state.global.provider) || '';
+
+    const parts = [`<div class="composer-menu-title">${escapeHtml(t('model_menu_title'))}</div>`];
+    providers.forEach((p, idx) => {
+        if (idx > 0) parts.push('<div class="composer-menu-divider"></div>');
+        parts.push(`<div class="composer-menu-title">${escapeHtml(localizedLabel(p.label))}</div>`);
+        (p.models || []).forEach(m => {
+            const active = m === activeModel && p.id === activeProvider;
+            // Clicking the already-pinned model clears the pin (back to global);
+            // "follow global" is no longer a separate row.
+            const arg = (active && pinned)
+                ? 'null, null'
+                : `'${_wsAttr(p.id)}','${_wsAttr(m)}'`;
+            parts.push(`
+                <button class="composer-menu-item ${active ? 'active' : ''}"
+                        onclick="selectSessionModel(${arg})">
+                    <i class="fas fa-microchip"></i>
+                    <span class="composer-menu-body">
+                        <span class="composer-menu-name">${escapeHtml(m)}</span>
+                    </span>
+                    ${active ? '<i class="fas fa-check composer-menu-check"></i>' : ''}
+                </button>`);
+        });
+    });
+
+    menu.innerHTML = parts.join('');
+}
+
+/** Pin a model for this session; pass nulls to follow the global model again. */
+async function selectSessionModel(provider, model) {
+    _closeComposerMenus();
+    await _applySessionSettings({ provider: provider, model: model });
+}
+
+// Single writer for both chips: POST the change, then repaint from the state the
+// backend echoes back so the UI can never disagree with what was stored.
+async function _applySessionSettings(body) {
+    try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (data.status !== 'success') { _wsToast(data.message || t('session_settings_failed')); return; }
+        _sessCfg = { model: data.model, permission: data.permission };
+        _renderPermissionChip();
+        _renderModelChip();
+    } catch (e) {
+        _wsToast(t('session_settings_failed'));
+    }
+}
+
+document.addEventListener('click', (e) => {
+    [[_permMenu(), _permBtn()], [_modelMenu(), _modelBtn()]].forEach(([menu, btn]) => {
+        if (!menu || menu.classList.contains('hidden')) return;
+        if (menu.contains(e.target) || (btn && btn.contains(e.target))) return;
+        menu.classList.add('hidden');
+        if (btn) btn.classList.remove('open');
+    });
+});
+
 // Drag-and-drop support on entire chat view
 const chatView = document.getElementById('view-chat');
-const chatInputArea = chatInput.closest('.flex-shrink-0');
+const chatInputArea = document.getElementById('composer-card') || chatInput.closest('.flex-shrink-0');
 
 // Create drag overlay for visual feedback
 let dragOverlay = document.getElementById('drag-overlay');
@@ -2893,11 +3830,7 @@ function selectSlashCommand(idx) {
 }
 
 chatInput.addEventListener('input', function() {
-    this.style.height = '42px';
-    const scrollH = this.scrollHeight;
-    const newH = Math.min(scrollH, 180);
-    this.style.height = newH + 'px';
-    this.style.overflowY = scrollH > 180 ? 'auto' : 'hidden';
+    autoResizeComposer();
     updateSendBtnState();
 
     const val = this.value;
@@ -3342,8 +4275,7 @@ function sendMessage() {
     }
 
     chatInput.value = '';
-    chatInput.style.height = '42px';
-    chatInput.style.overflowY = 'hidden';
+    resetComposerHeight();
     pendingAttachments = [];
     renderAttachmentPreview();
     sendBtn.disabled = true;
@@ -3420,7 +4352,10 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     let reasoningText = '';
     let reasoningStartTime = 0;
     let done = false;
+    let mainDone = false;
+    let completedBotSeq = null;
     let cancelled = false;
+    let lastSeq = 0;
 
     // A stream can end while tools are still marked in-flight (cancel, dropped
     // connection). Settle them so nothing spins forever.
@@ -3606,6 +4541,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     <div class="tool-header" onclick="this.parentElement.classList.toggle('expanded')">
                         <i class="fas fa-cog fa-spin text-primary-400 flex-shrink-0 tool-icon"></i>
                         <span class="tool-name">${item.tool}</span>
+                        <span class="tool-substep-count"></span>
                         <i class="fas fa-chevron-right tool-chevron"></i>
                     </div>
                     <div class="tool-detail">
@@ -3613,9 +4549,14 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                             <div class="tool-detail-label">Input</div>
                             <pre class="tool-detail-content">${argsStr}</pre>
                         </div>
+                        <div class="tool-detail-section tool-substeps-section hidden">
+                            <div class="tool-detail-label">Steps</div>
+                            <div class="tool-substeps"></div>
+                        </div>
                         <div class="tool-detail-section tool-output-section">
                             <div class="tool-detail-label tool-output-label">Output</div>
                             <pre class="tool-detail-content tool-live-output"></pre>
+                            <div class="tool-display-output"></div>
                         </div>
                     </div>`;
                 stepsEl.appendChild(toolEl);
@@ -3649,24 +4590,46 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                         nameEl.innerHTML += ` <span class="tool-time">${item.execution_time}s</span>`;
                     }
 
-                    // Fill output section
+                    // Fill output section. A tool that wrote its outcome for a
+                    // person (item.display) gets rendered as markdown; the raw
+                    // result is what the model reads and stays hidden then.
                     const outputLabel = toolEl.querySelector('.tool-output-label');
                     const outputEl = toolEl.querySelector('.tool-live-output');
+                    const displayEl = toolEl.querySelector('.tool-display-output');
                     if (outputLabel) outputLabel.textContent = isError ? 'Error' : 'Output';
-                    if (outputEl) {
+                    if (displayEl && item.display) {
+                        displayEl.innerHTML = renderMarkdown(String(item.display));
+                        displayEl.classList.add('has-content');
+                        if (outputEl) outputEl.textContent = '';
+                    } else if (outputEl) {
                         outputEl.textContent = item.result ? String(item.result) : '';
                         outputEl.classList.toggle('tool-error-text', isError);
                     }
 
                     toolEl.classList.remove('tool-streaming');
-                    toolEl.classList.remove('expanded');
-                    if (!item.result) {
+                    // Tools collapse once they are done; their output is a
+                    // trace. A tool that wrote something for a person to read
+                    // stays open — the reader just waited for it.
+                    toolEl.classList.toggle('expanded', !!item.display);
+                    if (!item.result && !item.display) {
                         const outputSection = toolEl.querySelector('.tool-output-section');
                         if (outputSection) outputSection.remove();
                     }
                     if (isError) toolEl.classList.add('tool-failed');
+                    // A permission refusal is not an ordinary failure: surface a
+                    // one-click way to raise this session's permission instead of
+                    // leaving the user to decode the model's error text.
+                    if (item.permission_denied) {
+                        _appendPermissionDeniedHint(toolEl, item.permission_mode);
+                    }
                     toolElements.delete(item.tool_call_id);
                 }
+
+            } else if (item.type === 'subagent_step') {
+                // A tool call made inside a sub agent, rendered under that sub
+                // agent's card so its minutes of work are followable.
+                renderSubagentStep(toolElements.get(item.card_id), item);
+                scrollChatToBottom();
 
             } else if (item.type === 'image') {
                 ensureBotEl();
@@ -3744,13 +4707,13 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 resetSendBtnSendMode();
 
             } else if (item.type === 'done') {
-                // Don't close the stream yet: the backend keeps it open
-                // for a short tail to deliver async attachments such as
-                // TTS audio (`voice_attach`). It will close the stream on
-                // its own via onerror once the tail expires.
-                done = true;
+                // The answer is persisted, but async attachments may still
+                // follow. Only stream_end closes the request lifecycle.
+                mainDone = true;
+                if (item.bot_seq !== undefined && item.bot_seq !== null) {
+                    completedBotSeq = item.bot_seq;
+                }
                 settlePendingTools();
-                clearOwnerRequest();
                 resetSendBtnSendMode();
 
                 const finalTextRaw = item.content || accumulatedText;
@@ -3811,13 +4774,35 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
 
             } else if (item.type === 'voice_attach') {
                 // TTS finished — attach a playable audio element to the
-                // current bot bubble. The stream closes right after.
-                if (botEl && item.url) {
-                    attachAudioToBotBubble(botEl, item.url, { autoplay: true });
+                // persisted bot bubble. If history is still loading after a
+                // session switch, keep the attachment until that bubble exists.
+                if (item.url && completedBotSeq !== null) {
+                    rememberPendingVoiceAttachment(
+                        ownerSession, completedBotSeq, item.url
+                    );
+                    flushPendingVoiceAttachments(ownerSession, true);
                 }
+
+            } else if (item.type === 'stream_end') {
+                done = true;
                 if (currentEs) { currentEs.close(); }
                 delete activeStreams[requestId];
                 clearOwnerRequest();
+
+            } else if (item.type === 'resync_required') {
+                done = true;
+                settlePendingTools();
+                if (currentEs) { currentEs.close(); }
+                delete activeStreams[requestId];
+                clearOwnerRequest();
+                resetSendBtnSendMode();
+                if (isActive()) {
+                    messagesDiv.innerHTML = '';
+                    historyPage = 0;
+                    historyHasMore = false;
+                    historyLoading = false;
+                    loadHistory(1);
+                }
 
             } else if (item.type === 'error') {
                 done = true;
@@ -3834,13 +4819,19 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     }
 
     function connect() {
-        const es = new EventSource(`/stream?request_id=${encodeURIComponent(requestId)}`);
+        const es = new EventSource(
+            `/stream?request_id=${encodeURIComponent(requestId)}`
+            + `&after_seq=${lastSeq}`
+        );
         currentEs = es;
         activeStreams[requestId] = es;
 
         es.onmessage = function(e) {
             let item;
             try { item = JSON.parse(e.data); } catch (_) { return; }
+
+            const seq = Number(item.seq || 0);
+            if (seq && seq <= lastSeq) return;
 
             // Successful data received, reset reconnect counter
             reconnectCount = 0;
@@ -3855,13 +4846,38 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 if (previousIndex >= 0) buffer.items.splice(previousIndex, 1);
             }
             if (buffer.items.length < 5000) buffer.items.push(item);
+            if (seq) lastSeq = seq;
+
+            // done is persisted before it is published. Remember that state
+            // even while this session is in the background, where rendering
+            // is intentionally skipped. Notify for both foreground and
+            // background sessions, before the render guard below.
+            if (item.type === 'done') {
+                mainDone = true;
+                if (item.bot_seq !== undefined && item.bot_seq !== null) {
+                    completedBotSeq = item.bot_seq;
+                }
+                notifyTaskFinished(ownerSession, 'done', item.content);
+            } else if (item.type === 'error') {
+                if (!cancelled) notifyTaskFinished(ownerSession, 'error', '');
+            } else if (
+                item.type === 'voice_attach'
+                && item.url
+                && completedBotSeq !== null
+            ) {
+                // Background sessions skip rendering below. Preserve their
+                // attachment so loadHistory can mount it when the user returns.
+                rememberPendingVoiceAttachment(
+                    ownerSession, completedBotSeq, item.url
+                );
+            }
 
             // Background session: keep the stream alive so the reply finishes
             // and persists, but skip rendering into the now-foreign view. The
             // buffer above still grows so returning to the session can rebuild
             // the bubble and resume live rendering.
             if (ownerSession !== sessionId) {
-                if (item.type === 'done' || item.type === 'error' || item.type === 'voice_attach') {
+                if (item.type === 'stream_end' || item.type === 'error' || item.type === 'resync_required') {
                     done = true;
                     es.close();
                     delete activeStreams[requestId];
@@ -3878,11 +4894,11 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
             delete activeStreams[requestId];
 
             if (done) {
-                // Normal close after the post-done tail expired; nothing to do.
+                // stream_end or an unrecoverable event already closed it.
                 return;
             }
 
-            if (cancelled) {
+            if (cancelled && !mainDone) {
                 // The user stopped the run, so the stream ending here is the
                 // expected outcome. Reconnecting would only land on a queue
                 // the backend has already reclaimed.
@@ -3931,8 +4947,10 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     // snapshot matches exactly what live rendering would have produced.
     if (replayItems && replayItems.length) {
         for (const item of replayItems) {
+            const seq = Number(item.seq || 0);
+            if (seq > lastSeq) lastSeq = seq;
             try { processSSEItem(item); } catch (_) {}
-            if (item.type === 'done' || item.type === 'error' || item.type === 'voice_attach') {
+            if (item.type === 'stream_end' || item.type === 'error' || item.type === 'resync_required') {
                 done = true;
             }
         }
@@ -3957,8 +4975,8 @@ function startPolling() {
     function poll() {
         if (gen !== pollGeneration) return;
         if (pollInFlight) return;
-        if (document.hidden && (!sessionId || !sessionId.startsWith('team_'))) { setTimeout(poll, 3000); return; }
-
+        // Keep polling while hidden: push messages are exactly what the
+        // notification below should deliver to a background tab.
         pollInFlight = true;
 
         if (sessionId && sessionId.startsWith('team_')) {
@@ -3988,6 +5006,13 @@ function startPolling() {
                     if (welcomeScreen) welcomeScreen.remove();
                     addBotMessage(data.content, new Date(data.timestamp * 1000), rid);
                     scrollChatToBottom();
+                    // Pushed message (scheduler result, missed reply): show the
+                    // content itself, matching the desktop push notification.
+                    showTaskNotification(
+                        sessionTitleOf(sessionId) || 'CowAgent',
+                        firstLineSnippet(data.content),
+                        sessionId
+                    );
                 }
             }
             const delay = (sessionId && sessionId.startsWith('team_')) ? 1000 : ((data.status === 'success' && data.has_content) ? 5000 : 10000);
@@ -4184,7 +5209,10 @@ function createUserMessageEl(content, timestamp, attachments) {
     if (attachments && attachments.length > 0) {
         const items = attachments.map(a => {
             if (a.file_type === 'image') {
-                return `<img src="${a.preview_url}" alt="${escapeHtml(a.file_name)}" class="user-msg-image">`;
+                // History replay recovers attachments from prompt markers, which
+                // carry only the local file_path — route it through /api/file.
+                const src = (a.preview_url || _toWebUrl(a.file_path || '')).replace(/"/g, '&quot;');
+                return `<img src="${src}" alt="${escapeHtml(a.file_name)}" class="user-msg-image" onclick="_openImageLightbox(this.src)">`;
             }
             const icon = a.file_type === 'video'
                 ? 'fa-film'
@@ -4375,6 +5403,13 @@ function renderStepsHtml(steps) {
             const iconClass = isErr
                 ? 'fas fa-times text-red-400 flex-shrink-0 tool-icon'
                 : 'fas fa-check text-primary-400 flex-shrink-0 tool-icon';
+            // Same rule as the live stream: a tool that wrote its outcome for
+            // a person shows that, not the form the model was handed.
+            const outputHtml = step.display
+                ? `<div class="tool-display-output has-content">${renderMarkdown(String(step.display))}</div>`
+                : (resultStr
+                    ? `<pre class="tool-detail-content${isErr ? ' tool-error-text' : ''}">${resultStr}</pre>`
+                    : '');
             html += `
 <div class="agent-step agent-tool-step${isErr ? ' tool-failed' : ''}">
     <div class="tool-header" onclick="this.parentElement.classList.toggle('expanded')">
@@ -4387,10 +5422,10 @@ function renderStepsHtml(steps) {
             <div class="tool-detail-label">Input</div>
             <pre class="tool-detail-content">${argsStr}</pre>
         </div>
-        ${resultStr ? `
+        ${outputHtml ? `
         <div class="tool-detail-section tool-output-section">
             <div class="tool-detail-label">${isErr ? 'Error' : 'Output'}</div>
-            <pre class="tool-detail-content${isErr ? ' tool-error-text' : ''}">${resultStr}</pre>
+            ${outputHtml}
         </div>` : ''}
     </div>
 </div>`;
@@ -4526,6 +5561,53 @@ function attachAudioToBotBubble(botEl, audioUrl, opts) {
         const speakBtn = botEl.querySelector('.speak-msg-btn');
         if (speakBtn) speakBtn.style.display = 'none';
     } catch (_) { /* silent */ }
+}
+
+function pendingVoiceAttachmentKey(sid, botSeq) {
+    return `${sid}:${botSeq}`;
+}
+
+function rememberPendingVoiceAttachment(sid, botSeq, audioUrl) {
+    if (!sid || botSeq === undefined || botSeq === null || !audioUrl) return;
+    const key = pendingVoiceAttachmentKey(sid, botSeq);
+    const pending = {
+        sid,
+        botSeq: String(botSeq),
+        audioUrl,
+        expiresAt: Date.now() + PENDING_VOICE_ATTACH_TTL_MS,
+    };
+    pendingVoiceAttachments.delete(key);
+    pendingVoiceAttachments.set(key, pending);
+
+    while (pendingVoiceAttachments.size > PENDING_VOICE_ATTACH_MAX) {
+        pendingVoiceAttachments.delete(pendingVoiceAttachments.keys().next().value);
+    }
+    setTimeout(() => {
+        if (pendingVoiceAttachments.get(key) === pending) {
+            pendingVoiceAttachments.delete(key);
+        }
+    }, PENDING_VOICE_ATTACH_TTL_MS);
+}
+
+function flushPendingVoiceAttachments(sid, autoplay) {
+    if (!sid || sid !== sessionId) return 0;
+    const now = Date.now();
+    let attached = 0;
+    pendingVoiceAttachments.forEach((pending, key) => {
+        if (pending.expiresAt <= now) {
+            pendingVoiceAttachments.delete(key);
+            return;
+        }
+        if (pending.sid !== sid) return;
+        const botEl = Array.from(
+            messagesDiv.querySelectorAll('.bot-message-group[data-seq]')
+        ).find(el => el.dataset.seq === pending.botSeq);
+        if (!botEl) return;
+        attachAudioToBotBubble(botEl, pending.audioUrl, { autoplay: !!autoplay });
+        pendingVoiceAttachments.delete(key);
+        attached++;
+    });
+    return attached;
 }
 
 // Build a compact play/pause + progress + duration pill that wraps a
@@ -4672,10 +5754,14 @@ function addBotMessage(content, timestamp, requestId) {
 function loadHistory(page) {
     if (historyLoading) return;
     historyLoading = true;
+    const historySessionId = sessionId;
 
-    fetch(`/api/history?session_id=${encodeURIComponent(sessionId)}&page=${page}&page_size=20`)
+    fetch(`/api/history?session_id=${encodeURIComponent(historySessionId)}&page=${page}&page_size=20`)
         .then(r => r.json())
         .then(data => {
+            // A response from a session we have since left must never render
+            // into the new session's message list.
+            if (historySessionId !== sessionId) return;
             if (data.status !== 'success' || data.messages.length === 0) return;
 
             const prevScrollHeight = messagesDiv.scrollHeight;
@@ -4757,6 +5843,12 @@ function loadHistory(page) {
             if (sessionId && sessionId.startsWith('team_')) {
                 data.messages.forEach(m => { if (m._seq !== undefined) _teamRenderedSeqs.add(m._seq); });
             }
+            // A background voice_attach can arrive before this history fragment
+            // creates its target bubble. Retry now that seq metadata is present
+            // in the DOM; do not autoplay delayed attachments.
+            if (isFirstLoad) {
+                flushPendingVoiceAttachments(historySessionId, false);
+            }
 
             // Manage the "load more" sentinel at the very top
             if (data.has_more) {
@@ -4819,13 +5911,24 @@ function addLoadingIndicator(targetUser) {
     return el;
 }
 
-function newChat(optimistic = true) {
+function newChat(optimistic = true, inherit = true) {
     // Do NOT close active streams: other sessions keep streaming in the
     // background (each stream self-guards against the foreign view) and their
     // replies still complete and persist.
 
+    // Inherit the current session's project so a new chat stays in the same
+    // space; captured before we switch ids / refresh the selector to default.
+    // `inherit=false` forces the default workspace (used by the "+" on the
+    // default-space header, and by newChatInSpace which binds explicitly).
+    const _inheritProject = inherit && _wsSelState.current
+        ? { path: _wsSelState.current.path, name: _wsSelState.current.name }
+        : null;
+
     // Generate a fresh session and persist it so the next page load also starts clean
-    _saveSessionId(generateSessionId());
+    _saveSessionId(generateSessionId());  // sets sessionId + per-user localStorage
+    refreshWorkspaceSelector();  // a fresh session starts on the default workspace
+    refreshSessionSettings();    // ... and on the global model / permission
+    if (typeof wsOnSessionSwitch === 'function') wsOnSessionSwitch();
     resetSendBtnSendMode();  // fresh session has no in-flight reply
     startPolling();  // bump generation so old loop self-cancels, new loop uses fresh sessionId
     messagesDiv.innerHTML = '';
@@ -4932,6 +6035,87 @@ function newChat(optimistic = true) {
     } else {
         loadSessionList();
     }
+
+    // If the previous session was inside a project, bind the fresh one to the
+    // same project so it stays in that space (not the default workspace).
+    if (optimistic && _inheritProject) {
+        _bindNewChatToProject(newSid, _inheritProject);
+    }
+}
+
+// Bind a freshly created session to a project and reflect it locally, so the
+// optimistic item lands in that project group instead of the default space.
+async function _bindNewChatToProject(newSid, project) {
+    try {
+        const res = await fetch('/api/projects/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: newSid, project_dir: project.path }),
+        });
+        const data = await res.json();
+        if (data.status !== 'success') return;
+        // Only apply if the user hasn't switched away from this new session.
+        if (sessionId !== newSid) return;
+        _wsSelState.current = data.current || null;
+        if (Array.isArray(data.recents)) _wsSelState.recents = data.recents;
+        if (data.default_workspace) _wsSelState.defaultWorkspace = data.default_workspace;
+        _wsSelUpdateLabel();
+        const entry = _sessionItems.find(s => s.session_id === newSid);
+        if (entry && _wsSelState.current) {
+            entry.project = { path: _wsSelState.current.path, name: _wsSelState.current.name };
+        }
+        _sessionGroupMode = 'project';
+        _renderSessionList();
+        _revealActiveSession();
+    } catch (e) { /* transient; optimistic item still visible */ }
+}
+
+// Start a fresh conversation filed under a given space (project path, or null
+// for the default workspace), triggered by the "+" on a session-group header.
+// The default case is just newChat(); a project also binds the fresh session to
+// that project so the optimistic item lands under the right group.
+async function newChatInSpace(projectPath) {
+    // newChat() resets the view, auto-opens the history panel, and prepends an
+    // optimistic item. Pass inherit=false so it starts on the default space;
+    // this function then binds the explicit project below (or leaves it on the
+    // default space when projectPath is null).
+    newChat(true, false);
+    if (!projectPath) return;
+
+    const newSid = sessionId;
+    try {
+        const res = await fetch('/api/projects/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: newSid, project_dir: projectPath }),
+        });
+        const data = await res.json();
+        if (data.status !== 'success') { _wsToast(data.message || 'failed'); return; }
+        // Reflect the binding in the composer selector state + label.
+        _wsSelState.current = data.current || null;
+        if (Array.isArray(data.recents)) _wsSelState.recents = data.recents;
+        if (data.default_workspace) _wsSelState.defaultWorkspace = data.default_workspace;
+        _wsSelUpdateLabel();
+        _wsSelRevealFiles();
+        // Make sure the target group is expanded so the new session is visible.
+        if (_collapsedProjects.has(projectPath)) {
+            _collapsedProjects.delete(projectPath);
+            _saveCollapsed(_collapsedProjects);
+        }
+        // Re-file the optimistic item under the bound project and re-render so it
+        // appears immediately inside that group, without waiting for a reload.
+        const entry = _sessionItems.find(s => s.session_id === newSid);
+        if (entry && _wsSelState.current) {
+            entry.project = { path: _wsSelState.current.path, name: _wsSelState.current.name };
+        }
+        _sessionGroupMode = 'project';
+        _renderSessionList();
+        _revealActiveSession();
+        // newChat() fired refreshWorkspaceSelector() before this bind existed;
+        // that in-flight GET could resolve late and reset the label to default.
+        // Re-sync from the backend (now bound) so the final label is correct.
+        refreshWorkspaceSelector();
+    } catch (e) { _wsToast(String(e.message || e)); }
 }
 
 // =====================================================================
@@ -5006,17 +6190,25 @@ function _restoreSessionPanel() {
     }
 }
 
+// Swap the native `title` for the CSS tooltip so hints appear instantly
+// instead of waiting for the browser's built-in delay.
+function _setBtnTooltip(el, text) {
+    if (!el) return;
+    el.setAttribute('data-tooltip', text);
+    el.removeAttribute('title');
+}
+
 function _applyInputTooltips() {
     const set = (id, key, pos) => {
         const el = document.getElementById(id);
         if (!el) return;
-        el.setAttribute('data-tooltip', t(key));
-        el.removeAttribute('title');
+        _setBtnTooltip(el, t(key));
         if (pos) el.setAttribute('data-tooltip-pos', pos);
     };
     set('new-chat-btn', 'tip_new_chat');
     set('clear-context-btn', 'tip_clear_context');
     set('attach-btn', 'tip_attach');
+    set('steer-btn', 'steer_active');
     set('session-toggle-btn', 'session_history', 'bottom');
     set('workspace-toggle-btn', 'ws_toggle', 'bottom');
     // Optimize / mic buttons carry state-dependent tooltips managed in their
@@ -5024,51 +6216,41 @@ function _applyInputTooltips() {
     // tooltip follows the current locale.
     set('optimize-btn', 'optimize_idle_title');
     set('mic-btn', 'mic_idle_title');
+    // Send button only carries a tooltip while it acts as the cancel button.
+    _setBtnTooltip(sendBtn, sendBtnMode === 'cancel' ? t('tip_cancel') : '');
+    // The permission / model chips carry translated labels and tooltips, so they
+    // are repainted here too (this runs on every language switch).
+    _renderPermissionChip();
+    _renderModelChip();
 }
 
+// A session that exists in the browser but not yet in the database: the user
+// pressed "new chat" and has not sent the first message. Rendered from the same
+// path as real sessions so it lands in the right group.
 function _addOptimisticSessionItem(sid) {
     const container = document.getElementById('session-list');
-    if (!container || !sid) return;
+    if (!container) return;
+    if (!sid || _sessionItems.some(s => s.session_id === sid)) return;
 
-    // Deduplicate: if an item for sid already exists, activate it without duplicating
-    const existing = container.querySelector(`.session-item[data-session-id="${sid}"]`);
-    if (existing) {
-        document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
-        existing.classList.add('active');
-        return;
+    _sessionItems.unshift({
+        session_id: sid,
+        title: t('new_chat'),
+        last_active: Math.floor(Date.now() / 1000),
+        pinned: 0,
+        // The fresh session inherits the workspace the selector currently shows.
+        project: _wsSelState.current
+            ? { path: _wsSelState.current.path, name: _wsSelState.current.name }
+            : null,
+    });
+    // Make sure the space the new session lands in is expanded, otherwise a
+    // collapsed group (default space included) would hide the new conversation.
+    const spaceKey = _wsSelState.current ? _wsSelState.current.path : DEFAULT_SPACE_KEY;
+    if (_collapsedProjects.has(spaceKey)) {
+        _collapsedProjects.delete(spaceKey);
+        _saveCollapsed(_collapsedProjects);
     }
-
-    const emptyEl = container.querySelector('.session-empty');
-    if (emptyEl) emptyEl.remove();
-
-    document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
-
-    const todayLabel = t('today');
-    let firstGroup = container.querySelector('.session-group-label');
-    if (!firstGroup || firstGroup.textContent !== todayLabel) {
-        const header = document.createElement('div');
-        header.className = 'session-group-label';
-        header.textContent = todayLabel;
-        container.prepend(header);
-        firstGroup = header;
-    }
-
-    const title = t('new_chat');
-    const item = document.createElement('div');
-    item.className = 'session-item active';
-    item.dataset.sessionId = sid;
-    item.innerHTML = `
-        <i class="fas fa-message session-icon"></i>
-        <span class="session-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
-        <button class="session-rename" onclick="event.stopPropagation(); renameSession('${sid}')" title="${escapeHtml(t('rename_session'))}">
-            <i class="fas fa-pen"></i>
-        </button>
-        <button class="session-delete" onclick="event.stopPropagation(); deleteSession('${sid}')" title="Delete">
-            <i class="fas fa-trash-can"></i>
-        </button>
-    `;
-    item.addEventListener('click', () => switchSession(sid));
-    firstGroup.insertAdjacentElement('afterend', item);
+    _renderSessionList();
+    _revealActiveSession();
 }
 
 function _sessionTimeGroup(ts) {
@@ -5085,6 +6267,30 @@ let _sessionPage = 1;
 let _sessionHasMore = false;
 let _sessionLoading = false;
 const _SESSION_PAGE_SIZE = 50;
+
+// Every session loaded so far, in backend order (pinned first, then recency).
+// Kept as data rather than only as DOM because grouping by project reorders the
+// whole list, which cannot be done by appending page by page.
+let _sessionItems = [];
+// 'time' (今天/昨天/更早, the behavior before projects existed) or 'project'.
+// The backend decides, based on how many spaces are in use across all sessions.
+let _sessionGroupMode = 'time';
+// User-chosen order of project spaces (paths + '__default__'), from the backend.
+let _projectOrder = [];
+// Sentinel the backend uses for the default workspace in the ordering.
+const DEFAULT_SPACE_KEY = '__default__';
+
+// Which project groups are collapsed, persisted per-browser so the choice
+// survives reloads. Keyed by space key (project path or the default sentinel).
+const _COLLAPSED_KEY = 'cow_collapsed_projects';
+function _loadCollapsed() {
+    try { return new Set(JSON.parse(localStorage.getItem(_COLLAPSED_KEY) || '[]')); }
+    catch (e) { return new Set(); }
+}
+function _saveCollapsed(set) {
+    try { localStorage.setItem(_COLLAPSED_KEY, JSON.stringify([...set])); } catch (e) {}
+}
+let _collapsedProjects = _loadCollapsed();
 
 function loadSessionList(onDone) {
     const container = document.getElementById('session-list');
@@ -5132,52 +6338,19 @@ function _fetchSessionPage(page, clear, onDone) {
             _sessionLoading = false;
             if (data.status !== 'success') return;
 
-            if (clear) container.innerHTML = '';
+            if (clear) _sessionItems = [];
 
             const sessions = (data.sessions || []).filter(s => !s.session_id.startsWith('team_'));
             _sessionPage = page;
             _sessionHasMore = !!data.has_more;
+            _sessionGroupMode = data.group_mode === 'project' ? 'project' : 'time';
+            if (Array.isArray(data.project_order)) _projectOrder = data.project_order;
 
-            if (sessions.length === 0 && page === 1) {
-                container.innerHTML = '<div class="session-empty">' + t('untitled_session') + '</div>';
-                if (typeof onDone === 'function') onDone();
-                return;
-            }
-
-            // Track last group label already in the container
-            const existingLabels = container.querySelectorAll('.session-group-label');
-            let lastGroup = existingLabels.length > 0
-                ? existingLabels[existingLabels.length - 1].textContent
-                : '';
-
+            const seen = new Set(_sessionItems.map(s => s.session_id));
             sessions.forEach(s => {
-                const group = _sessionTimeGroup(s.last_active);
-                if (group !== lastGroup) {
-                    lastGroup = group;
-                    const header = document.createElement('div');
-                    header.className = 'session-group-label';
-                    header.textContent = group;
-                    container.appendChild(header);
-                }
-
-                const item = document.createElement('div');
-                const isActive = s.session_id === sessionId;
-                item.className = 'session-item' + (isActive ? ' active' : '');
-                item.dataset.sessionId = s.session_id;
-
-                const title = s.title || t('untitled_session');
-                item.innerHTML = `
-                    <i class="fas fa-message session-icon"></i>
-                    <span class="session-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
-                    <button class="session-rename" onclick="event.stopPropagation(); renameSession('${s.session_id}')" title="${escapeHtml(t('rename_session'))}">
-                        <i class="fas fa-pen"></i>
-                    </button>
-                    <button class="session-delete" onclick="event.stopPropagation(); deleteSession('${s.session_id}')" title="Delete">
-                        <i class="fas fa-trash-can"></i>
-                    </button>
-                `;
-                item.addEventListener('click', () => switchSession(s.session_id));
-                container.appendChild(item);
+                if (seen.has(s.session_id)) return;
+                seen.add(s.session_id);
+                _sessionItems.push(s);
             });
 
             const hasActiveInList = sessions.some(s => s.session_id === sessionId);
@@ -5185,6 +6358,7 @@ function _fetchSessionPage(page, clear, onDone) {
                 _addOptimisticSessionItem(sessionId);
             }
 
+            _renderSessionList();
             if (typeof onDone === 'function') onDone();
         })
         .catch(() => { _sessionLoading = false; });
@@ -5292,6 +6466,334 @@ function switchTeamSession(teamId, teamName) {
     renderSessionsList();
 }
 window.switchTeamSession = switchTeamSession;
+// Split the loaded sessions into ordered, labelled groups.
+//
+// Time mode keeps the original today/yesterday/earlier buckets, with one
+// addition: pinned conversations move into a group of their own at the top,
+// because a pin that stayed inside its date bucket would not be findable.
+// Project mode groups by workspace instead, and pins float to the top of their
+// own project - that is where the user filed them.
+function _sessionGroups() {
+    const groups = [];
+    const bucket = (key, label, icon, hint, isProject) => {
+        let g = groups.find(x => x.key === key);
+        if (!g) { g = { key, label, icon, hint, isProject, items: [] }; groups.push(g); }
+        return g;
+    };
+
+    if (_sessionGroupMode === 'project') {
+        // `_sessionItems` is already pinned-first / newest-first, so appending in
+        // order gives each project the same ordering for free.
+        _sessionItems.forEach(s => {
+            const key = s.project ? s.project.path : DEFAULT_SPACE_KEY;
+            const name = s.project ? s.project.name : t('ws_default_workspace');
+            const icon = s.project ? 'fa-folder' : 'fa-house';
+            bucket(key, name, icon, s.project ? s.project.path : '', !!s.project).items.push(s);
+        });
+        // Sort groups by the user's chosen order. Group order must be
+        // independent of the session array order: creating a new chat unshifts
+        // a session to the top, which would otherwise float its project group
+        // to the front. Groups without a saved position fall back to their
+        // "birth time" (earliest session created_at/last_active) — a stable key
+        // an optimistic (now-timestamped) session never changes.
+        const rank = new Map(_projectOrder.map((k, i) => [k, i]));
+        const birthOf = g => Math.min.apply(null, g.items.map(s => s.created_at || s.last_active || 0));
+        const birth = new Map(groups.map(g => [g.key, birthOf(g)]));
+        groups.sort((a, b) => {
+            const ra = rank.has(a.key) ? rank.get(a.key) : Infinity;
+            const rb = rank.has(b.key) ? rank.get(b.key) : Infinity;
+            if (ra !== rb) return ra - rb;
+            return (birth.get(a.key) || 0) - (birth.get(b.key) || 0);
+        });
+        return groups;
+    }
+
+    const pinned = _sessionItems.filter(s => s.pinned);
+    if (pinned.length) {
+        bucket('__pinned__', t('session_pinned_group'), 'fa-thumbtack', '', false).items.push(...pinned);
+    }
+    _sessionItems.filter(s => !s.pinned).forEach(s => {
+        const label = _sessionTimeGroup(s.last_active);
+        bucket('time:' + label, label, '', '', false).items.push(s);
+    });
+    return groups;
+}
+
+function _renderSessionList() {
+    const container = document.getElementById('session-list');
+    if (!container) return;
+
+    if (!_sessionItems.length) {
+        container.innerHTML = '<div class="session-empty">' + t('untitled_session') + '</div>';
+        return;
+    }
+
+    container.innerHTML = '';
+    const projectMode = _sessionGroupMode === 'project';
+    // Indent sessions under their project header when several projects are
+    // shown, so the list reads as a tree aligned to the folder icon above.
+    const indentItems = projectMode && _sessionGroups().length > 1;
+    _sessionGroups().forEach(group => {
+        const collapsed = projectMode && _collapsedProjects.has(group.key);
+        const header = document.createElement('div');
+        header.className = 'session-group-label' + (projectMode ? ' session-group-project' : '');
+        if (group.hint) header.title = group.hint;
+
+        if (projectMode) {
+            // A collapsible, draggable project header. The default space has no
+            // rename/delete actions (there is no record to edit) but still drags.
+            header.draggable = true;
+            header.dataset.spaceKey = group.key;
+            const isDefault = group.key === DEFAULT_SPACE_KEY;
+            // "New chat" starts a fresh conversation inside this space. The
+            // default space passes null (no project binding); a project passes
+            // its path so the new chat lands under it.
+            const newArg = isDefault ? 'null' : `'${_wsAttr(group.key)}'`;
+            const newBtn = `
+                <button class="session-group-action" data-tip-float data-tooltip="${escapeHtml(t('project_new_chat'))}" data-tooltip-pos="top"
+                        onclick="event.stopPropagation(); newChatInSpace(${newArg})">
+                    <i class="fas fa-plus"></i>
+                </button>`;
+            const manageBtns = isDefault ? '' : `
+                <button class="session-group-action" data-tip-float data-tooltip="${escapeHtml(t('project_rename'))}" data-tooltip-pos="top"
+                        onclick="event.stopPropagation(); renameProject('${_wsAttr(group.key)}','${_wsAttr(group.label)}')">
+                    <i class="fas fa-pen"></i>
+                </button>
+                <button class="session-group-action" data-tip-float data-tooltip="${escapeHtml(t('project_delete'))}" data-tooltip-pos="top"
+                        onclick="event.stopPropagation(); deleteProject('${_wsAttr(group.key)}','${_wsAttr(group.label)}')">
+                    <i class="fas fa-trash-can"></i>
+                </button>`;
+            const actions = newBtn + manageBtns;
+            header.innerHTML = `
+                <i class="fas fa-chevron-down session-group-caret ${collapsed ? 'collapsed' : ''}"></i>
+                <i class="fas ${group.icon} session-group-icon"></i>
+                <span class="session-group-name">${escapeHtml(group.label)}</span>
+                <span class="session-group-count">${group.items.length}</span>
+                <span class="session-group-actions">${actions}</span>`;
+            header.addEventListener('click', () => _toggleProjectCollapse(group.key));
+            _wireGroupDrag(header, group.key);
+        } else if (group.icon) {
+            header.innerHTML = `<i class="fas ${group.icon}"></i><span>${escapeHtml(group.label)}</span>`;
+        } else {
+            header.textContent = group.label;
+        }
+        container.appendChild(header);
+
+        if (!collapsed) {
+            group.items.forEach(s => container.appendChild(_sessionItemEl(s, indentItems)));
+        }
+    });
+}
+
+function _toggleProjectCollapse(key) {
+    if (_collapsedProjects.has(key)) _collapsedProjects.delete(key);
+    else _collapsedProjects.add(key);
+    _saveCollapsed(_collapsedProjects);
+    _renderSessionList();
+}
+
+// Which space (project path or the default sentinel) a session is filed under.
+function _sessionSpaceKey(s) {
+    return s && s.project ? s.project.path : DEFAULT_SPACE_KEY;
+}
+
+// Make the currently-active session visible in the list: expand its space if
+// collapsed, re-render if needed, then scroll the active item into view. Called
+// after new chat / switch session / project switch so the user always sees
+// which conversation is selected. No-op when the panel is closed or the active
+// session isn't in the loaded list.
+function _revealActiveSession() {
+    if (!sessionPanelOpen) return;
+    const active = _sessionItems.find(s => s.session_id === sessionId);
+    if (!active) return;
+
+    // Expand the active session's group if the user (or a stale state) collapsed it.
+    if (_sessionGroupMode === 'project') {
+        const key = _sessionSpaceKey(active);
+        if (_collapsedProjects.has(key)) {
+            _collapsedProjects.delete(key);
+            _saveCollapsed(_collapsedProjects);
+            _renderSessionList();
+        }
+    }
+
+    // Scroll after layout settles so getBoundingClientRect is accurate. Use
+    // 'center' so a newly created project (which lands at the bottom of the
+    // list) is clearly brought into view rather than just peeking at the edge.
+    requestAnimationFrame(() => {
+        const el = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
+        if (el) el.scrollIntoView({ block: 'center' });
+    });
+}
+
+// --- Project group drag-to-reorder -------------------------------------------
+let _dragSpaceKey = null;
+
+function _wireGroupDrag(header, key) {
+    header.addEventListener('dragstart', (e) => {
+        _dragSpaceKey = key;
+        header.classList.add('dragging');
+        try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', key); } catch (err) {}
+    });
+    header.addEventListener('dragend', () => {
+        _dragSpaceKey = null;
+        header.classList.remove('dragging');
+        document.querySelectorAll('.session-group-project.drop-target')
+            .forEach(el => el.classList.remove('drop-target'));
+    });
+    header.addEventListener('dragover', (e) => {
+        if (_dragSpaceKey === null || _dragSpaceKey === key) return;
+        e.preventDefault();
+        header.classList.add('drop-target');
+    });
+    header.addEventListener('dragleave', () => header.classList.remove('drop-target'));
+    header.addEventListener('drop', (e) => {
+        e.preventDefault();
+        header.classList.remove('drop-target');
+        if (_dragSpaceKey === null || _dragSpaceKey === key) return;
+        _reorderSpace(_dragSpaceKey, key);
+    });
+}
+
+// Move `fromKey` to sit just before `beforeKey`, then persist the new order.
+function _reorderSpace(fromKey, beforeKey) {
+    // Start from the currently displayed group order so dragging is stable even
+    // when some spaces have no saved position yet.
+    const current = _sessionGroups().map(g => g.key);
+    const order = current.filter(k => k !== fromKey);
+    const idx = order.indexOf(beforeKey);
+    if (idx < 0) order.push(fromKey);
+    else order.splice(idx, 0, fromKey);
+
+    _projectOrder = order;
+    _renderSessionList();
+
+    fetch('/api/projects/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order }),
+    }).catch(() => {});
+}
+
+// Rename a project (display name only; the folder on disk is untouched).
+function renameProject(path, currentName) {
+    showPromptModal(t('project_rename_title'), currentName, (name) => {
+        if (name === null) return;
+        fetch('/api/projects/manage', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, name }),
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status !== 'success') { _wsToast(data.message || t('session_settings_failed')); return; }
+                loadSessionList();
+                // Keep the composer's recents in sync with the sidebar change.
+                refreshWorkspaceSelector();
+            })
+            .catch(() => _wsToast(t('session_settings_failed')));
+    });
+}
+
+// Delete a project record. Only the CowAgent record is removed; files stay and
+// bound sessions revert to the default workspace.
+function deleteProject(path, name) {
+    showConfirmModal(
+        t('project_delete_title'),
+        t('project_delete_confirm').replace('{name}', name || path),
+        () => {
+            fetch('/api/projects/manage', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path }),
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status !== 'success') { _wsToast(data.message || t('session_settings_failed')); return; }
+                    loadSessionList();
+                    // Keep the composer's recents in sync with the sidebar change.
+                    refreshWorkspaceSelector();
+                })
+                .catch(() => _wsToast(t('session_settings_failed')));
+        }
+    );
+}
+
+function _sessionItemEl(s, indent) {
+    const item = document.createElement('div');
+    const isActive = s.session_id === sessionId;
+    item.className = 'session-item' + (isActive ? ' active' : '') + (s.pinned ? ' pinned' : '')
+        + (indent ? ' session-item-indent' : '');
+    item.dataset.sessionId = s.session_id;
+
+    const title = s.title || t('untitled_session');
+    const sid = _wsAttr(s.session_id);
+    item.innerHTML = `
+        <i class="fas ${s.pinned ? 'fa-thumbtack' : 'fa-message'} session-icon"></i>
+        <span class="session-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+        <button class="session-pin" onclick="event.stopPropagation(); toggleSessionPin('${sid}')"
+                title="${escapeHtml(t(s.pinned ? 'unpin_session' : 'pin_session'))}">
+            <i class="fas fa-thumbtack"></i>
+        </button>
+        <button class="session-rename" onclick="event.stopPropagation(); renameSession('${sid}')" title="${escapeHtml(t('rename_session'))}">
+            <i class="fas fa-pen"></i>
+        </button>
+        <button class="session-delete" onclick="event.stopPropagation(); deleteSession('${sid}')" title="Delete">
+            <i class="fas fa-trash-can"></i>
+        </button>
+    `;
+    item.addEventListener('click', () => switchSession(s.session_id));
+    return item;
+}
+
+// Pin / unpin, then re-render so the conversation moves to its new place.
+// Reorder loaded sessions to match the backend's ordering (pinned first, then
+// most-recently-active), so an optimistic pin/unpin lands in the right place
+// without waiting for a reload. Stable within each bucket.
+function _sortSessionItems() {
+    _sessionItems.sort((a, b) => {
+        const pa = a.pinned ? 1 : 0;
+        const pb = b.pinned ? 1 : 0;
+        if (pa !== pb) return pb - pa;
+        return (b.last_active || 0) - (a.last_active || 0);
+    });
+}
+
+function toggleSessionPin(sid) {
+    const entry = _sessionItems.find(s => s.session_id === sid);
+    if (!entry) return;
+    const pinned = !entry.pinned;
+
+    // Move it optimistically: the reorder is the whole point of the click, and
+    // the list is re-rendered from this same data anyway. Pinning must also
+    // reorder `_sessionItems` — the group renderer relies on the array already
+    // being pinned-first, so flipping only the flag would leave a just-pinned
+    // chat sitting in place (especially inside a project group).
+    entry.pinned = pinned ? 1 : 0;
+    _sortSessionItems();
+    _renderSessionList();
+
+    fetch(`/api/sessions/${encodeURIComponent(sid)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned }),
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') return;
+            // Most often an empty brand-new chat: it has no row to pin until the
+            // first message is stored.
+            _wsToast(data.message || t('session_settings_failed'));
+            entry.pinned = pinned ? 0 : 1;
+            _sortSessionItems();
+            _renderSessionList();
+        })
+        .catch(() => {
+            entry.pinned = pinned ? 0 : 1;
+            _sortSessionItems();
+            _renderSessionList();
+        });
+}
 
 function _onSessionListScroll() {
     if (!_sessionHasMore || _sessionLoading) return;
@@ -5319,7 +6821,7 @@ function _onSessionListScroll() {
 // Returning to a session whose reply is still streaming in the background.
 // Close the background EventSource, rebuild the bubble from the buffered
 // events (snapshot), then resume live streaming via a fresh connection that
-// reads the remaining tail from the backend queue. Returns true if a stream
+// reads the remaining tail from the backend replay log. Returns true if a stream
 // was re-attached. The user's own bubble is already in history (persisted
 // eagerly), so it was rendered by loadHistory before this runs.
 function _reattachStream(sid) {
@@ -5332,7 +6834,7 @@ function _reattachStream(sid) {
     // persisted and rendered by loadHistory — re-attaching would duplicate it.
     // Just clean up the buffer/cursor and rely on history.
     const finished = buffer.items.some(
-        it => it.type === 'done' || it.type === 'error'
+        it => it.type === 'stream_end' || it.type === 'error' || it.type === 'resync_required'
     );
     if (finished) {
         const oldEs = activeStreams[requestId];
@@ -5343,9 +6845,16 @@ function _reattachStream(sid) {
         return false;
     }
 
-    // Stop the background stream so the rebuilt one is the sole consumer of
-    // the backend queue (the queue survives until "done", so the new
-    // connection picks up any remaining events).
+    // done already exists in persistent history. Keep the background tail
+    // connected for voice_attach/stream_end, but do not replay the answer into
+    // the freshly loaded history view or it would create a duplicate bubble.
+    if (buffer.items.some(it => it.type === 'done')) {
+        resetSendBtnSendMode();
+        return false;
+    }
+
+    // Stop the background connection before rebuilding. Each new connection
+    // resumes independently from its last accepted sequence number.
     const oldEs = activeStreams[requestId];
     if (oldEs) { try { oldEs.close(); } catch (_) {} delete activeStreams[requestId]; }
 
@@ -5369,6 +6878,10 @@ function switchSession(newSessionId) {
 
     _saveSessionId(newSessionId);
     updateEditButtonsState();
+    refreshWorkspaceSelector();
+    refreshSessionSettings();
+    // Reset the file/preview panel so it reflects the new session's root.
+    if (typeof wsOnSessionSwitch === 'function') wsOnSessionSwitch();
 
     historyPage = 0;
     historyHasMore = false;
@@ -5392,6 +6905,8 @@ function switchSession(newSessionId) {
     document.querySelectorAll('.session-item').forEach(el => {
         el.classList.toggle('active', el.dataset.sessionId === sessionId);
     });
+    // Expand the target session's group (if collapsed) and scroll it into view.
+    _revealActiveSession();
 
     if (_isMobileView()) closeSessionPanel();
     if (currentView !== 'chat') navigateTo('chat');
@@ -5434,6 +6949,17 @@ function renameSession(sid) {
         input.replaceWith(span);
     };
 
+    // Undo the optimistic rename in both the DOM and the cached entry.
+    const revert = () => {
+        const cachedEntry = _sessionItems.find(s => s.session_id === sid);
+        if (cachedEntry) cachedEntry.title = oldTitle;
+        const span = item.querySelector('.session-title');
+        if (span) {
+            span.title = oldTitle;
+            span.textContent = oldTitle;
+        }
+    };
+
     const commit = () => {
         if (done) return;
         const newTitle = input.value.trim();
@@ -5441,8 +6967,11 @@ function renameSession(sid) {
             restore(oldTitle);
             return;
         }
-        // Optimistically show the new title, then persist.
+        // Optimistically show the new title, then persist. The cached entry is
+        // updated too, or the next re-render (a pin, say) would revive the old one.
         restore(newTitle);
+        const cached = _sessionItems.find(s => s.session_id === sid);
+        if (cached) cached.title = newTitle;
         fetch(`/api/sessions/${encodeURIComponent(sid)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -5450,22 +6979,9 @@ function renameSession(sid) {
         })
             .then(r => r.json())
             .then(data => {
-                if (data.status !== 'success') {
-                    // Revert UI on failure
-                    const span = item.querySelector('.session-title');
-                    if (span) {
-                        span.title = oldTitle;
-                        span.textContent = oldTitle;
-                    }
-                }
+                if (data.status !== 'success') revert();
             })
-            .catch(() => {
-                const span = item.querySelector('.session-title');
-                if (span) {
-                    span.title = oldTitle;
-                    span.textContent = oldTitle;
-                }
-            });
+            .catch(revert);
     };
 
     input.addEventListener('keydown', (e) => {
@@ -5556,6 +7072,48 @@ function showConfirmModal(title, message, onConfirm) {
     });
 }
 
+// A confirm modal with a single text input. Calls onSubmit(value) on OK, and
+// does nothing on cancel. Mirrors showConfirmModal's look and lifecycle.
+function showPromptModal(title, initialValue, onSubmit) {
+    let overlay = document.getElementById('confirm-modal-overlay');
+    if (overlay) overlay.remove();
+
+    overlay = document.createElement('div');
+    overlay.id = 'confirm-modal-overlay';
+    overlay.className = 'confirm-overlay';
+
+    const modal = document.createElement('div');
+    modal.className = 'confirm-modal';
+    modal.innerHTML = `
+        <div class="confirm-title">${escapeHtml(title)}</div>
+        <input type="text" class="prompt-modal-input" maxlength="100" />
+        <div class="confirm-actions">
+            <button class="confirm-btn confirm-btn-cancel">${t('confirm_cancel')}</button>
+            <button class="confirm-btn confirm-btn-ok">${t('confirm_yes')}</button>
+        </div>
+    `;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const input = modal.querySelector('.prompt-modal-input');
+    input.value = initialValue || '';
+    requestAnimationFrame(() => { overlay.classList.add('visible'); input.focus(); input.select(); });
+
+    const close = () => {
+        overlay.classList.remove('visible');
+        setTimeout(() => overlay.remove(), 200);
+    };
+    const submit = () => { const v = input.value.trim(); close(); onSubmit(v); };
+
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    modal.querySelector('.confirm-btn-cancel').addEventListener('click', close);
+    modal.querySelector('.confirm-btn-ok').addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); close(); }
+    });
+}
+
 function clearContext() {
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/clear_context`, { method: 'POST' })
         .then(r => r.json())
@@ -5622,6 +7180,82 @@ function formatToolArgs(args) {
     }
 }
 
+const SUBSTEP_ARGS_CHARS = 90;
+
+/** Tool arguments on one line, for a step in a list of dozens. */
+function summarizeToolArgs(args) {
+    if (!args || typeof args !== 'object') return '';
+    const parts = [];
+    for (const [key, value] of Object.entries(args)) {
+        const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        parts.push(`${key}=${text}`);
+    }
+    const joined = parts.join(', ');
+    return joined.length > SUBSTEP_ARGS_CHARS
+        ? joined.slice(0, SUBSTEP_ARGS_CHARS) + '…'
+        : joined;
+}
+
+/**
+ * Add or settle one step inside a sub agent's card.
+ *
+ * Silent when the card is gone: a sub agent cancelled on timeout keeps working
+ * until its next checkpoint, and steps that arrive after its card closed
+ * describe work nobody is waiting on any more.
+ */
+function renderSubagentStep(toolEl, item) {
+    if (!toolEl || !item.step_id) return;
+    const section = toolEl.querySelector('.tool-substeps-section');
+    const list = toolEl.querySelector('.tool-substeps');
+    if (!section || !list) return;
+
+    let stepEl = list.querySelector(`[data-step-id="${CSS.escape(item.step_id)}"]`);
+    if (!stepEl) {
+        if (item.phase !== 'start') return;
+        stepEl = document.createElement('div');
+        stepEl.className = 'tool-substep';
+        stepEl.dataset.stepId = item.step_id;
+        stepEl.innerHTML = `
+            <i class="fas fa-circle-notch fa-spin tool-substep-icon"></i>
+            <span class="tool-substep-name">${escapeHtml(item.tool || 'tool')}</span>
+            <span class="tool-substep-args">${escapeHtml(summarizeToolArgs(item.arguments))}</span>
+            <span class="tool-substep-time"></span>`;
+        list.appendChild(stepEl);
+        section.classList.remove('hidden');
+        // The first step is also the first sign of life from a sub agent that
+        // runs for minutes, so it opens the card it belongs to.
+        toolEl.classList.add('expanded');
+        updateSubstepCount(toolEl, list.children.length);
+        return;
+    }
+
+    if (item.phase !== 'end') return;
+    const isError = item.status && item.status !== 'success';
+    const icon = stepEl.querySelector('.tool-substep-icon');
+    if (icon) {
+        icon.className = isError
+            ? 'fas fa-times tool-substep-icon tool-substep-failed'
+            : 'fas fa-check tool-substep-icon';
+    }
+    const timeEl = stepEl.querySelector('.tool-substep-time');
+    if (timeEl && item.execution_time) timeEl.textContent = `${item.execution_time}s`;
+    if (item.error) {
+        // A step that failed says so where it happened; the sub agent's report
+        // covers what the successful ones found.
+        const argsEl = stepEl.querySelector('.tool-substep-args');
+        if (argsEl) {
+            argsEl.textContent = String(item.error);
+            argsEl.classList.add('tool-substep-failed');
+        }
+        stepEl.title = String(item.error);
+    }
+}
+
+function updateSubstepCount(toolEl, count) {
+    const countEl = toolEl.querySelector('.tool-substep-count');
+    if (countEl) countEl.textContent = count === 1 ? '1 step' : `${count} steps`;
+}
+
 function scrollChatToBottom(force) {
     if (force || _autoScrollEnabled) {
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -5658,6 +7292,8 @@ let configApiKeys = {};
 let configCurrentModel = '';
 let cfgProviderValue = '';
 let cfgModelValue = '';
+let cfgReasoningEffortValue = 'high';
+let configReasoningByModel = {};
 
 // --- Custom dropdown helper ---
 function initDropdown(el, options, selectedValue, onChange, opts) {
@@ -5747,6 +7383,8 @@ function initConfigView(data) {
     configApiBases = data.api_bases || {};
     configApiKeys = data.api_keys || {};
     configCurrentModel = data.model || '';
+    configReasoningByModel = data.reasoning_effort_by_model || {};
+    cfgReasoningEffortValue = data.reasoning_effort || 'high';
 
     const providerEl = document.getElementById('cfg-provider');
     const providerOpts = Object.entries(configProviders).map(([pid, p]) => ({ value: pid, label: localizedLabel(p.label) }));
@@ -5765,7 +7403,19 @@ function initConfigView(data) {
     document.getElementById('cfg-max-tokens').value = data.agent_max_context_tokens || 50000;
     document.getElementById('cfg-max-turns').value = data.agent_max_context_turns || 20;
     document.getElementById('cfg-max-steps').value = data.agent_max_steps || 20;
-    document.getElementById('cfg-enable-thinking').checked = data.enable_thinking === true;
+    const thinkingEl = document.getElementById('cfg-enable-thinking');
+    thinkingEl.checked = data.enable_thinking === true;
+    if (!thinkingEl._cfgReasoningBound) {
+        thinkingEl.addEventListener('change', syncReasoningEffortOptions);
+        thinkingEl._cfgReasoningBound = true;
+    }
+    const customModelEl = document.getElementById('cfg-model-custom');
+    if (customModelEl && !customModelEl._cfgReasoningBound) {
+        customModelEl.addEventListener('input', syncReasoningEffortOptions);
+        customModelEl._cfgReasoningBound = true;
+    }
+    syncReasoningEffortOptions();
+    document.getElementById('cfg-subagent').checked = data.subagent_enabled !== false;
     document.getElementById('cfg-self-evolution').checked = data.self_evolution_enabled === true;
 
     // Reflect the current UI language (already resolved, may include the user's
@@ -5780,7 +7430,21 @@ function initConfigView(data) {
         );
     }
 
-    // Multi-user mode: grey out the web_password field entirely
+    // Default permission mode for new conversations. Applied on pick, like the
+    // language selector: the card's save button belongs to the password field,
+    // and a security default that silently waited for a save would be worse than
+    // one that takes effect immediately.
+    const permEl = document.getElementById('cfg-permission');
+    if (permEl) {
+        const offered = data.permission_modes && data.permission_modes.length
+            ? data.permission_modes
+            : Object.keys(PERMISSION_META);
+        const permOpts = Object.keys(PERMISSION_META)
+            .filter(mode => offered.includes(mode))
+            .map(mode => ({ value: mode, label: t(PERMISSION_META[mode].key) }));
+        initDropdown(permEl, permOpts, data.agent_permission_mode || 'full-access', saveGlobalPermission);
+    }
+
     const pwdInput = document.getElementById('cfg-password');
     const pwdSaveBtn = document.getElementById('cfg-password-save');
     const pwdHint = document.querySelector('#cfg-password')?.closest('div')?.querySelector('.cfg-hint');
@@ -5867,6 +7531,11 @@ function onProviderChange(pid) {
     const keyField = p.api_key_field;
     const keyWrap = document.getElementById('cfg-api-key-wrap');
     const keyInput = document.getElementById('cfg-api-key');
+
+    // Only LinkAI (an aggregation platform) gets a link to its console for
+    // managing the aggregated key; other providers manage keys on their sites.
+    const cfgManageKey = document.getElementById('cfg-manage-key');
+    if (cfgManageKey) cfgManageKey.classList.toggle('hidden', cfgProviderValue !== 'linkai');
     if (keyField) {
         keyWrap.classList.remove('hidden');
         keyInput.classList.add('cfg-key-masked');
@@ -5919,6 +7588,7 @@ function onProviderChange(pid) {
     }
 
     onModelSelectChange(modelOpts[0] ? modelOpts[0].value : '');
+    syncReasoningEffortOptions();
 }
 
 function onModelSelectChange(val) {
@@ -5931,6 +7601,7 @@ function onModelSelectChange(val) {
         customWrap.classList.add('hidden');
         document.getElementById('cfg-model-custom').value = '';
     }
+    syncReasoningEffortOptions();
 }
 
 function syncModelSelection(model) {
@@ -5952,6 +7623,48 @@ function syncModelSelection(model) {
         document.getElementById('cfg-model-custom-wrap').classList.remove('hidden');
         document.getElementById('cfg-model-custom').value = model;
     }
+    syncReasoningEffortOptions();
+}
+
+function syncReasoningEffortOptions() {
+    const wrap = document.getElementById('cfg-reasoning-effort-wrap');
+    const el = document.getElementById('cfg-reasoning-effort');
+    if (!wrap || !el) return;
+
+    const provider = configProviders[cfgProviderValue] || {};
+    const selectedModel = getSelectedModel();
+    const reasoningByModel = provider.reasoning_by_model || {};
+    const reasoning = reasoningByModel[selectedModel] || provider.reasoning || {};
+    const options = reasoning.supported ? (reasoning.options || []) : [];
+    const thinkingEl = document.getElementById('cfg-enable-thinking');
+
+    if (options.length) {
+        const values = options.map(opt => opt.value);
+        // Prefer this model's own saved effort (per-model config) so switching
+        // vendors never reinterprets a value set for a different model. Key is
+        // the lowercased model name, matching the backend resolve path.
+        const savedForModel = configReasoningByModel[`${cfgProviderValue}:${selectedModel.trim().toLowerCase()}`]
+            || configReasoningByModel[cfgProviderValue + ':' + selectedModel];
+        const saved = savedForModel || cfgReasoningEffortValue;
+        // Fall back to the active model's native enum when the saved value is
+        // not valid here. Resolved even while hidden so a save never writes
+        // another model's enum under this model's key.
+        cfgReasoningEffortValue = values.includes(saved) ? saved : (reasoning.default || options[0].value);
+    }
+
+    // Effort only shapes a thinking pass, so the field follows the toggle.
+    if (!thinkingEl || !thinkingEl.checked || !options.length) {
+        wrap.classList.add('hidden');
+        return;
+    }
+
+    wrap.classList.remove('hidden');
+    initDropdown(
+        el,
+        options.map(opt => ({ value: opt.value, label: opt.label || opt.value })),
+        cfgReasoningEffortValue,
+        (val) => { cfgReasoningEffortValue = val; }
+    );
 }
 
 function getSelectedModel() {
@@ -6052,11 +7765,17 @@ function saveModelConfig() {
 }
 
 function saveAgentConfig() {
+    const effortKey = `${cfgProviderValue}:${getSelectedModel().trim().toLowerCase()}`;
+    const mergedEffortByModel = Object.assign({}, configReasoningByModel, { [effortKey]: cfgReasoningEffortValue });
     const updates = {
         agent_max_context_tokens: parseInt(document.getElementById('cfg-max-tokens').value) || 50000,
         agent_max_context_turns: parseInt(document.getElementById('cfg-max-turns').value) || 20,
         agent_max_steps: parseInt(document.getElementById('cfg-max-steps').value) || 20,
         enable_thinking: document.getElementById('cfg-enable-thinking').checked,
+        // Persist effort per model (merge with the existing map so other
+        // models' saved efforts survive the flat config save).
+        reasoning_effort_by_model: mergedEffortByModel,
+        subagent_enabled: document.getElementById('cfg-subagent').checked,
         self_evolution_enabled: document.getElementById('cfg-self-evolution').checked,
     };
 
@@ -6070,6 +7789,9 @@ function saveAgentConfig() {
     .then(r => r.json())
     .then(data => {
         if (data.status === 'success') {
+            // Reflect the merged map so a later model switch shows/uses the
+            // just-saved value instead of a stale in-memory one.
+            configReasoningByModel = mergedEffortByModel;
             showStatus('cfg-agent-status', 'config_saved', false);
         } else {
             showStatus('cfg-agent-status', 'config_save_error', true);
@@ -6077,6 +7799,26 @@ function saveAgentConfig() {
     })
     .catch(() => showStatus('cfg-agent-status', 'config_save_error', true))
     .finally(() => { btn.disabled = false; });
+}
+
+// Persist the instance-wide default permission mode. Sessions that never pinned
+// their own follow it, so the composer chip is refreshed afterwards.
+function saveGlobalPermission(mode) {
+    fetch('/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates: { agent_permission_mode: mode } })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showStatus('cfg-password-status', 'config_saved', false);
+            refreshSessionSettings();
+        } else {
+            showStatus('cfg-password-status', 'config_save_error', true);
+        }
+    })
+    .catch(() => showStatus('cfg-password-status', 'config_save_error', true));
 }
 
 function savePasswordConfig() {
@@ -6315,6 +8057,28 @@ function switchMemoryTab(tab) {
     loadMemoryView(1);
 }
 
+// Tracks whether the "模型配置" tab has fetched its data at least once, so we
+// only hit /api/models when the user actually opens that tab.
+let _configModelsLoaded = false;
+
+function switchConfigTab(tab) {
+    document.querySelectorAll('.config-tab').forEach(el => el.classList.remove('active'));
+    const tabBtn = document.getElementById('config-tab-' + tab);
+    if (tabBtn) tabBtn.classList.add('active');
+
+    const basicPanel = document.getElementById('config-panel-basic');
+    const modelsPanel = document.getElementById('config-panel-models');
+    if (basicPanel) basicPanel.classList.toggle('hidden', tab !== 'basic');
+    if (modelsPanel) modelsPanel.classList.toggle('hidden', tab !== 'models');
+
+    if (tab === 'models' && !_configModelsLoaded) {
+        // Lazy-load the advanced vendor/capability data on first open only;
+        // afterwards the rendered content persists in the DOM.
+        loadModelsView();
+        _configModelsLoaded = true;
+    }
+}
+
 function loadMemoryView(page) {
     page = page || 1;
     memoryPage = page;
@@ -6538,7 +8302,7 @@ function loadModelsView(opts) {
     const preserveScroll = !!(opts && opts.preserveScroll);
     // The Models pane has its own scrollable container; capture its position
     // (not window.scrollY) so we can put the user back exactly where they were.
-    const scroller = document.querySelector('#view-models .overflow-y-auto');
+    const scroller = document.querySelector('#view-config .overflow-y-auto');
     const savedTop = preserveScroll && scroller ? scroller.scrollTop : null;
 
     loading.classList.remove('hidden');
@@ -6597,6 +8361,11 @@ function renderVendorsSection() {
                 <h3 class="font-semibold text-slate-800 dark:text-slate-100">${t('models_section_vendors')}</h3>
                 <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">${t('models_section_vendors_desc')}</p>
             </div>
+            <button onclick="openVendorModal('')"
+                    class="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                           bg-primary-500 hover:bg-primary-600 text-white cursor-pointer transition-colors duration-150">
+                <i class="fas fa-plus text-[10px]"></i>${t('models_add_vendor')}
+            </button>
         </div>`;
 
     let body;
@@ -6604,10 +8373,6 @@ function renderVendorsSection() {
         body = `
             <div class="flex flex-col items-center justify-center py-8 px-4 rounded-lg border border-dashed border-slate-200 dark:border-white/10">
                 <p class="text-sm text-slate-500 dark:text-slate-400 text-center">${t('models_not_configured')}</p>
-                <button onclick="openVendorModal('')"
-                        class="mt-3 px-3 py-1.5 rounded-lg text-xs font-medium bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 hover:bg-primary-100 dark:hover:bg-primary-900/50 cursor-pointer transition-colors">
-                    <i class="fas fa-plus text-[10px] mr-1"></i>${t('models_add_vendor')}
-                </button>
             </div>`;
     } else {
         body = `<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -7873,6 +9638,12 @@ function fillVendorModalForProvider(providerId) {
     if (!meta) return;
     document.getElementById('vendor-modal-title').textContent = localizedLabel(meta.label);
     document.getElementById('vendor-modal-subtitle').textContent = meta.id;
+
+    // LinkAI aggregates many vendors, so only for it do we surface a link to its
+    // console for creating/managing the aggregated key. Other providers manage
+    // their keys on their own sites.
+    const manageKey = document.getElementById('vendor-modal-manage-key');
+    if (manageKey) manageKey.classList.toggle('hidden', meta.id !== 'linkai');
 
     // ----- API Base -----
     // Always reflect the *current effective* base as the input value so the
@@ -9422,11 +11193,19 @@ navigateTo = function(viewId) {
     // Stop log stream when leaving logs view
     if (currentView === 'logs' && viewId !== 'logs') stopLogStream();
 
+    // Back-compat: the standalone "models" view is now a tab inside "config".
+    // Redirect any legacy navigateTo('models') to config + models tab.
+    if (viewId === 'models') {
+        _origNavigateTo('config');
+        loadConfigView();
+        switchConfigTab('models');
+        return;
+    }
+
     _origNavigateTo(viewId);
 
     // Lazy-load view data
-    if (viewId === 'config') loadConfigView();
-    else if (viewId === 'models') loadModelsView();
+    if (viewId === 'config') { loadConfigView(); switchConfigTab('basic'); }
     else if (viewId === 'skills') loadSkillsView();
     else if (viewId === 'memory') {
         document.getElementById('memory-panel-viewer').classList.add('hidden');
@@ -10194,6 +11973,30 @@ function bindKnowledgeLinks(container, currentFilePath) {
     });
 }
 
+// Rewrite <img> srcs that are relative to the knowledge doc's directory into
+// /api/file URLs, mirroring bindKnowledgeLinks for links. Runs on rendered
+// DOM, so markdown syntax quoted inside code blocks is never touched. The
+// lightbox onclick that renderMarkdown attached reads this.src at click time,
+// so rewriting src alone keeps zoom working.
+function bindKnowledgeImages(container, baseDir) {
+    if (!baseDir) return;
+    container.querySelectorAll('img').forEach(img => {
+        const src = img.getAttribute('src');
+        // Remote / data / site-absolute srcs resolve on their own.
+        if (!src || /^(?:[a-z][\w+.-]*:|\/)/i.test(src)) return;
+        const combined = `${baseDir}/${src.split('?')[0]}`;
+        const segments = [];
+        for (const seg of combined.split('/')) {
+            if (seg === '..') segments.pop();
+            else if (seg !== '.' && seg !== '') segments.push(seg);
+        }
+        // baseDir is an absolute posix path, so restore the leading slash the
+        // split() dropped — /api/file rejects non-absolute paths.
+        const resolved = (combined.startsWith('/') ? '/' : '') + segments.join('/');
+        img.src = '/api/file?path=' + encodeURIComponent(resolved);
+    });
+}
+
 function openKnowledgeFile(path, title) {
     _knowledgeCurrentFile = path;
     // Update active state in tree via data-path
@@ -10214,6 +12017,7 @@ function openKnowledgeFile(path, title) {
         viewer.classList.remove('hidden');
         applyHighlighting(viewer);
         bindKnowledgeLinks(bodyEl, path);
+        bindKnowledgeImages(bodyEl, data.dir);
 
         // Mobile: hide sidebar, show content
         if (window.innerWidth < 768) {
@@ -10297,7 +12101,13 @@ function renderKnowledgeGraph(container, nodes, links) {
     const width = container.clientWidth;
     const height = container.clientHeight || 600;
 
-    const categories = [...new Set(nodes.map(n => n.category))];
+    // Order categories by node count so the dominant cluster gets the most
+    // salient palette entry. Ties break by name to keep colors stable.
+    const catCount = {};
+    nodes.forEach(n => { catCount[n.category] = (catCount[n.category] || 0) + 1; });
+    const categories = Object.keys(catCount).sort(
+        (a, b) => catCount[b] - catCount[a] || a.localeCompare(b)
+    );
     const colorScale = d3.scaleOrdinal(d3.schemeTableau10).domain(categories);
 
     // Connection count for sizing
@@ -10886,6 +12696,8 @@ function initApp() {
     applyI18n();
     _applyInputTooltips();
     _restoreSessionPanel();
+    refreshWorkspaceSelector();
+    refreshSessionSettings();
 
     fetch('/api/knowledge/list').then(r => r.json()).then(data => {
         if (data.status === 'success') {

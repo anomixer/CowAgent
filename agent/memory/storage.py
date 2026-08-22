@@ -5,16 +5,24 @@ Provides vector and keyword search capabilities
 """
 
 from __future__ import annotations
+
+import hashlib
+import json
 import os
 import re
 import sqlite3
-import json
-import hashlib
 import threading
 import time
-from typing import List, Dict, Optional, Any
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from agent.memory.vector_backend import (
+    SQLiteVectorBackend,
+    VectorBackend,
+    VectorRecord,
+)
+
 try:
     import numpy as np
     _HAS_NUMPY = True
@@ -104,15 +112,23 @@ class SearchResult:
 class MemoryStorage:
     """SQLite-based storage with FTS5 for keyword search"""
     
-    def __init__(self, db_path: Path):
+    def __init__(
+        self,
+        db_path: Path,
+        vector_backend: Optional[VectorBackend] = None,
+    ):
         self.db_path = db_path
         self.conn: Optional[sqlite3.Connection] = None
+        self.vector_backend = vector_backend
         self.fts5_available = False  # Track FTS5 availability
         # RLock protects concurrent writes from the same process.
         # SQLite WAL mode handles read/write concurrency at the file level,
         # but same-process concurrent writes still need a Python-level lock.
         self._lock = threading.RLock()
         self._init_db()
+        if self.vector_backend is None:
+            assert self.conn is not None
+            self.vector_backend = SQLiteVectorBackend(self.conn)
     
     def _check_fts5_support(self) -> bool:
         """Check if SQLite has FTS5 support"""
@@ -148,8 +164,28 @@ class MemoryStorage:
           - FTS5-only damage is repaired later from the chunks table.
           - Real corruption quarantines the file so it stays recoverable.
           - Transient failures (locked, disk I/O) are logged and ignored.
+
+        ``PRAGMA integrity_check`` is a full page-by-page scan (FTS5 indexes
+        included). On a large DB sitting on a network filesystem (e.g. an NFS
+        PVC) it can take tens of seconds, and it runs on *every* open — i.e. on
+        every session's agent init — which dominates first-message latency.
+        It is therefore skipped by default: genuine b-tree corruption already
+        surfaces as a DatabaseError when the connection is opened
+        (see ``_init_db`` -> ``_quarantine_and_recreate``), and FTS5 shadow-table
+        damage is caught independently by ``_fts5_shadow_corrupt`` /
+        ``_trigram_shadow_corrupt`` right before use. Set
+        ``memory_integrity_check: true`` in config.json to force the full scan
+        (e.g. for a one-off diagnostic run).
         """
         from common.log import logger
+        try:
+            from config import conf
+            if not conf().get("memory_integrity_check", False):
+                return
+        except Exception:
+            # No config available (tests / standalone) — keep the historical
+            # behaviour of running the check rather than silently skipping it.
+            pass
         try:
             rows = self.conn.execute("PRAGMA integrity_check").fetchall()
             report = "\n".join(str(r[0]) for r in rows).strip()
@@ -360,6 +396,12 @@ class MemoryStorage:
                         tokenize='trigram case_sensitive 0'
                     )
                 """)
+                # Migrate legacy chunks_trigram_au triggers created by older
+                # versions. They used a bare "UPDATE chunks_fts_trigram SET ..."
+                # that corrupts the trigram index on chunk updates. Drop it so
+                # the CREATE TRIGGER IF NOT EXISTS below installs the fixed
+                # delete+insert version. Dropping a trigger touches no data.
+                self._migrate_legacy_trigram_update_trigger()
                 self.conn.execute("""
                     CREATE TRIGGER IF NOT EXISTS chunks_trigram_ai
                     AFTER INSERT ON chunks BEGIN
@@ -373,13 +415,18 @@ class MemoryStorage:
                         DELETE FROM chunks_fts_trigram WHERE rowid = old.rowid;
                     END
                 """)
+                # External-content FTS5 requires the delete+insert pattern on
+                # UPDATE: a bare "UPDATE chunks_fts_trigram SET ..." leaves the
+                # old tokens in the index and corrupts the trigram shadow tables
+                # ("database disk image is malformed"). The special 'delete'
+                # command removes the old row's tokens using its previous text.
                 self.conn.execute("""
                     CREATE TRIGGER IF NOT EXISTS chunks_trigram_au
                     AFTER UPDATE ON chunks BEGIN
-                        UPDATE chunks_fts_trigram
-                        SET text=new.text, id=new.id, user_id=new.user_id,
-                            path=new.path, source=new.source, scope=new.scope
-                        WHERE rowid = new.rowid;
+                        INSERT INTO chunks_fts_trigram(chunks_fts_trigram, rowid, text, id, user_id, path, source, scope)
+                        VALUES ('delete', old.rowid, old.text, old.id, old.user_id, old.path, old.source, old.scope);
+                        INSERT INTO chunks_fts_trigram(rowid, text, id, user_id, path, source, scope)
+                        VALUES (new.rowid, new.text, new.id, new.user_id, new.path, new.source, new.scope);
                     END
                 """)
                 # One-time backfill for existing rows.
@@ -417,6 +464,33 @@ class MemoryStorage:
         """)
 
         self.conn.commit()
+
+    def _migrate_legacy_trigram_update_trigger(self):
+        """Replace the legacy chunks_trigram_au trigger if present.
+
+        Older versions synced updates with a bare
+        "UPDATE chunks_fts_trigram SET ...", which corrupts the external-content
+        trigram index on chunk updates. We detect that shape via the stored
+        trigger SQL, drop it (dropping a trigger touches no data), and flag a
+        trigram rebuild so any already-damaged index is repaired below.
+        """
+        try:
+            row = self.conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name='chunks_trigram_au'"
+            ).fetchone()
+        except Exception:
+            return
+        if not row or not row[0]:
+            return
+        if "UPDATE chunks_fts_trigram" in row[0]:
+            from common.log import logger
+            logger.warning(
+                "[MemoryStorage] Replacing legacy chunks_trigram_au trigger and "
+                "rebuilding the trigram index."
+            )
+            self.conn.execute("DROP TRIGGER IF EXISTS chunks_trigram_au")
+            self._trigram_needs_rebuild = True
 
     def _fts5_state_inconsistent(self) -> bool:
         """Detect a half-broken FTS5 setup (e.g. trigger exists but table doesn't)."""
@@ -570,13 +644,18 @@ class MemoryStorage:
             chunk.id, chunk.user_id, chunk.scope, chunk.team_id,
             chunk.source, chunk.path,
             chunk.start_line, chunk.end_line, chunk.text,
-            self._encode_embedding(chunk.embedding),
+            None,
             chunk.hash,
             json.dumps(chunk.metadata) if chunk.metadata else None,
         )
         with self._lock:
-            self.conn.execute(_SQL, params)
-            self.conn.commit()
+            try:
+                self.conn.execute(_SQL, params)
+                self.vector_backend.upsert([self._to_vector_record(chunk)])
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def save_chunks_batch(self, chunks: List[MemoryChunk]):
         """Save multiple chunks in a batch (insert or update by id).
@@ -614,15 +693,22 @@ class MemoryStorage:
             (
                 c.id, c.user_id, c.scope, c.team_id, c.source, c.path,
                 c.start_line, c.end_line, c.text,
-                self._encode_embedding(c.embedding),
+                None,
                 c.hash,
                 json.dumps(c.metadata) if c.metadata else None,
             )
             for c in chunks
         ]
         with self._lock:
-            self.conn.executemany(_SQL, params_list)
-            self.conn.commit()
+            try:
+                self.conn.executemany(_SQL, params_list)
+                self.vector_backend.upsert([
+                    self._to_vector_record(chunk) for chunk in chunks
+                ])
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
     
     def get_chunk(self, chunk_id: str) -> Optional[MemoryChunk]:
         """Get a chunk by ID"""
@@ -644,25 +730,71 @@ class MemoryStorage:
         shared_user_ids: Optional[List[int]] = None,
         team_ids: Optional[List[int]] = None
     ) -> List[SearchResult]:
-        """
-        Vector similarity search using numpy-vectorized cosine similarity.
-        All embeddings are loaded then scored in a single BLAS matrix-vector
-        multiply, which is ~100x faster than the pure-Python per-row loop.
+        """Vector similarity search over the configured vector backend.
 
-        When shared_user_ids is provided (knowledge sharing enabled), chunks
-        belonging to those users are also included in the search scope.
+        Single-user case (shared + own): routed through the pluggable
+        ``vector_backend.search``.
 
-        When team_ids is provided, chunks belonging to those teams
-        (scope='team', team_id IN team_ids) are also included.
+        When ``shared_user_ids`` is provided (knowledge sharing enabled) or
+        ``team_ids`` is provided (team memory, scope='team' AND team_id IN
+        team_ids), the OR-joined conditions are not expressible in the
+        backend's single-column filter grammar, so they use a direct SQL path.
         """
         if scopes is None:
             scopes = ["shared"]
             if user_id:
                 scopes.append("user")
-            if team_ids:
-                if "team" not in scopes:
-                    scopes.append("team")
+        if team_ids:
+            if "team" not in scopes:
+                scopes.append("team")
+        # Multi-user scoping (team memory, or memory shared from other users)
+        # is not expressible in the vector backend's single-column filter
+        # grammar, so it keeps the direct SQL path. The common single-user
+        # case (shared + own) uses the pluggable backend.
+        if team_ids or shared_user_ids:
+            return self._search_vector_multiuser(
+                query_embedding, user_id, scopes, limit,
+                shared_user_ids, team_ids,
+            )
 
+        metadata_filter = {"scopes": scopes}
+        if user_id:
+            metadata_filter["user_id"] = user_id
+        matches = self.vector_backend.search(
+            query_embedding,
+            limit=limit,
+            metadata_filter=metadata_filter,
+        )
+        return [
+            SearchResult(
+                path=match.metadata["path"],
+                start_line=match.metadata["start_line"],
+                end_line=match.metadata["end_line"],
+                score=match.score,
+                snippet=self._truncate_text(match.metadata["text"], 500),
+                source=match.metadata["source"],
+                user_id=match.metadata.get("user_id"),
+            )
+            for match in matches
+        ]
+
+    
+    def _search_vector_multiuser(
+        self,
+        query_embedding: List[float],
+        user_id: Optional[str],
+        scopes: List[str],
+        limit: int,
+        shared_user_ids: Optional[List[int]],
+        team_ids: Optional[List[int]],
+    ) -> List[SearchResult]:
+        """Vector search with multi-user scoping (team + shared-from-others).
+
+        Kept as a direct SQL path: the OR-joined team/shared conditions are
+        not expressible in ``VectorBackend.search``'s single-column filter
+        grammar. The common single-user case (shared + own) goes through the
+        pluggable backend.
+        """
         scope_placeholders = ','.join('?' * len(scopes))
         params = list(scopes)
 
@@ -777,7 +909,8 @@ class MemoryStorage:
                 )
                 for sim, row in scored[:limit]
             ]
-    
+
+
     def search_keyword(
         self,
         query: str,
@@ -1004,9 +1137,14 @@ class MemoryStorage:
     def delete_by_path(self, path: str):
         """Delete all chunks and file metadata for a path."""
         with self._lock:
-            self.conn.execute("DELETE FROM chunks WHERE path = ?", (path,))
-            self.conn.execute("DELETE FROM files WHERE path = ?", (path,))
-            self.conn.commit()
+            try:
+                self.vector_backend.delete(metadata_filter={"path": path})
+                self.conn.execute("DELETE FROM chunks WHERE path = ?", (path,))
+                self.conn.execute("DELETE FROM files WHERE path = ?", (path,))
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def get_file_hash(self, path: str) -> Optional[str]:
         """Get stored file hash"""
@@ -1065,15 +1203,21 @@ class MemoryStorage:
     # Helper methods
 
     @staticmethod
-    def _encode_embedding(embedding: Optional[List[float]]) -> Optional[bytes]:
-        """Encode embedding as float32 BLOB bytes (~6x smaller and faster than JSON).
-        Falls back to struct.pack when numpy is unavailable."""
-        if embedding is None:
-            return None
-        if _HAS_NUMPY:
-            return np.array(embedding, dtype=np.float32).tobytes()
-        import struct
-        return struct.pack(f'{len(embedding)}f', *embedding)
+    def _to_vector_record(chunk: MemoryChunk) -> VectorRecord:
+        return VectorRecord(
+            id=chunk.id,
+            embedding=chunk.embedding,
+            metadata={
+                "user_id": chunk.user_id,
+                "scope": chunk.scope,
+                "source": chunk.source,
+                "path": chunk.path,
+                "start_line": chunk.start_line,
+                "end_line": chunk.end_line,
+                "text": chunk.text,
+                "metadata": chunk.metadata,
+            },
+        )
 
     @staticmethod
     def _decode_embedding(raw) -> Optional[List[float]]:

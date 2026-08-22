@@ -14,6 +14,7 @@ from typing import Dict, Any
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from agent.tools.bash import background, exit_codes
+from agent.tools.bash.decode import decode_output
 from agent.tools.utils.truncate import truncate_tail, format_size, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES
 from common.log import logger
 from common.utils import expand_path
@@ -39,9 +40,9 @@ class Bash(BaseTool):
     MAX_TIMEOUT = 600
 
     name: str = "bash"
-    description: str = f"""Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last {DEFAULT_MAX_LINES} lines or {DEFAULT_MAX_BYTES // 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file.
+    description: str = f"""Execute a {'command' if _IS_WIN else 'bash command'} in the current working directory. Returns stdout and stderr. Output is truncated to last {DEFAULT_MAX_LINES} lines or {DEFAULT_MAX_BYTES // 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file.
 {'''
-PLATFORM: Windows (cmd.exe). Do NOT use Unix-only commands like head, tail, sed, awk. To search file contents or find files by name, use the search_files tool instead of this command.
+PLATFORM: Windows (cmd.exe), not Bash, WSL, PowerShell, or Windows Terminal. Use cmd.exe syntax: double quotes (single quotes are literal), `>nul 2>&1` instead of `/dev/null`, `&&` instead of `;`, and `findstr /I "pattern"` without grep-style `-i`/`-e` flags. Do not invoke `bash script.sh` or use Unix-only commands such as grep, head, tail, sed, or awk. Use the search_files tool for file/content search and Python for portable scripting.
 ''' if _IS_WIN else ''}
 ENVIRONMENT: All API keys from env_config are auto-injected. Use $VAR_NAME directly.
 
@@ -85,18 +86,37 @@ SAFETY:
         self.default_timeout = self.config.get("timeout", self.DEFAULT_TIMEOUT)
         # Enable safety mode by default (can be disabled in config)
         self.safety_mode = self.config.get("safety_mode", True)
+        # Keep the template with the {cwd} placeholder so the description can be
+        # re-rendered when the working directory changes (e.g. opening a project).
+        self._description_template = self.description
         # Desktop runs on the user's own machine (often non-technical users),
         # so require explicit confirmation for destructive ops outside the workspace.
         if os.environ.get("COW_DESKTOP") == "1":
-            self.description = self.description.replace(
+            self._description_template = self._description_template.replace(
                 "- For destructive commands out of workspace ({cwd}), explain and confirm first",
                 "- For delete or destructive operations on files out of workspace ({cwd}), "
                 "be cautious and confirm with the user before executing, unless the user explicitly requested it",
             )
         # Show the concrete workspace path so the model knows what "the workspace" is
-        self.description = self.description.replace(
-            "{cwd}", self.cwd
-        )
+        self.description = self._description_template.replace("{cwd}", self.cwd)
+
+    def set_cwd(self, cwd: str) -> None:
+        """Retarget the working directory and re-render the description.
+
+        Called when the session opens a project directory so both the execution
+        cwd and the path shown in the tool description follow the project.
+        """
+        if not cwd:
+            return
+        self.cwd = cwd
+        if not os.path.exists(self.cwd):
+            try:
+                os.makedirs(self.cwd, exist_ok=True)
+            except Exception:
+                pass
+        template = getattr(self, "_description_template", None)
+        if template:
+            self.description = template.replace("{cwd}", self.cwd)
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         """
@@ -145,7 +165,13 @@ SAFETY:
         try:
             # Prepare environment with .env file variables
             env = os.environ.copy()
-            
+
+            # Anchor artifact outputs to the workspace/project dir regardless of
+            # any `cd` inside the command, so tools (e.g. image-generation) can
+            # resolve a stable output dir instead of relying on the live cwd.
+            if self.cwd:
+                env["AGENT_WORKSPACE"] = self.cwd
+
             # Load environment variables from ~/.cow/.env if it exists
             env_file = expand_path("~/.cow/.env")
             dotenv_vars = {}
@@ -222,16 +248,19 @@ SAFETY:
                     parts = shlex.split(command)
                     if len(parts) > 0:
                         logger.info(f"[Bash] Retrying with argument list: {parts[:3]}...")
-                        retry_result = subprocess.run(
+                        raw = subprocess.run(
                             parts,
                             cwd=self.cwd,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,
-                            text=True,
-                            encoding="utf-8",
-                            errors="replace",
                             timeout=timeout,
                             env=env
+                        )
+                        from types import SimpleNamespace
+                        retry_result = SimpleNamespace(
+                            returncode=raw.returncode,
+                            stdout=decode_output(raw.stdout),
+                            stderr=decode_output(raw.stderr),
                         )
                         logger.debug(f"[Bash] Retry exit code: {retry_result.returncode}, stdout: {len(retry_result.stdout)}, stderr: {len(retry_result.stderr)}")
                         
@@ -307,6 +336,9 @@ SAFETY:
             is_error, note = exit_codes.interpret(command, result.returncode)
             if is_error:
                 output_text += f"\n\nCommand exited with code {result.returncode}"
+                hint = self._windows_failure_hint(command)
+                if hint:
+                    output_text += f"\n\n{hint}"
                 return ToolResult.fail({
                     "output": output_text,
                     "exit_code": result.returncode,
@@ -374,6 +406,7 @@ SAFETY:
             command,
             shell=True,
             cwd=self.cwd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -416,7 +449,7 @@ SAFETY:
                     raise _Cancelled()
                 if elapsed >= self._PROGRESS_INTERVAL and now - last_reported_at >= self._PROGRESS_INTERVAL:
                     with recent_lock:
-                        snapshot = bytes(recent).decode("utf-8", errors="replace")
+                        snapshot = decode_output(bytes(recent))
                     snapshot = self._redact_progress(snapshot, dotenv_vars)
                     if snapshot and snapshot != last_snapshot:
                         self.report_progress(snapshot)
@@ -434,8 +467,8 @@ SAFETY:
         from types import SimpleNamespace
         return SimpleNamespace(
             returncode=process.returncode,
-            stdout=b"".join(stdout_chunks).decode("utf-8", errors="replace"),
-            stderr=b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+            stdout=decode_output(b"".join(stdout_chunks)),
+            stderr=decode_output(b"".join(stderr_chunks)),
         )
 
     def _kill_process(self, process):
@@ -510,6 +543,38 @@ SAFETY:
             return "This command will shut down or restart the system"
 
         return ""
+
+    @classmethod
+    def _windows_failure_hint(cls, command: str) -> str:
+        """Return focused cmd.exe corrections for detected Unix syntax.
+
+        The hint is intentionally absent for ordinary command failures: only a
+        recognized shell mismatch should add another instruction to the model.
+        """
+        if not cls._IS_WIN:
+            return ""
+
+        lower = command.lower()
+        corrections = []
+        if re.search(r"\bfindstr\b[^\r\n]*(?:^|\s)-[a-z]", lower):
+            corrections.append(
+                'findstr uses /I and a quoted search string, for example '
+                'findstr /I "cow agent"; it does not accept grep-style -i/-e flags'
+            )
+        if "/dev/null" in lower:
+            corrections.append("redirect to nul, for example >nul 2>&1, not /dev/null")
+        if re.search(r"(?:^|[&|()]\s*|\s)(?:bash|sh)\s+\S", lower):
+            corrections.append("do not invoke bash/sh; use a cmd.exe command or a Python script")
+        if re.search(r"'[^'\r\n]*'", command):
+            corrections.append("use double quotes because cmd.exe treats single quotes literally")
+        if re.search(r"(?:^|[&|()]\s*|\s)(?:grep|head|tail|sed|awk)\b", lower):
+            corrections.append("use search_files for file/content search instead of Unix text tools")
+        if ";" in command:
+            corrections.append("chain commands with && instead of ;")
+
+        if not corrections:
+            return ""
+        return "[Windows cmd.exe hint: " + "; ".join(corrections) + ".]"
 
     @staticmethod
     def _convert_env_vars_for_windows(command: str, dotenv_vars: dict) -> str:

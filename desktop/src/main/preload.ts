@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('electronAPI', {
   getBackendPort: () => ipcRenderer.invoke('get-backend-port'),
   getBackendStatus: () => ipcRenderer.invoke('get-backend-status'),
+  getBackendError: () => ipcRenderer.invoke('get-backend-error'),
+  getDataDir: () => ipcRenderer.invoke('get-data-dir') as Promise<string>,
   restartBackend: () => ipcRenderer.invoke('restart-backend'),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   selectFile: (filters?: Electron.FileFilter[]) => ipcRenderer.invoke('select-file', filters),
@@ -10,8 +12,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Each listener registrar returns an unsubscribe fn so renderers can clean
   // up on unmount / effect re-run and avoid accumulating duplicate handlers.
-  onBackendStatus: (callback: (data: { status: string; port?: number; error?: string }) => void) => {
-    const handler = (_event: unknown, data: { status: string; port?: number; error?: string }) => callback(data)
+  onBackendStatus: (
+    callback: (data: { status: string; port?: number; error?: string; code?: string; path?: string }) => void,
+  ) => {
+    const handler = (
+      _event: unknown,
+      data: { status: string; port?: number; error?: string; code?: string; path?: string },
+    ) => callback(data)
     ipcRenderer.on('backend-status', handler)
     return () => ipcRenderer.removeListener('backend-status', handler)
   },
@@ -42,6 +49,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Current app version (e.g. "0.0.5"), shown in the NavRail footer.
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
+  // Launch-at-login toggle (macOS + Windows). get returns the effective state;
+  // set returns the real outcome so the UI can surface refusals/errors.
+  getLoginItemEnabled: () => ipcRenderer.invoke('get-login-item') as Promise<boolean>,
+  setLoginItemEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke('set-login-item', enabled) as Promise<{
+      ok: boolean
+      enabled: boolean
+      error: string
+    }>,
 
   // Themes (bundled + user themes from ~/.cow/themes), assets inlined.
   listThemes: () => ipcRenderer.invoke('themes-list') as Promise<Record<string, unknown>[]>,
@@ -75,6 +92,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: unknown, status: unknown) => callback(status)
     ipcRenderer.on('update-status', handler)
     return () => ipcRenderer.removeListener('update-status', handler)
+  },
+
+  setAppIcon: (iconUrl: string, icoUrl?: string) =>
+    ipcRenderer.invoke('set-app-icon', iconUrl, icoUrl) as Promise<boolean>,
+  setAppTitle: (title: string) => ipcRenderer.invoke('set-app-title', title) as Promise<boolean>,
+
+  // Show a native OS notification; clicking it focuses the window and asks the
+  // renderer (via onOpenSession) to open the given session.
+  notify: (payload: { title?: string; body?: string; sessionId?: string; silent?: boolean }) =>
+    ipcRenderer.invoke('notify', payload) as Promise<boolean>,
+  onOpenSession: (callback: (sessionId: string) => void) => {
+    const handler = (_event: unknown, sessionId: string) => callback(sessionId)
+    ipcRenderer.on('open-session', handler)
+    return () => ipcRenderer.removeListener('open-session', handler)
   },
 
   platform: process.platform,

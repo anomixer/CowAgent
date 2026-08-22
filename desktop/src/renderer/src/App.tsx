@@ -8,10 +8,12 @@ import StatusScreen from './components/StatusScreen'
 import LoginGate from './components/LoginGate'
 import { useBackend } from './hooks/useBackend'
 import { usePlatform } from './hooks/usePlatform'
+import { usePushPoll } from './hooks/usePushPoll'
 import { useUIStore } from './store/uiStore'
 import { useSessionStore } from './store/sessionStore'
 import { useWorkspaceStore } from './store/workspaceStore'
 import WorkspacePanel from './components/WorkspacePanel'
+import Lightbox from './components/Lightbox'
 import { initUpdateListener } from './store/updateStore'
 import { useOnboardingStore } from './store/onboardingStore'
 import OnboardingWizard from './components/OnboardingWizard'
@@ -124,6 +126,18 @@ const App: React.FC = () => {
     }
   }, [backend.status, authState, maybeOpenOnboarding])
 
+  // Poll for scheduler/push messages once the backend and auth are settled.
+  usePushPoll(backend.status === 'ready' && authState === 'ok')
+
+  // A clicked OS notification asks us to open its session.
+  useEffect(() => {
+    const off = window.electronAPI?.onOpenSession?.((sessionId) => {
+      useSessionStore.getState().setActive(sessionId)
+      navigate('/')
+    })
+    return off
+  }, [navigate])
+
   // Subscribe to auto-update status from the main process (no-op in dev).
   useEffect(() => initUpdateListener(), [])
 
@@ -145,7 +159,17 @@ const App: React.FC = () => {
   const handleLangChange = useCallback(() => forceUpdate((n) => n + 1), [])
 
   if (backend.status !== 'ready') {
-    return <StatusScreen status={backend.status} error={backend.error} onRetry={backend.restart} />
+    return (
+      <StatusScreen
+        status={backend.status}
+        error={backend.error}
+        code={backend.code}
+        path={backend.path}
+        slow={backend.slow}
+        reconnecting={backend.reconnecting}
+        onRetry={backend.restart}
+      />
+    )
   }
 
   // Backend is up but we're still resolving auth — keep the loading screen.
@@ -169,6 +193,7 @@ const App: React.FC = () => {
   return (
     <div className="flex h-screen overflow-hidden bg-base text-content">
       {onboardingOpen && <OnboardingWizard onDone={handleLangChange} />}
+      <Lightbox />
       <NavRail onLangChange={handleLangChange} />
 
       {showSessions && <SessionList />}

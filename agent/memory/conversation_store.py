@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     user_id           INTEGER NOT NULL DEFAULT 0,
     created_at        INTEGER NOT NULL,
     last_active       INTEGER NOT NULL,
-    msg_count         INTEGER NOT NULL DEFAULT 0
+    msg_count         INTEGER NOT NULL DEFAULT 0,
+    pinned            INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -69,6 +70,11 @@ ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT '';
 
 _MIGRATION_ADD_CONTEXT_START_SEQ = """
 ALTER TABLE sessions ADD COLUMN context_start_seq INTEGER NOT NULL DEFAULT 0;
+"""
+
+# User-pinned conversations, kept at the top of the session list.
+_MIGRATION_ADD_PINNED = """
+ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
 """
 
 # Generic JSON sidecar for per-message attachments (TTS audio URL, future use).
@@ -195,8 +201,9 @@ def _group_into_display_turns(
     include_thinking: bool = True,
 ) -> List[Dict[str, Any]]:
     """
-    Convert raw (role, content_json, created_at) or (seq, role, content_json, created_at, extras)
-    DB rows into display turns.
+    Convert raw DB rows into display turns. Rows loaded for the web history
+    include ``seq`` as their first field; older callers may still pass the
+    legacy ``(role, content_json, created_at, extras)`` shape.
 
     One display turn = one visible user message  +  one merged assistant reply.
     All intermediate assistant messages (those carrying tool_use) and the final
@@ -212,13 +219,12 @@ def _group_into_display_turns(
     cur_rest: List[tuple] = []
     started = False
 
-    for item in rows:
-        if len(item) == 5:
-            seq, role, raw_content, created_at, raw_extras = item
+    for row in rows:
+        if len(row) == 5:
+            seq, role, raw_content, created_at, raw_extras = row
         else:
-            role, raw_content, created_at, raw_extras = item
             seq = None
-
+            role, raw_content, created_at, raw_extras = row
         try:
             content = json.loads(raw_content)
         except Exception:
@@ -253,10 +259,10 @@ def _group_into_display_turns(
             content, created_at, _u_extras, user_seq = user_row
             text = _extract_display_text(content)
             if text and not _is_internal_user_marker(text):
-                user_turn: Dict[str, Any] = {"role": "user", "content": text, "created_at": created_at}
+                turn = {"role": "user", "content": text, "created_at": created_at}
                 if user_seq is not None:
-                    user_turn["_seq"] = user_seq
-                turns.append(user_turn)
+                    turn["_seq"] = user_seq
+                turns.append(turn)
 
         # Build an ordered list of steps preserving the original sequence:
         #   thinking → content → tool_call → content → ...
@@ -264,6 +270,7 @@ def _group_into_display_turns(
         tool_results: Dict[str, str] = {}
         final_text = ""
         final_ts: Optional[int] = None
+        final_seq: Optional[int] = None
         merged_extras: Dict[str, Any] = {}
         bot_seq: Optional[int] = None
 
@@ -303,6 +310,8 @@ def _group_into_display_turns(
                     steps.append({"type": "content", "content": content.strip()})
                     final_text = content.strip()
                 final_ts = created_at
+                if seq is not None:
+                    final_seq = seq
 
         # Attach tool results to tool steps
         for step in steps:
@@ -335,6 +344,8 @@ def _group_into_display_turns(
                 turn["kind"] = "evolution"
             if merged_extras:
                 turn["extras"] = merged_extras
+            if final_seq is not None:
+                turn["_seq"] = final_seq
             turns.append(turn)
 
     return turns
@@ -1098,11 +1109,17 @@ class ConversationStore:
         page_size: int = 50,
     ) -> Dict[str, Any]:
         """
-        List sessions ordered by last_active DESC, with optional channel_type filter.
+        List sessions with pinned ones first, then last_active DESC, with an
+        optional channel_type filter.
+
+        Pinned sessions sort ahead of everything else rather than only ahead of
+        the rows on the same page, so a pin still reaches the top of the list
+        when the conversation is old enough to sit several pages down.
 
         Returns:
             {
-                "sessions": [{session_id, title, created_at, last_active, msg_count}, ...],
+                "sessions": [{session_id, title, created_at, last_active,
+                              msg_count, pinned}, ...],
                 "total": int,
                 "page": int,
                 "page_size": int,
@@ -1120,10 +1137,10 @@ class ConversationStore:
                     ).fetchone()[0]
                     rows = conn.execute(
                         """
-                        SELECT session_id, title, created_at, last_active, msg_count
+                        SELECT session_id, title, created_at, last_active, msg_count, pinned
                         FROM sessions
                         WHERE channel_type = ? AND session_id NOT LIKE 'team_%'
-                        ORDER BY last_active DESC
+                        ORDER BY pinned DESC, last_active DESC
                         LIMIT ? OFFSET ?
                         """,
                         (channel_type, page_size, (page - 1) * page_size),
@@ -1134,10 +1151,10 @@ class ConversationStore:
                     ).fetchone()[0]
                     rows = conn.execute(
                         """
-                        SELECT session_id, title, created_at, last_active, msg_count
+                        SELECT session_id, title, created_at, last_active, msg_count, pinned
                         FROM sessions
                         WHERE session_id NOT LIKE 'team_%'
-                        ORDER BY last_active DESC
+                        ORDER BY pinned DESC, last_active DESC
                         LIMIT ? OFFSET ?
                         """,
                         (page_size, (page - 1) * page_size),
@@ -1152,6 +1169,7 @@ class ConversationStore:
                 "created_at": r[2],
                 "last_active": r[3],
                 "msg_count": r[4],
+                "pinned": bool(r[5]),
             }
             for r in rows
         ]
@@ -1176,6 +1194,40 @@ class ConversationStore:
                     return cur.rowcount > 0
             finally:
                 conn.close()
+
+    def set_pinned(self, session_id: str, pinned: bool) -> bool:
+        """Pin or unpin a session. Returns True if the session existed."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                with conn:
+                    cur = conn.execute(
+                        "UPDATE sessions SET pinned = ? WHERE session_id = ?",
+                        (1 if pinned else 0, session_id),
+                    )
+                    return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def list_session_ids(self, channel_type: Optional[str] = None) -> List[str]:
+        """Every session id, optionally filtered by channel.
+
+        One cheap single-column scan, used to work out how many distinct project
+        spaces are actually in play without paging through full session rows.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                if channel_type:
+                    rows = conn.execute(
+                        "SELECT session_id FROM sessions WHERE channel_type = ?",
+                        (channel_type,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute("SELECT session_id FROM sessions").fetchall()
+            finally:
+                conn.close()
+        return [r[0] for r in rows]
 
     def get_stats(self) -> Dict[str, Any]:
         """Return basic stats keyed by channel_type, for monitoring."""
@@ -1269,6 +1321,13 @@ class ConversationStore:
                 logger.info("[ConversationStore] Migrated: added context_start_seq column")
             except Exception as e:
                 logger.warning(f"[ConversationStore] Migration (context_start_seq) failed: {e}")
+        if "pinned" not in cols:
+            try:
+                conn.execute(_MIGRATION_ADD_PINNED)
+                conn.commit()
+                logger.info("[ConversationStore] Migrated: added pinned column")
+            except Exception as e:
+                logger.warning(f"[ConversationStore] Migration (pinned) failed: {e}")
 
         msg_cols = {
             row[1]

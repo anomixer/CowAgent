@@ -1,5 +1,6 @@
 # encoding:utf-8
 
+import logging
 import os
 import signal
 import sys
@@ -81,7 +82,18 @@ class ChannelManager:
         with self._lock:
             channels = []
             for name in channel_names:
-                ch = channel_factory.create_channel(name)
+                # One misconfigured channel (e.g. wechatcom_app without its
+                # corp_id/token/aes_key) must not take the whole process down:
+                # instantiating it can raise while parsing config. The web
+                # console in particular has to come up so the desktop shell can
+                # surface the error and let the user fix the config. Skip the
+                # broken channel and keep the rest.
+                try:
+                    ch = channel_factory.create_channel(name)
+                except Exception as e:
+                    logger.error(f"[ChannelManager] Failed to create channel '{name}', skipping it: {e}")
+                    logger.exception(e)
+                    continue
                 ch.cloud_mode = self.cloud_mode
                 self._channels[name] = ch
                 channels.append((name, ch))
@@ -144,6 +156,15 @@ class ChannelManager:
         except Exception as e:
             logger.error(f"[ChannelManager] Channel '{name}' startup error: {e}")
             logger.exception(e)
+            # The desktop client IS the web channel: without it the Electron
+            # shell polls a health endpoint that will never answer and, 90s
+            # later, blames a generic "initialization failed". Exiting non-zero
+            # lets the shell surface the real error immediately. Server
+            # deployments keep the old behavior - other channels may still be
+            # serving, so one broken channel must not take the process down.
+            if DESKTOP_MODE and name == "web":
+                logging.shutdown()
+                os._exit(1)
 
     def stop(self, channel_name: str = None):
         """
@@ -332,6 +353,56 @@ def _warmup_mcp_tools():
             logger.warning(f"[App] MCP warmup failed for '{profile.id}' (non-fatal): {e}")
 
 
+def _preload_heavy_imports():
+    """Resolve the scheduler's import graph on the main thread.
+
+    Python locks imports per module, so two threads walking overlapping graphs
+    in opposite order deadlock outright: the scheduler warmup pulls
+    agent.tools -> requests -> urllib3 while channel creation pulls
+    web_channel -> web -> http.client -> email, and the graphs meet. Desktop
+    mode warms up on a background thread, so its modules must already be in
+    sys.modules before that thread exists - afterwards it only builds objects.
+    """
+    try:
+        from bridge.bridge import Bridge  # noqa: F401
+    except Exception as e:
+        logger.warning(f"[App] Import preload failed (non-fatal): {e}")
+
+
+WEB_STARTUP_TIMEOUT = 25
+
+
+def _start_web_watchdog(timeout: int = WEB_STARTUP_TIMEOUT):
+    """Exit if the web console hasn't bound within ``timeout`` seconds.
+
+    A crash in channel startup already exits, but a *hang* used to leave the
+    process alive forever: the Electron shell waited out its own timeout,
+    blamed a generic "initialization failed", and the wedged backend stayed
+    resident - one more of them per launch attempt. Dumping every thread's
+    stack turns the next such hang into a diagnosable log instead of a guess.
+    """
+    # Resolved here, on the main thread: a background thread must not be the
+    # one to import these (see _preload_heavy_imports).
+    import faulthandler
+    from channel.web.web_channel import SERVING
+
+    def _watch():
+        if SERVING.wait(timeout):
+            return
+        logger.error(
+            f"[App] Web console did not start within {timeout}s, exiting. "
+            "Thread stacks follow:"
+        )
+        try:
+            faulthandler.dump_traceback()
+        except Exception:
+            pass
+        logging.shutdown()
+        os._exit(1)
+
+    threading.Thread(target=_watch, daemon=True).start()
+
+
 def _warmup_scheduler():
     """Eager-init AgentBridge so the scheduler thread starts at process
     boot rather than waiting for the first user message."""
@@ -418,6 +489,52 @@ def _sync_builtin_skills():
         logger.warning(f"[App] Builtin skills sync failed: {e}")
 
 
+def _scaffold_subagent_assets():
+    """Seed every enabled Agent's subagents/ directory with the guide and the
+    example type, so there is something to copy from.
+
+    Only when the feature is on: an install that never enables sub agents
+    should not grow a directory for them. Files are written once rather than
+    synced like skills, so a user who edits or deletes one keeps that choice.
+    """
+    import shutil
+    try:
+        from agent.registry import get_agent_registry
+        from agent.subagent import SubagentSettings
+        from common.runtime_identity import RuntimeIdentity
+        from common.state_dir import subagents_dir
+
+        if not SubagentSettings.from_config().enabled:
+            return
+
+        asset_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "agent", "subagent", "assets"
+        )
+        if not os.path.isdir(asset_dir):
+            return
+
+        for profile in get_agent_registry().list(include_disabled=False):
+            target_dir = subagents_dir(RuntimeIdentity(agent_id=profile.id), ensure=True)
+            written = 0
+            for name in sorted(os.listdir(asset_dir)):
+                src = os.path.join(asset_dir, name)
+                target = target_dir / name
+                if not os.path.isfile(src) or target.exists():
+                    continue
+                try:
+                    shutil.copyfile(src, target)
+                    written += 1
+                except Exception as e:
+                    logger.warning(f"[App] Failed to write sub agent asset '{name}': {e}")
+            if written:
+                logger.info(
+                    f"[App] Seeded {written} sub agent file(s) in workspace of "
+                    f"agent '{profile.id}'"
+                )
+    except Exception as e:
+        logger.warning(f"[App] Sub agent scaffold failed: {e}")
+
+
 def run():
     global _channel_mgr
     try:
@@ -450,6 +567,7 @@ def run():
 
         # Sync builtin skills to workspace before channels start
         _sync_builtin_skills()
+        _scaffold_subagent_assets()
 
         # Kick off MCP server loading in the background so first-message
         # latency isn't dominated by npx package downloads. Skipped in desktop
@@ -461,6 +579,8 @@ def run():
             # Defer the (heavy) AgentBridge/scheduler warmup to a background
             # thread so the web API becomes available within a couple seconds.
             # The scheduler still starts; it just doesn't block UI readiness.
+            _preload_heavy_imports()
+            _start_web_watchdog()
             threading.Thread(target=_warmup_scheduler, daemon=True).start()
         else:
             _warmup_scheduler()
@@ -477,6 +597,12 @@ def run():
     except Exception as e:
         logger.error("App startup failed!")
         logger.exception(e)
+        # Desktop shell reads exit code 0 as a clean shutdown and would spin on
+        # "connecting" until its timeout. Exit non-zero so it surfaces the real
+        # error and offers a retry right away.
+        if DESKTOP_MODE:
+            logging.shutdown()
+            os._exit(1)
 
 
 if __name__ == "__main__":

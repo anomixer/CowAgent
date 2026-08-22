@@ -254,12 +254,25 @@
             ]
           },
           {
+            "tab": "Multi-Agent",
+            "groups": [
+              {
+                "group": "Multi-Agent System",
+                "pages": [
+                  "multi-agent/subagent"
+                ]
+              }
+            ]
+          },
+          {
             "tab": "Releases",
             "groups": [
               {
                 "group": "Release Notes",
                 "pages": [
                   "releases/overview",
+                  "releases/v2.1.7",
+                  "releases/v2.1.6",
                   "releases/v2.1.5",
                   "releases/v2.1.4",
                   "releases/v2.1.3",
@@ -485,12 +498,25 @@
             ]
           },
           {
+            "tab": "多 Agent",
+            "groups": [
+              {
+                "group": "多 Agent 系统",
+                "pages": [
+                  "zh/multi-agent/subagent"
+                ]
+              }
+            ]
+          },
+          {
             "tab": "版本",
             "groups": [
               {
                 "group": "发布记录",
                 "pages": [
                   "zh/releases/overview",
+                  "zh/releases/v2.1.7",
+                  "zh/releases/v2.1.6",
                   "zh/releases/v2.1.5",
                   "zh/releases/v2.1.4",
                   "zh/releases/v2.1.3",
@@ -715,12 +741,25 @@
             ]
           },
           {
+            "tab": "マルチ Agent",
+            "groups": [
+              {
+                "group": "マルチ Agent システム",
+                "pages": [
+                  "ja/multi-agent/subagent"
+                ]
+              }
+            ]
+          },
+          {
             "tab": "リリース",
             "groups": [
               {
                 "group": "リリースノート",
                 "pages": [
                   "ja/releases/overview",
+                  "ja/releases/v2.1.7",
+                  "ja/releases/v2.1.6",
                   "ja/releases/v2.1.5",
                   "ja/releases/v2.1.4",
                   "ja/releases/v2.1.3",

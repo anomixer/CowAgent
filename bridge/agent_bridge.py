@@ -94,17 +94,56 @@ class AgentLLMModel(LLMModel):
         self.bot_type = bot_type
         self._bot = None
         self._bot_model = None
+        # Per-session model override (see agent.workspace.session_prefs). None
+        # on both means "follow the global config", which is what every session
+        # does until the user picks a model for that conversation.
+        self._session_model = None
+        self._session_provider = None
 
     @property
     def model(self):
-        return conf().get("model") or const.DEFAULT_MODEL
+        return self._session_model or conf().get("model") or const.DEFAULT_MODEL
 
     @model.setter
     def model(self, value):
         pass
 
+    def set_session_override(self, provider: Optional[str], model: Optional[str]) -> None:
+        """Pin this session to one model/provider, or clear it with None/None.
+
+        The provider matters as much as the model: without it a session that
+        switches from DeepSeek to Claude would keep routing through the globally
+        configured bot type and ask DeepSeek for a Claude model.
+        """
+        provider = (provider or "").strip() or None
+        model = (model or "").strip() or None
+        if provider == self._session_provider and model == self._session_model:
+            return
+        self._session_provider = provider
+        self._session_model = model
+        # Force the lazy bot to be rebuilt for the new routing on the next call.
+        self._bot = None
+        self._bot_model = None
+        self._bot_type = None
+
+    @staticmethod
+    def provider_to_bot_type(provider_id: str) -> str:
+        """Map a UI provider id onto a bot type, as the models console does."""
+        if not provider_id:
+            return ""
+        # Same mapping the models console persists: "openai" routes through the
+        # OpenAI-compatible bot, not the legacy completion one.
+        if provider_id == "openai":
+            return const.CHATGPT
+        return provider_id
+
     def _resolve_bot_type(self, model_name: str) -> str:
         """Resolve bot type from model name, matching Bridge.__init__ logic."""
+        # A session override wins over every global routing switch, including
+        # use_linkai: the user picked this provider for this conversation.
+        if self._session_provider:
+            return self.provider_to_bot_type(self._session_provider)
+
         if conf().get("use_linkai", False) and conf().get("linkai_api_key"):
             return const.LINKAI
         # Support custom bot type configuration
@@ -129,6 +168,27 @@ class AgentLLMModel(LLMModel):
             if lowered_model.startswith(prefix):
                 return btype
         return const.OPENAI
+
+    def _normalized_reasoning_effort(self):
+        """Return the active model's effort value after config resolution."""
+        from models.reasoning_capabilities import resolve_reasoning_effort
+
+        return resolve_reasoning_effort(
+            self._resolve_bot_type(self.model),
+            self.model,
+            conf().get("reasoning_effort_by_model", {}),
+            conf().get("reasoning_effort", "high"),
+        )
+
+    def _is_thinking_only_model(self) -> bool:
+        """Return True for models that require reasoning to stay enabled."""
+        from models.reasoning_capabilities import get_reasoning_capability
+
+        capability = get_reasoning_capability(
+            self._resolve_bot_type(self.model),
+            self.model,
+        )
+        return bool(capability.get("thinking_only"))
 
     @property
     def bot(self):
@@ -181,15 +241,20 @@ class AgentLLMModel(LLMModel):
                 # quality the thinking pass produces.
                 from config import conf
                 thinking_enabled = bool(conf().get("enable_thinking", False))
+                # Some native-reasoning models reject disabled thinking or use
+                # effort as their only control, so they cannot follow the UI
+                # toggle literally.
+                if self._is_thinking_only_model():
+                    thinking_enabled = True
                 kwargs['thinking'] = (
                     {"type": "enabled"} if thinking_enabled
                     else {"type": "disabled"}
                 )
-                # Reasoning effort is only meaningful when thinking is on.
-                # Bots that don't understand the kwarg drop it silently.
+                # Effort only shapes a thinking pass. Thinking-only models keep
+                # receiving it because they force thinking_enabled above.
                 if thinking_enabled:
-                    effort = conf().get("reasoning_effort", "high")
-                    if effort in ("high", "max"):
+                    effort = self._normalized_reasoning_effort()
+                    if effort:
                         kwargs['reasoning_effort'] = effort
 
                 response = self.bot.call_with_tools(**kwargs)
@@ -243,15 +308,19 @@ class AgentLLMModel(LLMModel):
                 # quality the thinking pass produces.
                 from config import conf
                 thinking_enabled = bool(conf().get("enable_thinking", False))
+                # Keep streaming and non-streaming calls on the same provider
+                # contract for always-thinking models.
+                if self._is_thinking_only_model():
+                    thinking_enabled = True
                 kwargs['thinking'] = (
                     {"type": "enabled"} if thinking_enabled
                     else {"type": "disabled"}
                 )
-                # Reasoning effort is only meaningful when thinking is on.
-                # Bots that don't understand the kwarg drop it silently.
+                # Effort only shapes a thinking pass. Thinking-only models keep
+                # receiving it because they force thinking_enabled above.
                 if thinking_enabled:
-                    effort = conf().get("reasoning_effort", "high")
-                    if effort in ("high", "max"):
+                    effort = self._normalized_reasoning_effort()
+                    if effort:
                         kwargs['reasoning_effort'] = effort
 
                 stream = self.bot.call_with_tools(**kwargs)
@@ -476,8 +545,52 @@ class AgentBridge:
                 self._agent_instances[key] = agent
                 if resolved_agent_id == self.agent_registry.default_agent_id:
                     self.agents[session_id] = agent
+            # Point the working directory at the session's project (if any).
+            # Applied on every fetch, so switching projects — or back to the
+            # default — takes effect on the next message without rebuilding the
+            # agent. Memory/skills stay anchored to the workspace regardless.
+            self._apply_session_project(agent, session_id, resolved_agent_id)
+            # Same idea for the session's model and permission mode: both are
+            # per-conversation overrides that fall back to the global config.
+            self.apply_session_prefs(agent, session_id, resolved_agent_id)
             return agent
 
+    def _apply_session_project(self, agent, session_id: str, agent_id: str) -> None:
+        """Retarget the agent's working directory to the session's project dir.
+
+        A no-op when the session has no project selected (clears any previous
+        override). Failures are swallowed: a bad project setting must not break
+        the chat, it just falls back to the default workspace.
+        """
+        try:
+            from agent.workspace import project_store
+            project_dir = project_store.get_project_dir(session_id, agent_id)
+            if getattr(agent, "apply_project_dir", None):
+                agent.apply_project_dir(project_dir)
+        except Exception as e:
+            logger.debug(f"[AgentBridge] apply_session_project failed: {e}")
+
+    def apply_session_prefs(self, agent, session_id: str, agent_id: str = None) -> None:
+        """Apply a session's model / permission overrides to its agent.
+
+        Called on every agent fetch and right after the user changes a setting,
+        so a switch takes effect on the next message without rebuilding the
+        agent. An empty override resets the agent to the global config, which is
+        what makes "follow global" work after a session had pinned something.
+        """
+        if agent is None or not session_id:
+            return
+        try:
+            from agent.workspace import session_prefs
+
+            prefs = session_prefs.get_prefs(session_id, agent_id)
+            model = getattr(agent, "model", None)
+            if model is not None and hasattr(model, "set_session_override"):
+                model.set_session_override(prefs.get("provider"), prefs.get("model"))
+            if hasattr(agent, "apply_permission_mode"):
+                agent.apply_permission_mode(prefs.get("permission"))
+        except Exception as e:
+            logger.debug(f"[AgentBridge] apply_session_prefs failed: {e}")
 
     def get_cached_agent(self, session_id: str, agent_id: str = None) -> Optional[Agent]:
         """Return an existing session agent without creating one."""
@@ -701,6 +814,11 @@ class AgentBridge:
                     clear_history=clear_history,
                     cancel_event=cancel_event,
                     steer_inbox=steer_inbox,
+                    # A scheduled task may legitimately have nothing to report
+                    # (e.g. "notify me only if the price drops"). Nobody is
+                    # waiting on this run, so an empty answer stays empty and
+                    # the scheduler sends no message at all.
+                    allow_empty_response=bool(context and context.get("is_scheduled_task")),
                 )
             finally:
                 # Clear the mid-run flag so idle scans can review this session.
@@ -772,15 +890,25 @@ class AgentBridge:
             if hasattr(agent, 'stream_executor') and hasattr(agent.stream_executor, 'files_to_send'):
                 files_to_send = agent.stream_executor.files_to_send
                 if files_to_send:
-                    # Send the first file (for now, handle one file at a time)
-                    file_info = files_to_send[0]
-                    logger.info(f"[AgentBridge] Sending file: {file_info.get('path')}")
-                    
+                    logger.info(
+                        f"[AgentBridge] Sending {len(files_to_send)} file(s), "
+                        f"first={files_to_send[0].get('path')}"
+                    )
+
                     # Clear files_to_send for next request
                     agent.stream_executor.files_to_send = []
-                    
-                    # Return file reply based on file type
-                    return self._create_file_reply(file_info, response, context)
+
+                    # The reply pipeline carries one Reply, so the remaining
+                    # files ride along and the channel sends them afterwards.
+                    # Only the first carries the text, or it would repeat.
+                    reply = self._create_file_reply(files_to_send[0], response, context)
+                    extras = [
+                        self._create_file_reply(f, "", context)
+                        for f in files_to_send[1:]
+                    ]
+                    if extras:
+                        reply.extra_replies = extras
+                    return reply
             
             return Reply(ReplyType.TEXT, response)
             
@@ -1036,6 +1164,16 @@ class AgentBridge:
             # The in-memory message list keeps them intact for this run's
             # multi-turn LLM context.
             thinking_enabled = bool(conf().get("enable_thinking", False))
+            if not thinking_enabled:
+                from models.reasoning_capabilities import get_reasoning_capability
+
+                # Thinking-only models need their reasoning trace in stored
+                # history so the next tool-calling turn can echo it back.
+                capability = get_reasoning_capability(
+                    AgentLLMModel(None)._resolve_bot_type(conf().get("model", "")),
+                    conf().get("model", ""),
+                )
+                thinking_enabled = bool(capability.get("thinking_only"))
         except Exception:
             thinking_enabled = False
 

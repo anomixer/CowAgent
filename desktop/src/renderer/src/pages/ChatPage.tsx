@@ -12,12 +12,14 @@ import {
 } from 'lucide-react'
 import MessageBubble from '../components/MessageBubble'
 import ChatInput, { type ChatInputHandle } from '../components/ChatInput'
+import { product } from '@product'
 import { t } from '../i18n'
 import apiClient from '../api/client'
 import type { Attachment, ChatMessage } from '../types'
 import { useChatStore } from '../store/chatStore'
 import { useSessionStore } from '../store/sessionStore'
 import { useUIStore } from '../store/uiStore'
+import { useWorkspaceStore } from '../store/workspaceStore'
 
 interface ChatPageProps {
   baseUrl: string
@@ -57,6 +59,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ baseUrl }) => {
   const ensureSession = useChatStore((s) => s.ensureSession)
   const clearContext = useChatStore((s) => s.clearContext)
   const setSessionsCollapsed = useUIStore((s) => s.setSessionsCollapsed)
+  const wsOnSessionSwitch = useWorkspaceStore((s) => s.onSessionSwitch)
 
   const messages = session?.messages ?? []
   const isStreaming = session?.isStreaming ?? false
@@ -79,6 +82,11 @@ const ChatPage: React.FC<ChatPageProps> = ({ baseUrl }) => {
       loadHistory(activeId, 1)
     }
   }, [activeId, ensureSession, loadHistory])
+
+  // Keep the workspace panel scoped to the active session (project vs default).
+  useEffect(() => {
+    wsOnSessionSwitch(activeId)
+  }, [activeId, wsOnSessionSwitch])
 
   const scrollToBottom = useCallback((smooth = true) => {
     // Defer to the next frame so we read the height *after* the new content has
@@ -170,11 +178,17 @@ const ChatPage: React.FC<ChatPageProps> = ({ baseUrl }) => {
   )
 
   const handleNewChat = useCallback(() => {
+    // Inherit the current session's project so a new chat stays in the same
+    // space; fall back to the default workspace when none is bound.
+    const inherited = useSessionStore.getState().currentProject()
     const id = newSession()
     ensureSession(id)
     loadHistory(id, 1)
-    // Auto-expand the session list so the user sees the new/switched session.
+    // Show the fresh chat in the list immediately (under the inherited space),
+    // and expand the session list so the user sees the new session.
+    useSessionStore.getState().addOptimistic(id, inherited)
     setSessionsCollapsed(false)
+    if (inherited) apiClient.selectProject(id, inherited.path).catch(() => {})
   }, [newSession, ensureSession, loadHistory, setSessionsCollapsed])
 
   const handleClearContext = useCallback(async () => {
@@ -242,7 +256,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ baseUrl }) => {
 
         {isEmpty ? (
           <div data-home className="chat-home flex flex-col items-center justify-center h-full px-6 py-12">
-            <img src="./logo.jpg" alt="CowAgent" className="w-16 h-16 rounded-2xl mb-5 shadow-md" />
+            {product.slots?.HomeLogo ? (
+              <div className="w-16 h-16 rounded-2xl mb-5 shadow-md overflow-hidden">
+                <product.slots.HomeLogo />
+              </div>
+            ) : (
+              <img src="./logo.jpg" alt="CowAgent" className="w-16 h-16 rounded-2xl mb-5 shadow-md" />
+            )}
             <h1 className="text-xl font-semibold text-content mb-2">{t('chat_welcome')}</h1>
             <p className="text-content-tertiary text-sm text-center max-w-md mb-8 leading-relaxed whitespace-pre-line">
               {t('welcome_subtitle')}

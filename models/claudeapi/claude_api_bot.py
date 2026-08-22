@@ -28,6 +28,35 @@ except Exception as e:
 
 user_session = dict()
 
+# Anthropic exposes two mutually exclusive thinking controls. The 4.6
+# generation and newer only accept ``adaptive`` (strength then comes from
+# ``output_config.effort``) and reject ``enabled``; 4.5 and earlier only accept
+# ``enabled`` with an explicit ``budget_tokens`` and reject ``adaptive``.
+ADAPTIVE_THINKING_MODELS = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-mythos-preview",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+)
+
+# Models that only take the ``enabled`` + ``budget_tokens`` form. Checked after
+# ADAPTIVE_THINKING_MODELS, since 4.6-generation names share these prefixes.
+BUDGET_THINKING_MODELS = (
+    "claude-3-7",
+    "claude-opus-4",
+    "claude-sonnet-4",
+    "claude-haiku-4",
+)
+
+# Upper bound for the legacy budget so a large max_tokens does not license an
+# unbounded thinking pass.
+MAX_THINKING_BUDGET = 16000
+
 
 # OpenAI对话模型API (可用)
 class ClaudeAPIBot(Bot, OpenAIImage):
@@ -230,6 +259,38 @@ class ClaudeAPIBot(Bot, OpenAIImage):
         return 8192
 
     @staticmethod
+    def _thinking_params(model: str, thinking: object, max_tokens: int) -> Optional[dict]:
+        """Translate the generic thinking toggle into this model's native shape.
+
+        ``display`` must be requested explicitly: without it the API returns
+        thinking blocks whose ``thinking`` field is empty, carrying only a
+        signature. Returns ``None`` whenever a valid config cannot be built —
+        including for models with no thinking support at all — so the request
+        goes out without the field rather than being rejected.
+        """
+        if not isinstance(thinking, dict):
+            return None
+
+        lowered = (model or "").lower()
+        adaptive = lowered.startswith(ADAPTIVE_THINKING_MODELS)
+        if not adaptive and not lowered.startswith(BUDGET_THINKING_MODELS):
+            return None
+
+        if thinking.get("type") == "disabled":
+            return {"type": "disabled"}
+        if adaptive:
+            return {"type": "adaptive", "display": "summarized"}
+
+        # Legacy models need a budget of at least 1024 that stays below
+        # max_tokens, since thinking tokens count towards the same limit.
+        if not isinstance(max_tokens, int):
+            return None
+        budget = min(max_tokens // 4, MAX_THINKING_BUDGET, max_tokens - 1)
+        if budget < 1024:
+            return None
+        return {"type": "enabled", "budget_tokens": budget}
+
+    @staticmethod
     def _parse_data_url(data_url: str):
         """Parse a data:<mime>;base64,<data> URL into (media_type, base64_data)."""
         m = re.match(r"^data:([^;]+);base64,(.+)$", data_url, re.DOTALL)
@@ -315,7 +376,12 @@ class ClaudeAPIBot(Bot, OpenAIImage):
         Returns:
             Formatted response compatible with OpenAI format or generator for streaming
         """
-        actual_model = self._model_mapping(conf().get("model"))
+        # A per-session model override arrives as kwargs["model"] (see
+        # AgentLLMModel.call_stream). Prefer it over the global config so
+        # switching the model for one chat actually reaches the API; otherwise
+        # a session pinned to another provider's model would be sent here with
+        # the wrong (global) model name.
+        actual_model = self._model_mapping(kwargs.get("model") or conf().get("model"))
 
         # Extract system prompt from messages if present
         system_prompt = kwargs.get("system", conf().get("character_desc", ""))
@@ -339,6 +405,21 @@ class ClaudeAPIBot(Bot, OpenAIImage):
 
         if tools:
             request_params["tools"] = tools
+
+        # Claude exposes effort under output_config rather than the generic
+        # reasoning_effort field used by OpenAI-compatible providers.
+        output_config = dict(kwargs.get("output_config") or {})
+        reasoning_effort = kwargs.get("reasoning_effort")
+        if reasoning_effort:
+            output_config["effort"] = reasoning_effort
+        if output_config:
+            request_params["output_config"] = output_config
+
+        thinking_params = self._thinking_params(
+            actual_model, kwargs.get("thinking"), request_params["max_tokens"]
+        )
+        if thinking_params:
+            request_params["thinking"] = thinking_params
 
         try:
             if stream:
@@ -414,12 +495,15 @@ class ClaudeAPIBot(Bot, OpenAIImage):
 
         # Extract content blocks
         text_content = ""
+        reasoning_content = ""
         tool_calls = []
 
         content_blocks = claude_response.get("content", [])
         for block in content_blocks:
             if block.get("type") == "text":
                 text_content += block.get("text", "")
+            elif block.get("type") == "thinking":
+                reasoning_content += block.get("thinking", "")
             elif block.get("type") == "tool_use":
                 tool_calls.append({
                     "id": block.get("id", ""),
@@ -435,6 +519,8 @@ class ClaudeAPIBot(Bot, OpenAIImage):
             "role": "assistant",
             "content": text_content
         }
+        if reasoning_content:
+            message["reasoning_content"] = reasoning_content
         if tool_calls:
             message["tool_calls"] = tool_calls
 

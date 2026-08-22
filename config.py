@@ -7,6 +7,7 @@ import logging
 import os
 import pickle
 import sys
+import time
 
 from common.log import logger
 from common import i18n
@@ -271,11 +272,28 @@ available_setting = {
     "agent_max_context_tokens": 64000,  # max context tokens in Agent mode
     "agent_max_context_turns": 30,  # max context memory turns in Agent mode
     "agent_max_steps": 30,  # max decision steps per run in Agent mode
+    # Default permission mode for sessions that have not picked one of their own:
+    # "read-only" | "workspace-write" | "full-access". Kept at full-access so an
+    # existing install behaves exactly as before an upgrade. Only a fresh desktop
+    # client (COW_DESKTOP=1 with no config.json yet) is tightened to the stricter
+    # workspace-write in load_config(); docker/source stay at full-access.
+    "agent_permission_mode": "full-access",
+    # In-process sub agents: the Agent hands a self-contained task to a
+    # short-lived worker with its own context, and gets back only the result.
+    # Set enabled to false to withhold the subagent tool entirely.
+    # Types live in <workspace>/subagents/*.md alongside the built-in ones.
+    "subagent": {
+        "enabled": True,
+        "max_depth": 1,          # 1 = only the main Agent may spawn (range 1-5)
+        "max_concurrent": 3,     # parallel sub agents per spawn call (range 1-10)
+        "timeout_seconds": 300,  # budget for one spawn call (range 10-3600)
+    },
     "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models
-    "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
+    "reasoning_effort": "high",  # Provider-native reasoning depth; allowed values depend on the active provider/model
+    "reasoning_effort_by_model": {},  # Per-model effort intent: {"<provider>:<model>": "<value>"}; overrides the global key per model
     "knowledge": True,  # whether to enable the knowledge base feature
     # Self-evolution: review idle conversations to learn memory/skills. Flat keys.
-    "self_evolution_enabled": False,        # switch to enable/disable self-evolution
+    "self_evolution_enabled": True,         # switch to enable/disable self-evolution
     "self_evolution_idle_minutes": 10,      # idle time before a session is reviewed
     "self_evolution_min_turns": 6,          # min user turns (or context pressure) to trigger
     # Deep Dream: nightly memory distillation into MEMORY.md + dream diary.
@@ -392,10 +410,30 @@ def drag_sensitive(config):
 
         elif isinstance(config, dict):
             return _mask_sensitive_recursive(config)
+    except ValueError:
+        # Unparseable config string (e.g. a corrupted config.json). This is
+        # handled and reported by load_config's self-heal path, so don't scare
+        # the log with a full traceback here — just return it unmasked.
+        return config
     except Exception as e:
         logger.exception(e)
         return config
     return config
+
+
+def _quarantine_corrupted_config(config_path):
+    """Move a corrupted config.json aside so startup can reinitialize cleanly.
+
+    Renames the bad file to ``config.json.corrupted-<timestamp>`` (kept for
+    inspection rather than deleted) and never raises: recovery must proceed even
+    if the rename fails, in which case the fresh config is written over it.
+    """
+    try:
+        backup_path = "{}.corrupted-{}".format(config_path, time.strftime("%Y%m%d%H%M%S"))
+        os.replace(config_path, backup_path)
+        logger.warning("[INIT] backed up corrupted config to {}".format(backup_path))
+    except Exception as e:
+        logger.warning("[INIT] failed to back up corrupted config: {}".format(e))
 
 
 def load_config():
@@ -411,7 +449,8 @@ def load_config():
     logger.info("")
     # User config lives in the data root: source deployments use CWD (./), while
     # the desktop build points COW_DATA_DIR at ~/.cow so config survives updates.
-    config_path = os.path.join(get_data_root(), "config.json")
+    user_config_path = os.path.join(get_data_root(), "config.json")
+    config_path = user_config_path
     if not os.path.exists(config_path):
         logger.info("config file not found, falling back to config-template.json")
         config_path = get_config_template_path()
@@ -423,7 +462,39 @@ def load_config():
     # `object_pairs_hook` lets us catch users who accidentally typed the
     # same key twice (e.g. two `"tools"` blocks) — json.loads would
     # otherwise silently drop all but the last occurrence.
-    config = Config(json.loads(config_str, object_pairs_hook=_merge_duplicate_keys))
+    #
+    # Self-heal a corrupted user config.json instead of crashing on startup —
+    # but ONLY for the packaged desktop client (COW_DESKTOP=1). A truncated or
+    # invalid file (e.g. a bad write during a previous update) would otherwise
+    # make json.loads raise and strand the desktop app on "Initialization
+    # Failed" forever, with no way for an end user to recover short of manually
+    # deleting the file. Source deployments deliberately keep the original
+    # behavior (raise): a developer editing config.json wants a clear error to
+    # fix, not to have their file silently backed up and replaced by defaults.
+    desktop_mode = os.environ.get("COW_DESKTOP") == "1"
+    try:
+        config = Config(json.loads(config_str, object_pairs_hook=_merge_duplicate_keys))
+    except ValueError as parse_err:
+        if not desktop_mode or config_path != user_config_path:
+            # Source run, or the bundled template itself is broken (a packaging
+            # bug we can't heal by falling back further) — surface it.
+            raise
+        logger.error(
+            "[INIT] config.json is corrupted ({}); backing it up and "
+            "reinitializing from config-template.json".format(parse_err)
+        )
+        _quarantine_corrupted_config(user_config_path)
+        template_str = read_file(get_config_template_path())
+        config = Config(json.loads(template_str, object_pairs_hook=_merge_duplicate_keys))
+        # Persist the fresh config so the recovered defaults survive the next
+        # launch (and the app has a valid file to write user changes back into).
+        try:
+            with open(user_config_path, mode="w", encoding="utf-8") as f:
+                json.dump(dict(config), f, ensure_ascii=False, indent=2)
+        except Exception as write_err:
+            # A failed rewrite must not re-crash startup: we already hold a valid
+            # in-memory config, so run with it and retry the write next launch.
+            logger.warning("[INIT] failed to write recovered config.json: {}".format(write_err))
 
     # Migrate legacy singular keys (`tool`, `skill`) into the canonical
     # plural buckets so the rest of the codebase only reads one schema.
@@ -431,6 +502,17 @@ def load_config():
     # only missing namespaces are filled in from the legacy section.
     _merge_legacy_namespace(config, legacy="tool",  canonical="tools")
     _merge_legacy_namespace(config, legacy="skill", canonical="skills")
+
+    # Fresh desktop installs default to the stricter "workspace-write"; every
+    # other case keeps the template's "full-access". A packaged client only
+    # lacks config.json on its very first launch (config_path fell back to the
+    # bundled template) — once the user configures anything (e.g. a model) the
+    # console persists config.json, so an existing install always has it and is
+    # never silently tightened by an upgrade. Non-desktop (docker, source) is
+    # untouched. Placed before the env override so AGENT_PERMISSION_MODE still
+    # wins if explicitly set.
+    if os.environ.get("COW_DESKTOP") == "1" and config_path != user_config_path:
+        config["agent_permission_mode"] = "workspace-write"
 
     # override config with environment variables.
     # Some online deployment platforms (e.g. Railway) deploy project from github directly. So you shouldn't put your secrets like api key in a config file, instead use environment variables to override the default config.
@@ -559,6 +641,7 @@ def load_config():
                 injected += 1
 
     injected += _sync_skill_config_to_env(config.get("skills", {}))
+    injected += sync_image_generation_custom_provider_env(config)
 
     if injected:
         logger.info("[INIT] Synced {} config values to environment variables".format(injected))
@@ -673,6 +756,55 @@ def _sync_skill_config_to_env(skill_section) -> int:
             os.environ[env_key] = str(val)
             injected += 1
     return injected
+
+
+def sync_image_generation_custom_provider_env(
+    config_data,
+    overwrite=False,
+) -> int:
+    """Expose the selected custom image provider to the skill subprocess."""
+    env_key = "SKILL_IMAGE_GENERATION_CUSTOM_PROVIDER"
+    skills = config_data.get("skills") if isinstance(config_data, dict) else {}
+    image_config = (
+        skills.get("image-generation")
+        if isinstance(skills, dict)
+        else {}
+    )
+    provider_id = (
+        image_config.get("provider", "")
+        if isinstance(image_config, dict)
+        else ""
+    )
+
+    selected = None
+    if isinstance(provider_id, str) and provider_id.startswith("custom:"):
+        custom_id = provider_id[len("custom:"):]
+        providers = config_data.get("custom_providers", [])
+        if isinstance(providers, list):
+            selected = next(
+                (
+                    provider
+                    for provider in providers
+                    if isinstance(provider, dict)
+                    and provider.get("id") == custom_id
+                ),
+                None,
+            )
+
+    if selected is None:
+        if overwrite:
+            os.environ.pop(env_key, None)
+        return 0
+    if env_key in os.environ and not overwrite:
+        return 0
+
+    payload = {
+        key: selected.get(key)
+        for key in ("id", "name", "api_key", "api_base", "model")
+        if selected.get(key) is not None
+    }
+    os.environ[env_key] = json.dumps(payload, ensure_ascii=False)
+    return 1
 
 
 def get_root():

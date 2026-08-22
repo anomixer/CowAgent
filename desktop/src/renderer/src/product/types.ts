@@ -32,6 +32,12 @@ export interface ProductSlots {
   // Rendered as the assistant message avatar in place of the default app icon.
   // Lets a build show its own (or an OEM's) square logo next to replies.
   AssistantAvatar?: React.FC
+  // Rendered as the logo on the empty new-chat home screen in place of the
+  // default app logo. Lets a build show its own square logo there too.
+  HomeLogo?: React.FC
+  // Rendered as the logo on the startup/connecting status screen in place of
+  // the default app logo. Lets a build show its own square logo there too.
+  StatusLogo?: React.FC
 }
 
 // Extra routes appended to the core <Routes>. Path is a HashRouter path.
@@ -60,6 +66,11 @@ export interface ProductModels {
   // Set true to show a masked+editable API key field for the current provider
   // inside basic settings, useful when the standalone models tab is hidden.
   showManagedApiKey?: boolean
+  // Optional replacement for the per-session model chip in the chat composer.
+  // When set, the core renders this instead of its built-in provider-grouped
+  // menu, so a build whose models come from a different source can present them
+  // however it likes. `sessionId` identifies the conversation being edited.
+  SessionModelPicker?: React.FC<{ sessionId: string }>
 }
 
 // Optional nav-rail customization. Lets a build tailor the footer menu's
@@ -74,6 +85,14 @@ export interface ProductNav {
   hideFooterMenu?: boolean
 }
 
+// Optional external links a build can override (e.g. a differently-branded
+// docs site). Each returns null to fall back to the core default.
+export interface ProductLinks {
+  // The "what's new" page for a given version. `lang` is the UI language
+  // (e.g. 'zh'). Return null to use the core docs site.
+  releaseNotesUrl?: (version: string, lang: string) => string | null
+}
+
 export interface ProductExtension {
   auth?: ProductAuth
   slots?: ProductSlots
@@ -81,4 +100,5 @@ export interface ProductExtension {
   onboarding?: ProductOnboarding
   models?: ProductModels
   nav?: ProductNav
+  links?: ProductLinks
 }
